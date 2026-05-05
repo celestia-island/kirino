@@ -3,6 +3,7 @@ pub mod compat;
 pub mod constraints;
 pub mod engine;
 pub mod hierarchy;
+pub mod identity_subject;
 pub mod store;
 pub mod subject;
 pub mod traits;
@@ -17,6 +18,7 @@ pub mod prelude {
     pub use crate::rbac::hierarchy::{
         detect_cycle, resolve_role_chain, HierarchicalRole, HierarchyNode,
     };
+    pub use crate::rbac::identity_subject::{Delegatable, IdentitySubject};
     pub use crate::rbac::store::{
         InMemoryAssignmentStore, InMemoryRoleStore, SimpleRole, StaticPermissionRegistry,
         StaticRoleRegistry,
