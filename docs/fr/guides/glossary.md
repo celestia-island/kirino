@@ -1,0 +1,22 @@
+# Glossaire
+
+- **Sujet (Subject)** : Entité pouvant recevoir des permissions — utilisateur, compte de service, visiteur anonyme.
+- **Permission** : Unité atomique d'autorisation — une action nommée sur une ressource.
+- **Rôle (Role)** : Collection nommée de permissions, assignée aux sujets.
+- **RBAC0** : Modèle RBAC de base : Sujet → Rôle → Permission.
+- **RBAC1** : RBAC hiérarchique — les rôles héritent des permissions des rôles parents.
+- **RBAC2** : RBAC contraint — impose la séparation des tâches et d'autres politiques.
+- **SSD** : Séparation Statique des Tâches — les rôles conflictuels ne peuvent être assignés au même utilisateur.
+- **DSD** : Séparation Dynamique des Tâches — les rôles conflictuels ne peuvent être actifs dans la même session.
+- **Refus prioritaire (Deny-override)** : Les permissions refusées ont priorité sur les permissions accordées.
+- **Identité (Identity)** : Type d'identité d'authentification de l'utilisateur (Anonyme, Basique, Temporaire, Service).
+- **Justificatif (Credential)** : Preuve d'identité — mot de passe, JWT, jeton OAuth, etc.
+- **Passeport (Passport)** : Mécanisme de défi-réponse pour l'authentification.
+- **Session** : Contexte authentifié actif avec un sujet et des rôles actifs.
+- **Permissions Supplémentaires (Extra Permissions)** : Élévation temporaire des permissions sans changement de rôle.
+- **Permissions Refusées (Denied Permissions)** : Liste noire qui outrepasse toutes les concessions basées sur les rôles.
+- **Journal d'Audit (Audit Logger)** : Enregistre tous les résultats de vérification de permissions pour la conformité.
+- **Registre de Permissions (Permission Registry)** : Liste faisant autorité de toutes les permissions connues du système.
+- **Registre de Rôles (Role Registry)** : Liste faisant autorité de tous les rôles définis et leurs permissions.
+- **Stockage d'Assignations (Assignment Store)** : Persiste quels sujets détiennent quels rôles.
+- **Validateur de Contraintes (Constraint Validator)** : Valide les assignations de rôles par rapport aux contraintes SSD, DSD, cardinalité et prérequis.

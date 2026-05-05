@@ -2,8 +2,29 @@
 name = "kirino"
 version = "0.1.0"
 edition = "2021"
+description = "A customizable, zero-trust authentication framework."
+license = "Apache-2.0"
+repository = "https://github.com/celestia-island/kirino"
 
 [lib]
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
+anyhow = "^1"
+async-trait = "^0.1"
+derive_more = { version = "^1", features = ["full"] }
+
+chrono = { version = "^0.4", features = ["serde"] }
+tokio = { version = "1", features = ["sync", "macros", "rt"] }
+uuid = { version = "^1", features = ["serde", "v7"] }
+
+serde = { version = "^1", features = ["derive"] }
+serde_json = "^1"
+strum = { version = "^0.26", features = ["derive"] }
+yuuka = "^0.5"
+
+argon2 = "^0.5"
+jsonwebtoken = "9"
+rand = "^0.8"
+thiserror = "^2"
+tracing = { version = "^0.1", features = ["log"] }
