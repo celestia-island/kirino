@@ -1,0 +1,58 @@
+name: Checks
+
+on:
+  push:
+    branches: [master, dev]
+  pull_request:
+  workflow_call: {}
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  check:
+    name: Check
+    runs-on: ${{ matrix.os }}
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        rust: [stable, nightly]
+
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ matrix.rust }}
+          components: rustfmt, clippy
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        continue-on-error: true
+        with:
+          path: |
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+          key: ${{ matrix.os }}-${{ matrix.rust }}-cargo-${{ github.sha }}
+          restore-keys: |
+            ${{ matrix.os }}-${{ matrix.rust }}-cargo-
+            ${{ matrix.os }}-cargo-
+
+      - name: Check compilation
+        run: cargo check --all-targets
+
+      - name: Clippy lints
+        run: cargo clippy --all-targets -- -D warnings
+
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+
+      - name: Run tests
+        run: cargo test --lib
