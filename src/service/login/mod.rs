@@ -1,5 +1,4 @@
 use std::collections::HashSet;
-use std::sync::Arc;
 
 use anyhow::{anyhow, Result};
 use chrono::Utc;
@@ -10,6 +9,7 @@ use crate::auth::credential::basic::JwtManager;
 use crate::auth::passport::static_password::{hash_password, verify_password};
 use crate::models::identity::Identity;
 use crate::rbac::engine::RbacEngine;
+use crate::rbac::shared::Shared;
 use crate::rbac::store::memory::InMemoryAssignmentStore;
 use crate::rbac::store::registry::{SimpleRole, StaticPermissionRegistry, StaticRoleRegistry};
 use crate::rbac::subject::StringSubject;
@@ -118,7 +118,7 @@ where
 {
     db: DB,
     jwt: JwtManager,
-    engine: Arc<RbacEngine<StringSubject, P, R, A>>,
+    engine: Shared<RbacEngine<StringSubject, P, R, A>>,
     first_user_role: String,
     default_role: String,
 }
@@ -134,7 +134,7 @@ where
         db: DB,
         jwt_secret: &str,
         jwt_expiration_hours: i64,
-        engine: Arc<RbacEngine<StringSubject, P, R, A>>,
+        engine: Shared<RbacEngine<StringSubject, P, R, A>>,
         first_user_role: &str,
         default_role: &str,
     ) -> Self {
@@ -151,8 +151,8 @@ where
         &self.jwt
     }
 
-    pub fn engine(&self) -> &Arc<RbacEngine<StringSubject, P, R, A>> {
-        &self.engine
+    pub fn engine(&self) -> Shared<RbacEngine<StringSubject, P, R, A>> {
+        self.engine.clone()
     }
 
     pub async fn register(
@@ -296,7 +296,7 @@ type DefaultEngine = RbacEngine<
     InMemoryAssignmentStore<StringSubject, KirinoPermission>,
 >;
 
-pub fn build_default_engine() -> Arc<DefaultEngine> {
+pub fn build_default_engine() -> Shared<DefaultEngine> {
     let mut role_reg = StaticRoleRegistry::new();
     role_reg.register(SimpleRole::new("admin", KirinoPermission::all()));
     role_reg.register(SimpleRole::new(
@@ -345,11 +345,7 @@ pub fn build_default_engine() -> Arc<DefaultEngine> {
     let perm_reg = StaticPermissionRegistry::new(KirinoPermission::all());
     let store = InMemoryAssignmentStore::new();
 
-    Arc::new(RbacEngine::new(
-        Arc::new(role_reg),
-        Arc::new(perm_reg),
-        Arc::new(store),
-    ))
+    Shared::new(RbacEngine::new(role_reg, perm_reg, store))
 }
 
 #[async_trait::async_trait]

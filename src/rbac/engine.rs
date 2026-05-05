@@ -5,6 +5,7 @@ use std::time::Duration;
 
 use crate::rbac::cache::{PermissionCache, TtlPermissionCache};
 use crate::rbac::hierarchy::{resolve_role_chain, HierarchicalRole};
+use crate::rbac::shared::Shared;
 use crate::rbac::traits::{
     AssignmentStore, Permission, PermissionRegistry, Role, RoleRegistry, Subject,
 };
@@ -16,11 +17,29 @@ where
     R: Role<P>,
     A: AssignmentStore<S, P>,
 {
-    role_registry: Arc<dyn RoleRegistry<R, P>>,
-    permission_registry: Arc<dyn PermissionRegistry<P>>,
-    assignment_store: Arc<A>,
-    cache: Arc<dyn PermissionCache<S, P>>,
+    role_registry: Shared<dyn RoleRegistry<R, P>>,
+    permission_registry: Shared<dyn PermissionRegistry<P>>,
+    assignment_store: Shared<A>,
+    cache: Shared<dyn PermissionCache<S, P>>,
     _phantom: PhantomData<(S, R)>,
+}
+
+impl<S, P, R, A> Clone for RbacEngine<S, P, R, A>
+where
+    S: Subject,
+    P: Permission,
+    R: Role<P>,
+    A: AssignmentStore<S, P>,
+{
+    fn clone(&self) -> Self {
+        Self {
+            role_registry: self.role_registry.clone(),
+            permission_registry: self.permission_registry.clone(),
+            assignment_store: self.assignment_store.clone(),
+            cache: self.cache.clone(),
+            _phantom: PhantomData,
+        }
+    }
 }
 
 impl<S, P, R, A> RbacEngine<S, P, R, A>
@@ -31,34 +50,36 @@ where
     A: AssignmentStore<S, P>,
 {
     pub fn new(
-        role_registry: Arc<dyn RoleRegistry<R, P>>,
-        permission_registry: Arc<dyn PermissionRegistry<P>>,
-        assignment_store: Arc<A>,
+        role_registry: impl RoleRegistry<R, P> + 'static,
+        permission_registry: impl PermissionRegistry<P> + 'static,
+        assignment_store: A,
     ) -> Self {
         Self {
-            role_registry,
-            permission_registry,
-            assignment_store,
-            cache: Arc::new(TtlPermissionCache::new(Duration::from_secs(300))),
+            role_registry: Shared::from_arc_unsized(Arc::new(role_registry)),
+            permission_registry: Shared::from_arc_unsized(Arc::new(permission_registry)),
+            assignment_store: Shared::new(assignment_store),
+            cache: Shared::from_arc_unsized(Arc::new(TtlPermissionCache::new(
+                Duration::from_secs(300),
+            ))),
             _phantom: PhantomData,
         }
     }
 
-    pub fn with_cache(mut self, cache: Arc<dyn PermissionCache<S, P>>) -> Self {
-        self.cache = cache;
+    pub fn with_cache(mut self, cache: impl PermissionCache<S, P> + 'static) -> Self {
+        self.cache = Shared::from_arc_unsized(Arc::new(cache));
         self
     }
 
-    pub fn role_registry(&self) -> &Arc<dyn RoleRegistry<R, P>> {
-        &self.role_registry
+    pub fn role_registry(&self) -> Shared<dyn RoleRegistry<R, P>> {
+        self.role_registry.clone()
     }
 
-    pub fn permission_registry(&self) -> &Arc<dyn PermissionRegistry<P>> {
-        &self.permission_registry
+    pub fn permission_registry(&self) -> Shared<dyn PermissionRegistry<P>> {
+        self.permission_registry.clone()
     }
 
-    pub fn assignment_store(&self) -> &Arc<A> {
-        &self.assignment_store
+    pub fn assignment_store(&self) -> Shared<A> {
+        self.assignment_store.clone()
     }
 
     pub async fn check(&self, subject: &S, permission: &P) -> bool {
@@ -154,7 +175,7 @@ where
 
         if let Ok(role_names) = self.assignment_store.roles_of(subject).await {
             for role_name in &role_names {
-                let inherited = resolve_role_chain(role_name, self.role_registry.as_ref());
+                let inherited = resolve_role_chain(role_name, &*self.role_registry);
                 if inherited.contains(permission) {
                     self.cache.set(subject, permission, true);
                     return true;
@@ -171,7 +192,7 @@ where
 
         if let Ok(role_names) = self.assignment_store.roles_of(subject).await {
             for role_name in &role_names {
-                let inherited = resolve_role_chain(role_name, self.role_registry.as_ref());
+                let inherited = resolve_role_chain(role_name, &*self.role_registry);
                 perms.extend(inherited);
             }
         }
@@ -262,7 +283,7 @@ mod tests {
 
         let store = InMemoryAssignmentStore::new();
 
-        RbacEngine::new(Arc::new(role_reg), Arc::new(perm_reg), Arc::new(store))
+        RbacEngine::new(role_reg, perm_reg, store)
     }
 
     #[tokio::test]
@@ -412,5 +433,66 @@ mod tests {
         assert!(eff.contains(&TestPerm::Write));
         assert!(!eff.contains(&TestPerm::Admin));
         assert!(!eff.contains(&TestPerm::Delete));
+    }
+
+    #[tokio::test]
+    async fn test_engine_copy_shared_access() {
+        let engine = build_engine();
+        let store = engine.assignment_store();
+        let store2 = engine.assignment_store();
+        assert!(store.ptr_eq(&store2));
+
+        let user = TestSubject("copy-user".to_string());
+        store.assign_role(&user, "admin").await.unwrap();
+        assert!(engine.check(&user, &TestPerm::Admin).await);
+    }
+
+    #[tokio::test]
+    async fn test_engine_multiple_independent_stores() {
+        let mut role_reg = StaticRoleRegistry::new();
+        role_reg.register(SimpleRole::new(
+            "admin",
+            [TestPerm::Read, TestPerm::Write].into_iter().collect(),
+        ));
+
+        let engine1 = RbacEngine::new(
+            StaticRoleRegistry::<SimpleRole<TestPerm>, TestPerm>::new(),
+            StaticPermissionRegistry::new(
+                [TestPerm::Read, TestPerm::Write].into_iter().collect(),
+            ),
+            InMemoryAssignmentStore::new(),
+        );
+        let engine2 = RbacEngine::new(
+            role_reg,
+            StaticPermissionRegistry::new(
+                [TestPerm::Read, TestPerm::Write].into_iter().collect(),
+            ),
+            InMemoryAssignmentStore::new(),
+        );
+
+        let user1 = TestSubject("u1".to_string());
+        let user2 = TestSubject("u2".to_string());
+        engine1.assignment_store().assign_role(&user1, "admin").await.unwrap();
+        engine2.assignment_store().assign_role(&user2, "admin").await.unwrap();
+
+        assert!(!engine1.check(&user1, &TestPerm::Read).await);
+        assert!(engine2.check(&user2, &TestPerm::Read).await);
+    }
+
+    #[tokio::test]
+    async fn test_role_registry_accessor() {
+        let engine = build_engine();
+        let reg = engine.role_registry();
+        assert!(reg.get_role("admin").is_some());
+        assert!(reg.get_role("nonexistent").is_none());
+    }
+
+    #[tokio::test]
+    async fn test_permission_registry_accessor() {
+        let engine = build_engine();
+        let reg = engine.permission_registry();
+        assert!(reg.get_permission("read").is_some());
+        assert!(reg.get_permission("nonexistent").is_none());
+        assert_eq!(reg.all_permissions().len(), 4);
     }
 }

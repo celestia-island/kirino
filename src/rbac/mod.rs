@@ -5,6 +5,7 @@ pub mod engine;
 pub mod hierarchy;
 pub mod identity_subject;
 pub mod session;
+pub mod shared;
 pub mod store;
 pub mod subject;
 pub mod traits;
@@ -22,6 +23,7 @@ pub mod prelude {
     };
     pub use crate::rbac::identity_subject::{Delegatable, IdentitySubject};
     pub use crate::rbac::session::{InMemorySessionManager, Session, SessionManager};
+    pub use crate::rbac::shared::Shared;
     pub use crate::rbac::store::{
         InMemoryAssignmentStore, InMemoryRoleStore, SimpleRole, StaticPermissionRegistry,
         StaticRoleRegistry,

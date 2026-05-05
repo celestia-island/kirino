@@ -70,7 +70,7 @@ Add kirino to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-kirino = "0.1"
+kirino = "0.2"
 tokio = { version = "1", features = ["full"] }
 serde = { version = "1", features = ["derive"] }
 ```
@@ -78,10 +78,9 @@ serde = { version = "1", features = ["derive"] }
 Define your permissions and roles:
 
 ```rust
-use serde::{Deserialize, Serialize};
 use kirino::rbac::prelude::*;
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 enum MyPermission {
     DocumentRead,
     DocumentWrite,
@@ -105,14 +104,7 @@ impl Permission for MyPermission {
     }
 }
 
-async fn setup() {
-    // Create permission registry
-    let perm_registry = StaticPermissionRegistry::from_set(
-        [MyPermission::DocumentRead, MyPermission::DocumentWrite,
-         MyPermission::UserManage].into()
-    );
-
-    // Define roles
+fn setup() {
     let mut role_registry = StaticRoleRegistry::new();
     role_registry.register(SimpleRole::new("admin", [
         MyPermission::DocumentRead, MyPermission::DocumentWrite,
@@ -122,17 +114,13 @@ async fn setup() {
         MyPermission::DocumentRead,
     ].into()));
 
-    // Build engine
-    let engine = RbacEngine::new(
-        Arc::new(role_registry),
-        Arc::new(perm_registry),
-        Arc::new(InMemoryAssignmentStore::new()),
-    );
+    let perm_registry = StaticPermissionRegistry::new([
+        MyPermission::DocumentRead, MyPermission::DocumentWrite,
+        MyPermission::UserManage,
+    ].into());
 
-    // Assign roles and check permissions
-    let alice = StringSubject::new("alice");
-    engine.assign_role(&alice, "admin").await.unwrap();
-    assert!(engine.check(&alice, &MyPermission::DocumentWrite).await);
+    // Pass plain values — the engine wraps them internally via Shared<Arc>
+    let engine = RbacEngine::new(role_registry, perm_registry, InMemoryAssignmentStore::new());
 }
 ```
 
@@ -141,12 +129,8 @@ Or use the built-in `AuthService` for a complete setup:
 ```rust
 use kirino::service::login::{AuthService, build_default_engine};
 
-let engine = Arc::new(build_default_engine());
-let service = AuthService::new(engine);
-
-// First user gets admin role automatically
-service.register("admin", "password123").await.unwrap();
-let token = service.login("admin", "password123").await.unwrap();
+let engine = build_default_engine();
+let service = AuthService::new(db, "jwt-secret", 24, engine, "admin", "viewer");
 ```
 
 ## Documentation
@@ -321,4 +305,4 @@ It does **not** prescribe:
 
 ## License
 
-[Apache 2.0](LICENSE)
+[Apache 2.0](https://github.com/celestia-island/kirino/blob/main/LICENSE)

@@ -6,6 +6,7 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::rbac::constraints::store::ConstraintStore;
+use crate::rbac::shared::Shared;
 use crate::rbac::traits::{AssignmentStore, Permission, Subject};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -37,36 +38,36 @@ pub trait SessionManager<S: Subject>: Send + Sync {
     async fn destroy_session(&self, session_id: Uuid) -> anyhow::Result<()>;
 }
 
-pub struct InMemorySessionManager<S, P, A>
+pub struct InMemorySessionManager<S, P>
 where
     S: Subject,
     P: Permission,
-    A: AssignmentStore<S, P>,
 {
     sessions: tokio::sync::RwLock<HashMap<Uuid, Session<S>>>,
-    assignment_store: Arc<A>,
-    constraint_store: Option<Arc<dyn ConstraintStore>>,
-    _phantom: std::marker::PhantomData<P>,
+    assignment_store: Shared<dyn AssignmentStore<S, P>>,
+    constraint_store: Option<Shared<dyn ConstraintStore>>,
 }
 
-impl<S, P, A> InMemorySessionManager<S, P, A>
+impl<S, P> InMemorySessionManager<S, P>
 where
     S: Subject,
     P: Permission,
-    A: AssignmentStore<S, P>,
 {
-    pub fn new(assignment_store: Arc<A>) -> Self {
+    pub fn new(assignment_store: impl AssignmentStore<S, P> + 'static) -> Self {
         Self {
             sessions: tokio::sync::RwLock::new(HashMap::new()),
-            assignment_store,
+            assignment_store: Shared::from_arc_unsized(Arc::new(assignment_store)),
             constraint_store: None,
-            _phantom: std::marker::PhantomData,
         }
     }
 
-    pub fn with_constraint_store(mut self, store: Arc<dyn ConstraintStore>) -> Self {
-        self.constraint_store = Some(store);
+    pub fn with_constraint_store(mut self, store: impl ConstraintStore + 'static) -> Self {
+        self.constraint_store = Some(Shared::from_arc_unsized(Arc::new(store)));
         self
+    }
+
+    pub fn assignment_store(&self) -> Shared<dyn AssignmentStore<S, P>> {
+        self.assignment_store.clone()
     }
 
     async fn validate_dsd(&self, roles: &HashSet<String>) -> anyhow::Result<()> {
@@ -88,11 +89,10 @@ where
 }
 
 #[async_trait::async_trait]
-impl<S, P, A> SessionManager<S> for InMemorySessionManager<S, P, A>
+impl<S, P> SessionManager<S> for InMemorySessionManager<S, P>
 where
     S: Subject,
     P: Permission,
-    A: AssignmentStore<S, P>,
 {
     async fn create_session(
         &self,
@@ -184,8 +184,14 @@ mod tests {
     use crate::rbac::store::memory::InMemoryAssignmentStore;
     use crate::rbac::subject::StringSubject;
 
-    fn make_store() -> Arc<InMemoryAssignmentStore<StringSubject, TestPerm>> {
-        Arc::new(InMemoryAssignmentStore::new())
+    fn make_store() -> InMemoryAssignmentStore<StringSubject, TestPerm> {
+        InMemoryAssignmentStore::new()
+    }
+
+    fn make_mgr(
+        store: InMemoryAssignmentStore<StringSubject, TestPerm>,
+    ) -> InMemorySessionManager<StringSubject, TestPerm> {
+        InMemorySessionManager::new(store)
     }
 
     #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -206,8 +212,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_create_and_get_session() {
-        let store = make_store();
-        let mgr = InMemorySessionManager::<StringSubject, TestPerm, _>::new(store.clone());
+        let mgr = make_mgr(make_store());
+        let store = mgr.assignment_store();
         let subj = StringSubject::new("user1");
 
         store.assign_role(&subj, "admin").await.unwrap();
@@ -227,8 +233,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_create_session_filters_unassigned_roles() {
-        let store = make_store();
-        let mgr = InMemorySessionManager::<StringSubject, TestPerm, _>::new(store.clone());
+        let mgr = make_mgr(make_store());
+        let store = mgr.assignment_store();
         let subj = StringSubject::new("user1");
 
         store.assign_role(&subj, "viewer").await.unwrap();
@@ -248,8 +254,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_activate_deactivate_role() {
-        let store = make_store();
-        let mgr = InMemorySessionManager::<StringSubject, TestPerm, _>::new(store.clone());
+        let mgr = make_mgr(make_store());
+        let store = mgr.assignment_store();
         let subj = StringSubject::new("user1");
 
         store.assign_role(&subj, "admin").await.unwrap();
@@ -272,8 +278,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_activate_unassigned_role_fails() {
-        let store = make_store();
-        let mgr = InMemorySessionManager::<StringSubject, TestPerm, _>::new(store.clone());
+        let mgr = make_mgr(make_store());
+        let store = mgr.assignment_store();
         let subj = StringSubject::new("user1");
 
         store.assign_role(&subj, "viewer").await.unwrap();
@@ -288,8 +294,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_destroy_session() {
-        let store = make_store();
-        let mgr = InMemorySessionManager::<StringSubject, TestPerm, _>::new(store.clone());
+        let mgr = make_mgr(make_store());
         let subj = StringSubject::new("user1");
 
         let session = mgr
@@ -303,8 +308,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_dsd_constraint_on_create() {
-        let store = make_store();
-        let cs = Arc::new(InMemoryConstraintStore::new());
+        let cs = InMemoryConstraintStore::new();
         cs.add_dsd_policy(DsdPolicy::new(
             "exclusive",
             ["admin".to_string(), "auditor".to_string()].into(),
@@ -313,8 +317,8 @@ mod tests {
         .await
         .unwrap();
 
-        let mgr = InMemorySessionManager::<StringSubject, TestPerm, _>::new(store.clone())
-            .with_constraint_store(cs);
+        let mgr = make_mgr(make_store()).with_constraint_store(cs);
+        let store = mgr.assignment_store();
 
         let subj = StringSubject::new("user1");
         store.assign_role(&subj, "admin").await.unwrap();
@@ -333,8 +337,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_dsd_constraint_on_activate() {
-        let store = make_store();
-        let cs = Arc::new(InMemoryConstraintStore::new());
+        let cs = InMemoryConstraintStore::new();
         cs.add_dsd_policy(DsdPolicy::new(
             "exclusive",
             ["admin".to_string(), "auditor".to_string()].into(),
@@ -343,8 +346,8 @@ mod tests {
         .await
         .unwrap();
 
-        let mgr = InMemorySessionManager::<StringSubject, TestPerm, _>::new(store.clone())
-            .with_constraint_store(cs);
+        let mgr = make_mgr(make_store()).with_constraint_store(cs);
+        let store = mgr.assignment_store();
 
         let subj = StringSubject::new("user1");
         store.assign_role(&subj, "admin").await.unwrap();
@@ -356,5 +359,13 @@ mod tests {
             .unwrap();
 
         assert!(mgr.activate_role(session.id, "auditor").await.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_shared_store_identity() {
+        let mgr = make_mgr(make_store());
+        let s1 = mgr.assignment_store();
+        let s2 = mgr.assignment_store();
+        assert!(s1.ptr_eq(&s2));
     }
 }
