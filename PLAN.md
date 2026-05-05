@@ -435,41 +435,41 @@ pub trait SessionManager<S: Subject, P: Permission>: Send + Sync {
 
 ### Phase 0 — 基础设施准备（1-2 天）
 
-- [ ] 创建 `src/rbac/` 目录结构
-- [ ] 编写 `src/rbac/traits.rs`（Permission, Subject, Role, AssignmentStore, RoleStore 等 trait）
-- [ ] 编写 `src/rbac/engine.rs`（RbacEngine 核心逻辑，含 deny-override）
-- [ ] 编写 `src/rbac/cache.rs`（PermissionCache trait + LruPermissionCache）
-- [ ] 编写 `src/rbac/store.rs`（InMemoryAssignmentStore, InMemoryRoleStore, StaticPermissionRegistry, StaticRoleRegistry, SimpleRole）
-- [ ] 将现有 `src/rbac.rs` 移至 `src/rbac/compat.rs` 并标记 `#[deprecated]`
-- [ ] 确保所有现有测试通过（`cargo test`）
+- [x] 创建 `src/rbac/` 目录结构
+- [x] 编写 `src/rbac/traits.rs`（Permission, Subject, Role, AssignmentStore, RoleStore 等 trait）
+- [x] 编写 `src/rbac/engine.rs`（RbacEngine 核心逻辑，含 deny-override）
+- [x] 编写 `src/rbac/cache.rs`（PermissionCache trait + TtlPermissionCache）
+- [x] 编写 `src/rbac/store/`（InMemoryAssignmentStore, InMemoryRoleStore, StaticPermissionRegistry, StaticRoleRegistry, SimpleRole）
+- [x] 将现有 `src/rbac.rs` 移至 `src/rbac/compat.rs` 并标记 `#[deprecated]`
+- [x] 确保所有现有测试通过（`cargo test`）
 
 ### Phase 1 — RBAC0 基础模型（2-3 天）
 
-- [ ] 实现 `SimpleRole<P>` — 通用角色实现
-- [ ] 实现 `RbacEngine::check()` 和 `RbacEngine::check_batch()`
-- [ ] 实现 `RbacEngine::effective_permissions()`
-- [ ] 实现 `PermissionCache` with TTL
-- [ ] 将 `src/service/login/mod.rs` 中的 `AuthService` 与 `RbacEngine` 集成（替代直接使用 `RbacStore`）
-- [ ] 迁移测试：将 `src/service/register/mod.rs` 中的测试改为使用新 trait
+- [x] 实现 `SimpleRole<P>` — 通用角色实现
+- [x] 实现 `RbacEngine::check()` 和 `RbacEngine::check_batch()`
+- [x] 实现 `RbacEngine::effective_permissions()`
+- [x] 实现 `PermissionCache` with TTL
+- [x] 将 `src/service/login/mod.rs` 中的 `AuthService` 与 `RbacEngine` 集成（替代直接使用 `RbacStore`）
+- [x] 迁移测试：将 `src/service/register/mod.rs` 中的测试改为使用新 trait
 
 ### Phase 2 — RBAC1 层级模型（2-3 天）
 
-- [ ] 扩展 `Role<P>` trait 增加 `parent_roles()`
-- [ ] 实现 `RbacEngine::resolve_role_chain()` 含循环检测
-- [ ] 实现 `HierarchicalRoleRegistry`
-- [ ] 测试：多层继承、循环检测、权限累积与重写
+- [x] 扩展 `Role<P>` trait 增加 `parent_roles()`（`HierarchicalRole<P>` trait）
+- [x] 实现 `resolve_role_chain()` 含循环检测（DFS + `detect_cycle()`）
+- [x] 实现 `HierarchyNode<P>` + `check_hierarchical()` / `effective_permissions_hierarchical()`
+- [x] 测试：多层继承、循环检测、权限累积
 
 ### Phase 3 — RBAC2 约束模型（2 天）
 
-- [ ] 实现 `SsdPolicy` / `DsdPolicy` / `CardinalityConstraint` / `PrerequisiteConstraint`
-- [ ] 实现 `ConstraintStore` trait 和 `InMemoryConstraintStore`
-- [ ] 在 `RbacEngine` 中集成约束验证（assign_role 时检查 SSD、create_session 时检查 DSD）
-- [ ] 实现 `TemporalConstraint` 时间约束
+- [x] 实现 `SsdPolicy` / `DsdPolicy` / `CardinalityConstraint` / `PrerequisiteConstraint`
+- [x] 实现 `ConstraintStore` trait 和 `InMemoryConstraintStore`
+- [x] 实现 `ConstraintValidator`（`validate_assignment()` 统一校验 SSD/Cardinality/Prerequisite）
+- [x] 实现 `TemporalConstraint` 时间约束
 
 ### Phase 4 — Identity 体系对接（2 天）
 
-- [ ] 为 `Anonymous`/`Basic`/`Temporary`/`Service` 实现 `Subject` trait
-- [ ] 实现临时提权（Basic ↔ Service 委托）
+- [x] 为 `Anonymous`/`Basic`/`Temporary`/`Service` 实现 `Subject` trait（`IdentitySubject` wrapper）
+- [x] 实现临时提权（Basic ↔ Service 委托）（`Delegatable` trait）
 - [ ] 与现有的 credential / passport 体系对接（JWT claims 包含 permission 集合）
 
 ### Phase 5 — 数据库持久化（3-4 天）
