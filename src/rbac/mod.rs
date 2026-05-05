@@ -1,6 +1,7 @@
 pub mod cache;
 pub mod compat;
 pub mod engine;
+pub mod hierarchy;
 pub mod store;
 pub mod subject;
 pub mod traits;
@@ -8,6 +9,9 @@ pub mod traits;
 pub mod prelude {
     pub use crate::rbac::cache::{PermissionCache, TtlPermissionCache};
     pub use crate::rbac::engine::RbacEngine;
+    pub use crate::rbac::hierarchy::{
+        detect_cycle, resolve_role_chain, HierarchicalRole, HierarchyNode,
+    };
     pub use crate::rbac::store::{
         InMemoryAssignmentStore, InMemoryRoleStore, SimpleRole, StaticPermissionRegistry,
         StaticRoleRegistry,

@@ -4,6 +4,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use crate::rbac::cache::{PermissionCache, TtlPermissionCache};
+use crate::rbac::hierarchy::{HierarchicalRole, resolve_role_chain};
 use crate::rbac::traits::{
     AssignmentStore, Permission, PermissionRegistry, Role, RoleRegistry, Subject,
 };
@@ -110,6 +111,68 @@ where
                 if let Some(role) = self.role_registry.get_role(role_name) {
                     perms.extend(role.permissions().iter().cloned());
                 }
+            }
+        }
+
+        if let Ok(extra) = self.assignment_store.extra_permissions(subject).await {
+            perms.extend(extra);
+        }
+
+        if let Ok(denied) = self.assignment_store.denied_permissions(subject).await {
+            perms.retain(|p| !denied.contains(p));
+        }
+
+        perms
+    }
+}
+
+impl<S, P, R, A> RbacEngine<S, P, R, A>
+where
+    S: Subject,
+    P: Permission,
+    R: HierarchicalRole<P>,
+    A: AssignmentStore<S, P>,
+{
+    pub async fn check_hierarchical(&self, subject: &S, permission: &P) -> bool {
+        if let Some(granted) = self.cache.get(subject, permission) {
+            return granted;
+        }
+
+        if let Ok(denied) = self.assignment_store.denied_permissions(subject).await {
+            if denied.contains(permission) {
+                self.cache.set(subject, permission, false);
+                return false;
+            }
+        }
+
+        if let Ok(extra) = self.assignment_store.extra_permissions(subject).await {
+            if extra.contains(permission) {
+                self.cache.set(subject, permission, true);
+                return true;
+            }
+        }
+
+        if let Ok(role_names) = self.assignment_store.roles_of(subject).await {
+            for role_name in &role_names {
+                let inherited = resolve_role_chain(role_name, self.role_registry.as_ref());
+                if inherited.contains(permission) {
+                    self.cache.set(subject, permission, true);
+                    return true;
+                }
+            }
+        }
+
+        self.cache.set(subject, permission, false);
+        false
+    }
+
+    pub async fn effective_permissions_hierarchical(&self, subject: &S) -> HashSet<P> {
+        let mut perms = HashSet::new();
+
+        if let Ok(role_names) = self.assignment_store.roles_of(subject).await {
+            for role_name in &role_names {
+                let inherited = resolve_role_chain(role_name, self.role_registry.as_ref());
+                perms.extend(inherited);
             }
         }
 
