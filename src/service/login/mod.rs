@@ -4,7 +4,8 @@ use uuid::Uuid;
 
 use crate::auth::credential::basic::JwtManager;
 use crate::auth::passport::static_password::{hash_password, verify_password};
-use crate::rbac::{RbacStore, Role};
+#[allow(deprecated)]
+use crate::rbac::compat::{RbacStore, Role};
 use crate::models::identity::Identity;
 
 #[derive(Debug, Clone)]
@@ -147,7 +148,7 @@ impl<DB: UserDatabase> AuthService<DB> {
     pub async fn check_permission(
         &self,
         user_id: &str,
-        permission: crate::rbac::Permission,
+        permission: crate::rbac::compat::Permission,
     ) -> bool {
         let rbac = self.rbac.read().await;
         rbac.check_permission(user_id, permission)

@@ -1,6 +1,7 @@
 use crate::database::sql::InMemoryUserDatabase;
 use crate::service::login::AuthService;
-use crate::rbac::{Permission, Role, RbacStore};
+#[allow(deprecated)]
+use crate::rbac::compat::{Permission, Role, RbacStore};
 
 #[tokio::test]
 async fn test_register_and_login() {

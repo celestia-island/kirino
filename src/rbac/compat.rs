@@ -2,6 +2,51 @@ use std::collections::{HashMap, HashSet};
 
 use serde::{Deserialize, Serialize};
 
+#[allow(deprecated)]
+#[deprecated(
+    since = "0.2.0",
+    note = "Use `rbac::traits` and define your own Permission enum"
+)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Permission {
+    AgentRead,
+    AgentWrite,
+    AgentExecute,
+    ConfigRead,
+    ConfigWrite,
+    KnowledgeRead,
+    KnowledgeWrite,
+    ContainerRead,
+    ContainerWrite,
+    SystemRead,
+    SystemWrite,
+    DeployRead,
+    DeployExecute,
+}
+
+#[allow(deprecated)]
+impl Permission {
+    pub fn all() -> HashSet<Permission> {
+        use Permission::*;
+        [
+            AgentRead, AgentWrite, AgentExecute,
+            ConfigRead, ConfigWrite,
+            KnowledgeRead, KnowledgeWrite,
+            ContainerRead, ContainerWrite,
+            SystemRead, SystemWrite,
+            DeployRead, DeployExecute,
+        ]
+        .iter()
+        .copied()
+        .collect()
+    }
+}
+
+#[deprecated(
+    since = "0.2.0",
+    note = "Use `rbac::traits::Role` and define your own Role type"
+)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Role {
@@ -11,6 +56,7 @@ pub enum Role {
     Agent,
 }
 
+#[allow(deprecated)]
 impl Role {
     pub fn permissions(&self) -> HashSet<Permission> {
         match self {
@@ -59,41 +105,10 @@ impl Role {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum Permission {
-    AgentRead,
-    AgentWrite,
-    AgentExecute,
-    ConfigRead,
-    ConfigWrite,
-    KnowledgeRead,
-    KnowledgeWrite,
-    ContainerRead,
-    ContainerWrite,
-    SystemRead,
-    SystemWrite,
-    DeployRead,
-    DeployExecute,
-}
-
-impl Permission {
-    pub fn all() -> HashSet<Permission> {
-        use Permission::*;
-        [
-            AgentRead, AgentWrite, AgentExecute,
-            ConfigRead, ConfigWrite,
-            KnowledgeRead, KnowledgeWrite,
-            ContainerRead, ContainerWrite,
-            SystemRead, SystemWrite,
-            DeployRead, DeployExecute,
-        ]
-        .iter()
-        .copied()
-        .collect()
-    }
-}
-
+#[deprecated(
+    since = "0.2.0",
+    note = "Use `rbac::engine::RbacEngine` with `AssignmentStore`"
+)]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UserRole {
     pub user_id: String,
@@ -102,6 +117,7 @@ pub struct UserRole {
     pub denied_permissions: HashSet<Permission>,
 }
 
+#[allow(deprecated)]
 impl UserRole {
     pub fn new(user_id: String, roles: Vec<Role>) -> Self {
         Self {
@@ -133,11 +149,16 @@ impl UserRole {
     }
 }
 
+#[deprecated(
+    since = "0.2.0",
+    note = "Use `rbac::engine::RbacEngine` with `InMemoryAssignmentStore`"
+)]
 #[derive(Debug, Clone, Default)]
 pub struct RbacStore {
     users: HashMap<String, UserRole>,
 }
 
+#[allow(deprecated)]
 impl RbacStore {
     pub fn new() -> Self {
         Self::default()
@@ -176,6 +197,7 @@ impl RbacStore {
 }
 
 #[cfg(test)]
+#[allow(deprecated)]
 mod tests {
     use super::*;
 
