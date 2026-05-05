@@ -1,0 +1,22 @@
+# Glosario
+
+- **Sujeto (Subject)**: Entidad a la que se pueden otorgar permisos — usuario, cuenta de servicio, visitante anónimo.
+- **Permiso (Permission)**: Unidad atómica de autorización — una acción nombrada sobre un recurso.
+- **Rol (Role)**: Colección nombrada de permisos, asignada a sujetos.
+- **RBAC0**: Modelo RBAC base: Sujeto → Rol → Permiso.
+- **RBAC1**: RBAC jerárquico — los roles heredan permisos de roles padre.
+- **RBAC2**: RBAC con restricciones — impone separación de deberes y otras políticas.
+- **SSD**: Separación Estática de Deberes — roles conflictivos no pueden asignarse al mismo usuario.
+- **DSD**: Separación Dinámica de Deberes — roles conflictivos no pueden activarse en la misma sesión.
+- **Denegación prioritaria (Deny-override)**: Los permisos denegados tienen prioridad sobre los otorgados.
+- **Identidad (Identity)**: Tipo de identidad de autenticación del usuario (Anónimo, Básico, Temporal, Servicio).
+- **Credencial (Credential)**: Prueba de identidad — contraseña, JWT, token OAuth, etc.
+- **Pasaporte (Passport)**: Mecanismo de desafío-respuesta para autenticación.
+- **Sesión (Session)**: Contexto autenticado activo con un sujeto y roles activos.
+- **Permisos Extra (Extra Permissions)**: Elevación temporal de permisos sin cambio de rol.
+- **Permisos Denegados (Denied Permissions)**: Lista negra que anula todas las concesiones basadas en roles.
+- **Registrador de Auditoría (Audit Logger)**: Registra todos los resultados de verificación de permisos para cumplimiento.
+- **Registro de Permisos (Permission Registry)**: Lista autoritativa de todos los permisos conocidos en el sistema.
+- **Registro de Roles (Role Registry)**: Lista autoritativa de todos los roles definidos y sus permisos.
+- **Almacén de Asignaciones (Assignment Store)**: Persiste qué sujetos tienen qué roles.
+- **Validador de Restricciones (Constraint Validator)**: Valida asignaciones de roles contra restricciones SSD, DSD, cardinalidad y prerrequisitos.

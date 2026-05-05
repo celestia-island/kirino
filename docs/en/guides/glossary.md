@@ -1,0 +1,22 @@
+# Glossary
+
+- **Subject**: An entity that can be granted permissions — user, service account, anonymous visitor.
+- **Permission**: An atomic authorization unit — a named action on a resource.
+- **Role**: A named collection of permissions, assigned to subjects.
+- **RBAC0**: The base RBAC model: Subject → Role → Permission.
+- **RBAC1**: Hierarchical RBAC — roles inherit permissions from parent roles.
+- **RBAC2**: Constrained RBAC — enforces separation of duty and other policies.
+- **SSD**: Static Separation of Duty — conflicting roles cannot be assigned to the same user.
+- **DSD**: Dynamic Separation of Duty — conflicting roles cannot be active in the same session.
+- **Deny-override**: Denied permissions take priority over granted permissions.
+- **Identity**: A user's authentication identity type (Anonymous, Basic, Temporary, Service).
+- **Credential**: Proof of identity — password, JWT, OAuth token, etc.
+- **Passport**: A challenge-response mechanism for authentication.
+- **Session**: An active authenticated context with a subject and active roles.
+- **Extra Permissions**: Temporary permission elevation without role change.
+- **Denied Permissions**: A blocklist that overrides all role-based grants.
+- **Audit Logger**: Records all permission check outcomes for compliance.
+- **Permission Registry**: The authoritative list of all known permissions in the system.
+- **Role Registry**: The authoritative list of all defined roles and their permissions.
+- **Assignment Store**: Persists which subjects hold which roles.
+- **Constraint Validator**: Validates role assignments against SSD, DSD, cardinality, and prerequisite constraints.
