@@ -1,5 +1,7 @@
-use std::collections::{HashMap, HashSet};
-use std::marker::PhantomData;
+use std::{
+    collections::{HashMap, HashSet},
+    marker::PhantomData,
+};
 
 use crate::rbac::traits::{Permission, PermissionRegistry, Role, RoleRegistry};
 

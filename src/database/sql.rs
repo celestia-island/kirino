@@ -1,7 +1,8 @@
 use anyhow::{anyhow, Result};
-use async_trait::async_trait;
 use std::collections::HashMap;
 use uuid::Uuid;
+
+use async_trait::async_trait;
 
 use crate::service::login::{UserDatabase, UserRecord};
 
