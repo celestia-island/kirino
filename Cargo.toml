@@ -5,6 +5,7 @@ edition = "2021"
 description = "A customizable, zero-trust authentication framework."
 license = "Apache-2.0"
 repository = "https://github.com/celestia-island/kirino"
+readme = "README.md"
 
 [lib]
 crate-type = ["cdylib", "rlib"]

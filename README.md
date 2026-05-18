@@ -1,4 +1,4 @@
-<img src="splash.png" alt="kirino" />
+<p align="center"><img src="docs/logo.webp" alt="kirino" /></p>
 
 <h1 align="center">Kirino</h1>
 <div align="center">
@@ -11,7 +11,7 @@
 
 <div align="center">
   <a href="https://github.com/celestia-island/kirino/actions">
-    <img src="https://img.shields.io/github/actions/workflow/status/celestia-island/kirino/test.yml?branch=main"
+    <img src="https://img.shields.io/github/actions/workflow/status/celestia-island/kirino/checks.yml?branch=main"
       alt="CI Status" />
   </a>
   <a href="https://crates.io/crates/kirino">
