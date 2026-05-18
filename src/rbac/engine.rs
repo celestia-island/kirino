@@ -457,23 +457,27 @@ mod tests {
 
         let engine1 = RbacEngine::new(
             StaticRoleRegistry::<SimpleRole<TestPerm>, TestPerm>::new(),
-            StaticPermissionRegistry::new(
-                [TestPerm::Read, TestPerm::Write].into_iter().collect(),
-            ),
+            StaticPermissionRegistry::new([TestPerm::Read, TestPerm::Write].into_iter().collect()),
             InMemoryAssignmentStore::new(),
         );
         let engine2 = RbacEngine::new(
             role_reg,
-            StaticPermissionRegistry::new(
-                [TestPerm::Read, TestPerm::Write].into_iter().collect(),
-            ),
+            StaticPermissionRegistry::new([TestPerm::Read, TestPerm::Write].into_iter().collect()),
             InMemoryAssignmentStore::new(),
         );
 
         let user1 = TestSubject("u1".to_string());
         let user2 = TestSubject("u2".to_string());
-        engine1.assignment_store().assign_role(&user1, "admin").await.unwrap();
-        engine2.assignment_store().assign_role(&user2, "admin").await.unwrap();
+        engine1
+            .assignment_store()
+            .assign_role(&user1, "admin")
+            .await
+            .unwrap();
+        engine2
+            .assignment_store()
+            .assign_role(&user2, "admin")
+            .await
+            .unwrap();
 
         assert!(!engine1.check(&user1, &TestPerm::Read).await);
         assert!(engine2.check(&user2, &TestPerm::Read).await);
