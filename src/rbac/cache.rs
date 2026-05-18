@@ -1,7 +1,9 @@
-use std::collections::HashMap;
-use std::marker::PhantomData;
-use std::sync::RwLock;
-use std::time::{Duration, Instant};
+use std::{
+    collections::HashMap,
+    marker::PhantomData,
+    sync::RwLock,
+    time::{Duration, Instant},
+};
 
 use super::traits::{Permission, Subject};
 

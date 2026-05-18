@@ -1,6 +1,8 @@
-use std::collections::{HashMap, HashSet};
-use std::marker::PhantomData;
-use std::sync::RwLock;
+use std::{
+    collections::{HashMap, HashSet},
+    marker::PhantomData,
+    sync::RwLock,
+};
 
 use async_trait::async_trait;
 

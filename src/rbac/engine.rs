@@ -1,13 +1,15 @@
-use std::collections::{HashMap, HashSet};
-use std::marker::PhantomData;
-use std::sync::Arc;
-use std::time::Duration;
+use std::{
+    collections::{HashMap, HashSet},
+    marker::PhantomData,
+    sync::Arc,
+    time::Duration,
+};
 
-use crate::rbac::cache::{PermissionCache, TtlPermissionCache};
-use crate::rbac::hierarchy::{resolve_role_chain, HierarchicalRole};
-use crate::rbac::shared::Shared;
-use crate::rbac::traits::{
-    AssignmentStore, Permission, PermissionRegistry, Role, RoleRegistry, Subject,
+use crate::rbac::{
+    cache::{PermissionCache, TtlPermissionCache},
+    hierarchy::{resolve_role_chain, HierarchicalRole},
+    shared::Shared,
+    traits::{AssignmentStore, Permission, PermissionRegistry, Role, RoleRegistry, Subject},
 };
 
 pub struct RbacEngine<S, P, R, A>
@@ -457,23 +459,27 @@ mod tests {
 
         let engine1 = RbacEngine::new(
             StaticRoleRegistry::<SimpleRole<TestPerm>, TestPerm>::new(),
-            StaticPermissionRegistry::new(
-                [TestPerm::Read, TestPerm::Write].into_iter().collect(),
-            ),
+            StaticPermissionRegistry::new([TestPerm::Read, TestPerm::Write].into_iter().collect()),
             InMemoryAssignmentStore::new(),
         );
         let engine2 = RbacEngine::new(
             role_reg,
-            StaticPermissionRegistry::new(
-                [TestPerm::Read, TestPerm::Write].into_iter().collect(),
-            ),
+            StaticPermissionRegistry::new([TestPerm::Read, TestPerm::Write].into_iter().collect()),
             InMemoryAssignmentStore::new(),
         );
 
         let user1 = TestSubject("u1".to_string());
         let user2 = TestSubject("u2".to_string());
-        engine1.assignment_store().assign_role(&user1, "admin").await.unwrap();
-        engine2.assignment_store().assign_role(&user2, "admin").await.unwrap();
+        engine1
+            .assignment_store()
+            .assign_role(&user1, "admin")
+            .await
+            .unwrap();
+        engine2
+            .assignment_store()
+            .assign_role(&user2, "admin")
+            .await
+            .unwrap();
 
         assert!(!engine1.check(&user1, &TestPerm::Read).await);
         assert!(engine2.check(&user2, &TestPerm::Read).await);

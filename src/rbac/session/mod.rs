@@ -1,13 +1,16 @@
-use std::collections::{HashMap, HashSet};
-use std::sync::Arc;
-
 use chrono::{DateTime, Duration, Utc};
 use serde::{Deserialize, Serialize};
+use std::{
+    collections::{HashMap, HashSet},
+    sync::Arc,
+};
 use uuid::Uuid;
 
-use crate::rbac::constraints::store::ConstraintStore;
-use crate::rbac::shared::Shared;
-use crate::rbac::traits::{AssignmentStore, Permission, Subject};
+use crate::rbac::{
+    constraints::store::ConstraintStore,
+    shared::Shared,
+    traits::{AssignmentStore, Permission, Subject},
+};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Session<S: Subject> {
