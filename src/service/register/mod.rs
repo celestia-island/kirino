@@ -1,11 +1,15 @@
 #[cfg(test)]
 mod tests {
-    use crate::database::sql::InMemoryUserDatabase;
-    use crate::rbac::store::memory::InMemoryAssignmentStore;
-    use crate::rbac::store::registry::SimpleRole;
-    use crate::rbac::subject::StringSubject;
-    use crate::rbac::traits::AssignmentStore;
-    use crate::service::login::{build_default_engine, AuthService, KirinoPermission};
+
+    use crate::{
+        database::sql::InMemoryUserDatabase,
+        rbac::{
+            store::{memory::InMemoryAssignmentStore, registry::SimpleRole},
+            subject::StringSubject,
+            traits::AssignmentStore,
+        },
+        service::login::{build_default_engine, AuthService, KirinoPermission},
+    };
 
     fn make_auth() -> AuthService<
         InMemoryUserDatabase,

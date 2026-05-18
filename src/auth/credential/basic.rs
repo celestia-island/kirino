@@ -1,7 +1,7 @@
+use anyhow::{anyhow, Result};
 use chrono::{Duration, Utc};
 use serde::{Deserialize, Serialize};
 
-use anyhow::{anyhow, Result};
 use jsonwebtoken::{decode, encode, Algorithm, DecodingKey, EncodingKey, Header, Validation};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

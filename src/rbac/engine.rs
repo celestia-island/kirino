@@ -1,13 +1,15 @@
-use std::collections::{HashMap, HashSet};
-use std::marker::PhantomData;
-use std::sync::Arc;
-use std::time::Duration;
+use std::{
+    collections::{HashMap, HashSet},
+    marker::PhantomData,
+    sync::Arc,
+    time::Duration,
+};
 
-use crate::rbac::cache::{PermissionCache, TtlPermissionCache};
-use crate::rbac::hierarchy::{resolve_role_chain, HierarchicalRole};
-use crate::rbac::shared::Shared;
-use crate::rbac::traits::{
-    AssignmentStore, Permission, PermissionRegistry, Role, RoleRegistry, Subject,
+use crate::rbac::{
+    cache::{PermissionCache, TtlPermissionCache},
+    hierarchy::{resolve_role_chain, HierarchicalRole},
+    shared::Shared,
+    traits::{AssignmentStore, Permission, PermissionRegistry, Role, RoleRegistry, Subject},
 };
 
 pub struct RbacEngine<S, P, R, A>

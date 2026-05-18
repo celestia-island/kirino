@@ -1,5 +1,4 @@
-use std::ops::Deref;
-use std::sync::Arc;
+use std::{ops::Deref, sync::Arc};
 
 #[derive(Debug)]
 pub struct Shared<T: ?Sized>(Arc<T>);
