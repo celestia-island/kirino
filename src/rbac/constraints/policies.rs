@@ -1,6 +1,5 @@
-use std::collections::HashSet;
-
 use serde::{Deserialize, Serialize};
+use std::collections::HashSet;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SsdPolicy {

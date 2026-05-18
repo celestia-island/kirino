@@ -1,9 +1,10 @@
 use anyhow::{anyhow, Result};
+use rand::rngs::OsRng;
+
 use argon2::{
     password_hash::{PasswordHash, PasswordHasher, PasswordVerifier, SaltString},
     Argon2,
 };
-use rand::rngs::OsRng;
 
 pub fn hash_password(password: &str) -> Result<String> {
     let salt = SaltString::generate(&mut OsRng);

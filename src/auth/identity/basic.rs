@@ -1,7 +1,8 @@
 use anyhow::Result;
-use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use uuid::Uuid;
+
+use async_trait::async_trait;
 
 use crate::models::identity::Identity;
 

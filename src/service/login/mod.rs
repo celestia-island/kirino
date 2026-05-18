@@ -1,19 +1,26 @@
-use std::collections::HashSet;
-
 use anyhow::{anyhow, Result};
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
+use std::collections::HashSet;
 use uuid::Uuid;
 
-use crate::auth::credential::basic::JwtManager;
-use crate::auth::passport::static_password::{hash_password, verify_password};
-use crate::models::identity::Identity;
-use crate::rbac::engine::RbacEngine;
-use crate::rbac::shared::Shared;
-use crate::rbac::store::memory::InMemoryAssignmentStore;
-use crate::rbac::store::registry::{SimpleRole, StaticPermissionRegistry, StaticRoleRegistry};
-use crate::rbac::subject::StringSubject;
-use crate::rbac::traits::{AssignmentStore, Permission, Role};
+use crate::{
+    auth::{
+        credential::basic::JwtManager,
+        passport::static_password::{hash_password, verify_password},
+    },
+    models::identity::Identity,
+    rbac::{
+        engine::RbacEngine,
+        shared::Shared,
+        store::{
+            memory::InMemoryAssignmentStore,
+            registry::{SimpleRole, StaticPermissionRegistry, StaticRoleRegistry},
+        },
+        subject::StringSubject,
+        traits::{AssignmentStore, Permission, Role},
+    },
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]

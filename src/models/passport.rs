@@ -1,8 +1,8 @@
-use std::net::{Ipv4Addr, Ipv6Addr};
-
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use std::net::{Ipv4Addr, Ipv6Addr};
 use uuid::Uuid;
+
 use yuuka::derive_enum;
 
 use super::credential::Credential;

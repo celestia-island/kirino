@@ -1,7 +1,6 @@
 use std::hash::{Hash, Hasher};
 
-use crate::models::identity::Identity;
-use crate::rbac::traits::Subject;
+use crate::{models::identity::Identity, rbac::traits::Subject};
 
 pub trait Delegatable: Subject {
     fn can_delegate_to<S: Subject>(&self, delegate: &S) -> bool;
