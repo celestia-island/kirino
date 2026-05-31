@@ -40,7 +40,7 @@
 
 <br/>
 
-A fully generic, trait-based authentication and authorization framework for Rust. Provides identity types, credential management, passport challenges, and a complete RBAC system (RBAC0/1/2) implementing the ANSI INCITS 359-2004 standard.
+A fully generic, trait-based authentication and authorization framework for Rust. Provides identity types, credential management, passport challenges, a complete RBAC system (RBAC0/1/2) implementing the ANSI INCITS 359-2004 standard, and a dynamic authorization layer with trust scoring, anomaly detection, and DO-178C inspired autonomy levels (L0–L4).
 
 The name `kirino` comes from the character [Kirino](https://bluearchive.wiki/wiki/kirino) in the game [Blue Archive](https://bluearchive.jp/).
 
@@ -59,7 +59,11 @@ The name `kirino` comes from the character [Kirino](https://bluearchive.wiki/wik
 - ⏱️ **Temporal Constraints**: Time-bounded role validity with automatic expiry
 - 💾 **In-Memory First**: Zero-dependency reference implementations for all backends
 - 🗄️ **Pluggable Storage**: Trait-based backends for SQL, Redis, and more
-- 📝 **Audit Logging**: Permission check audit trail for compliance
+- 📝 **Audit Logging**: Three-layer composable audit (sink + policy engine + analyzer)
+- 🧠 **Dynamic Authorization**: Runtime risk scoring with trust decay, anomaly detection, and domain scoping
+- 🎛️ **Autonomy Levels**: DO-178C inspired L0–L4 autonomy levels with configurable strategies
+- 🔍 **Anomaly Detection**: Sliding-window z-score pattern deviation with adaptive baselines
+- 📉 **Trust Decay**: Configurable exponential trust decay with background worker
 - 🧩 **Fully Generic**: Define your own `Permission` and `Subject` types via traits
 - ⚡ **Async/Tokio**: Built on async Rust with Tokio runtime
 - 🔌 **JWT Integration**: Built-in JWT issuance and verification
@@ -70,7 +74,7 @@ Add kirino to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-kirino = "0.2"
+kirino = "0.3"
 tokio = { version = "1", features = ["full"] }
 serde = { version = "1", features = ["derive"] }
 ```
@@ -172,7 +176,15 @@ graph TD
         STORE["AssignmentStore / RoleStore"]
         CONSTRAINTS["ConstraintValidator<br/>SSD / DSD / Cardinality / Prerequisite"]
         CACHE["PermissionCache<br/>TTL-based LRU"]
-        AUDIT["AuditLogger"]
+        AUDIT["AuditLogger<br/>Sink + PolicyEngine + Analyzer"]
+    end
+
+    subgraph DYN["Dynamic Authorization"]
+        ARBITER["AuthorizationArbiter<br/>authorize / risk_score / feedback"]
+        TRUST["TrustScore + TrustDecayWorker"]
+        ANOMALY["AnomalyDetector<br/>Sliding window + z-score"]
+        POLICY["DynamicPolicy<br/>5-dim risk + autonomy L0-L4"]
+        DOMAIN["TaskDomain + DomainScope"]
     end
 
     subgraph DB["Database Layer"]
@@ -187,6 +199,12 @@ graph TD
     ENGINE --> CONSTRAINTS
     ENGINE --> CACHE
     ENGINE --> AUDIT
+    ENGINE --> ARBITER
+    ARBITER --> TRUST
+    ARBITER --> ANOMALY
+    ARBITER --> POLICY
+    ARBITER --> DOMAIN
+    ARBITER --> AUDIT
     STORE --> MEMORY
     STORE --> SQL
     CACHE --> REDIS
@@ -243,6 +261,29 @@ flowchart TD
 ```
 
 **Deny-override semantics**: Denied permissions always take precedence over granted ones — even over role-based or extra permissions.
+
+### Dynamic Authorization
+
+On top of static RBAC, kirino provides a runtime risk-scoring layer inspired by NIST SP 800-207/162 and DO-178C:
+
+```mermaid
+flowchart TD
+    REQ["ActionRequest<br/>(delegator + category + domain)"]
+    REQ --> RISK["Compute 5-dimension risk score"]
+    RISK --> D1["Trust (30%)"]
+    RISK --> D2["Sensitivity (25%)"]
+    RISK --> D3["Anomaly (25%)"]
+    RISK --> D4["Domain Scope (10%)"]
+    RISK --> D5["Delegator Type (10%)"]
+    D1 & D2 & D3 & D4 & D5 --> MAP["Map risk → Autonomy Level"]
+    MAP --> L0["L0: Lockdown (reject all)"]
+    MAP --> L1["L1: Human approval required"]
+    MAP --> L2["L2: Escalate + audit"]
+    MAP --> L3["L3: Proceed with audit"]
+    MAP --> L4["L4: Autonomous"]
+```
+
+Trust scores decay exponentially over time. Anomaly detection uses sliding-window z-score analysis. The arbiter supports lockdown/restore and compliance/violation feedback loops.
 
 ### Identity Types
 
