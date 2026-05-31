@@ -11,6 +11,7 @@ use crate::{
     },
     models::identity::Identity,
     rbac::{
+        dynamic::arbiter::AuthorizationArbiter,
         engine::RbacEngine,
         shared::Shared,
         store::{
@@ -126,6 +127,7 @@ where
     db: DB,
     jwt: JwtManager,
     engine: Shared<RbacEngine<StringSubject, P, R, A>>,
+    arbiter: Option<Shared<AuthorizationArbiter>>,
     first_user_role: String,
     default_role: String,
 }
@@ -149,9 +151,19 @@ where
             db,
             jwt: JwtManager::new(jwt_secret, jwt_expiration_hours),
             engine,
+            arbiter: None,
             first_user_role: first_user_role.to_string(),
             default_role: default_role.to_string(),
         }
+    }
+
+    pub fn with_arbiter(mut self, arbiter: AuthorizationArbiter) -> Self {
+        self.arbiter = Some(Shared::new(arbiter));
+        self
+    }
+
+    pub fn arbiter(&self) -> Option<Shared<AuthorizationArbiter>> {
+        self.arbiter.clone()
     }
 
     pub fn jwt_manager(&self) -> &JwtManager {
@@ -258,6 +270,23 @@ where
     pub async fn check_permission(&self, user_id: &str, permission: &P) -> bool {
         let subject = StringSubject::new(user_id);
         self.engine.check(&subject, permission).await
+    }
+
+    pub async fn check_static_and_dynamic(
+        &self,
+        user_id: &str,
+        permission: &P,
+        action_request: &crate::rbac::dynamic::metrics::ActionRequest,
+    ) -> bool {
+        let subject = StringSubject::new(user_id);
+        if !self.engine.check(&subject, permission).await {
+            return false;
+        }
+        if let Some(ref arbiter) = self.arbiter {
+            let verdict = arbiter.authorize(action_request).await;
+            return verdict.allowed;
+        }
+        true
     }
 
     pub async fn change_password(

@@ -1,6 +1,6 @@
 [package]
 name = "kirino"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2021"
 description = "A customizable, zero-trust authentication framework."
 license = "Apache-2.0"
@@ -16,7 +16,7 @@ async-trait = "^0.1"
 derive_more = { version = "^1", features = ["full"] }
 
 chrono = { version = "^0.4", features = ["serde"] }
-tokio = { version = "1", features = ["sync", "macros", "rt"] }
+tokio = { version = "1", features = ["sync", "macros", "rt", "time"] }
 uuid = { version = "^1", features = ["serde", "v7"] }
 
 serde = { version = "^1", features = ["derive"] }
