@@ -207,9 +207,12 @@ pub struct SubjectStats {
     pub max_risk: f64,
 }
 
+const DEFAULT_MAX_AUDIT_ENTRIES: usize = 10000;
+
 pub struct InMemoryAuditSink {
     entries: RwLock<Vec<AuditEntry>>,
     next_id: RwLock<u64>,
+    max_entries: usize,
 }
 
 impl InMemoryAuditSink {
@@ -217,6 +220,15 @@ impl InMemoryAuditSink {
         Self {
             entries: RwLock::new(Vec::new()),
             next_id: RwLock::new(1),
+            max_entries: DEFAULT_MAX_AUDIT_ENTRIES,
+        }
+    }
+
+    pub fn with_max_entries(max_entries: usize) -> Self {
+        Self {
+            entries: RwLock::new(Vec::new()),
+            next_id: RwLock::new(1),
+            max_entries,
         }
     }
 }
@@ -235,6 +247,10 @@ impl AuditSink for InMemoryAuditSink {
         *next_id += 1;
         let mut entries = self.entries.write().await;
         entries.push(entry);
+        if entries.len() > self.max_entries {
+            let excess = entries.len() - self.max_entries;
+            entries.drain(0..excess);
+        }
     }
 
     async fn query(&self, filter: &AuditFilter) -> Vec<AuditEntry> {
@@ -638,6 +654,25 @@ mod tests {
             })
             .await;
         assert_eq!(result.len(), 3);
+    }
+
+    #[tokio::test]
+    async fn test_sink_max_entries_eviction() {
+        let sink = InMemoryAuditSink::with_max_entries(5);
+        for i in 0..10 {
+            sink.append(make_entry(
+                &format!("u{}", i),
+                "read",
+                true,
+                0.1,
+            ))
+            .await;
+        }
+        let all = sink.query(&AuditFilter::default()).await;
+        assert_eq!(all.len(), 5);
+        let mut subjects: Vec<String> = all.iter().map(|e| e.subject_id.clone()).collect();
+        subjects.sort();
+        assert_eq!(subjects, vec!["u5", "u6", "u7", "u8", "u9"]);
     }
 
     #[tokio::test]

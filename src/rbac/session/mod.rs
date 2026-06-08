@@ -73,6 +73,13 @@ where
         self.assignment_store.clone()
     }
 
+    pub async fn cleanup_expired(&self) -> usize {
+        let mut sessions = self.sessions.write().await;
+        let before = sessions.len();
+        sessions.retain(|_, session| !session.is_expired());
+        before - sessions.len()
+    }
+
     async fn validate_dsd(&self, roles: &HashSet<String>) -> anyhow::Result<()> {
         if let Some(ref cs) = self.constraint_store {
             let policies = cs.list_dsd_policies().await?;
