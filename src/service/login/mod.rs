@@ -1,7 +1,10 @@
 use anyhow::{anyhow, Result};
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
+use std::time::Instant;
+use tokio::sync::RwLock;
 use uuid::Uuid;
 
 use crate::{
@@ -22,6 +25,78 @@ use crate::{
         traits::{AssignmentStore, Permission, Role},
     },
 };
+
+#[derive(Debug, Clone)]
+struct RateLimitEntry {
+    attempts: u32,
+    window_start: Instant,
+}
+
+pub struct LoginRateLimiter {
+    max_attempts: u32,
+    window_secs: u64,
+    lockout_secs: u64,
+    entries: Arc<RwLock<HashMap<String, RateLimitEntry>>>,
+}
+
+impl LoginRateLimiter {
+    pub fn new(max_attempts: u32, window_secs: u64, lockout_secs: u64) -> Self {
+        Self {
+            max_attempts,
+            window_secs,
+            lockout_secs,
+            entries: Arc::new(RwLock::new(HashMap::new())),
+        }
+    }
+
+    pub async fn check(&self, key: &str) -> Result<()> {
+        let mut entries = self.entries.write().await;
+        let now = Instant::now();
+        let window_duration = std::time::Duration::from_secs(self.window_secs);
+
+        if let Some(entry) = entries.get_mut(key) {
+            let elapsed = now.duration_since(entry.window_start);
+            if elapsed > std::time::Duration::from_secs(self.window_secs + self.lockout_secs) {
+                entry.attempts = 0;
+                entry.window_start = now;
+            } else if elapsed > window_duration && entry.attempts < self.max_attempts {
+                entry.attempts = 0;
+                entry.window_start = now;
+            }
+
+            if entry.attempts >= self.max_attempts {
+                let remaining =
+                    std::time::Duration::from_secs(self.window_secs + self.lockout_secs)
+                        - elapsed;
+                if remaining > std::time::Duration::ZERO {
+                    return Err(anyhow!(
+                        "too many login attempts, try again in {} seconds",
+                        remaining.as_secs()
+                    ));
+                }
+                entry.attempts = 0;
+                entry.window_start = now;
+            }
+        }
+
+        Ok(())
+    }
+
+    pub async fn record_failure(&self, key: &str) {
+        let mut entries = self.entries.write().await;
+        let now = Instant::now();
+        let entry = entries.entry(key.to_string()).or_insert(RateLimitEntry {
+            attempts: 0,
+            window_start: now,
+        });
+        entry.attempts += 1;
+    }
+
+    pub async fn reset(&self, key: &str) {
+        let mut entries = self.entries.write().await;
+        entries.remove(key);
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -128,6 +203,7 @@ where
     jwt: JwtManager,
     engine: Shared<RbacEngine<StringSubject, P, R, A>>,
     arbiter: Option<Shared<AuthorizationArbiter>>,
+    rate_limiter: LoginRateLimiter,
     first_user_role: String,
     default_role: String,
 }
@@ -152,9 +228,15 @@ where
             jwt: JwtManager::new(jwt_secret, jwt_expiration_hours),
             engine,
             arbiter: None,
+            rate_limiter: LoginRateLimiter::new(5, 300, 900),
             first_user_role: first_user_role.to_string(),
             default_role: default_role.to_string(),
         }
+    }
+
+    pub fn with_rate_limiter(mut self, limiter: LoginRateLimiter) -> Self {
+        self.rate_limiter = limiter;
+        self
     }
 
     pub fn with_arbiter(mut self, arbiter: AuthorizationArbiter) -> Self {
@@ -226,6 +308,8 @@ where
     }
 
     pub async fn login(&self, username: &str, password: &str) -> Result<LoginResult> {
+        self.rate_limiter.check(username).await?;
+
         let user = self
             .db
             .find_by_username(username)
@@ -233,12 +317,16 @@ where
             .ok_or_else(|| anyhow!("invalid credentials"))?;
 
         if !user.is_active {
-            return Err(anyhow!("account disabled"));
+            self.rate_limiter.record_failure(username).await;
+            return Err(anyhow!("invalid credentials"));
         }
 
         if !verify_password(password, &user.password_hash)? {
+            self.rate_limiter.record_failure(username).await;
             return Err(anyhow!("invalid credentials"));
         }
+
+        self.rate_limiter.reset(username).await;
 
         let user_id = user.id.to_string();
         let subject = StringSubject::new(&user_id);

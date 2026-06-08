@@ -8,7 +8,7 @@ mod tests {
             subject::StringSubject,
             traits::AssignmentStore,
         },
-        service::login::{build_default_engine, AuthService, KirinoPermission},
+        service::login::{build_default_engine, AuthService, KirinoPermission, LoginRateLimiter},
     };
 
     fn make_auth() -> AuthService<
@@ -163,5 +163,43 @@ mod tests {
                 .check_permission(&uid, &KirinoPermission::SystemWrite)
                 .await
         );
+    }
+
+    #[tokio::test]
+    async fn test_login_rate_limiting() {
+        let db = InMemoryUserDatabase::new();
+        let engine = build_default_engine();
+        let auth = AuthService::new(db, "test-secret", 24, engine, "admin", "viewer")
+            .with_rate_limiter(LoginRateLimiter::new(3, 60, 60));
+
+        auth.register("alice", "password123", None).await.unwrap();
+
+        for _ in 0..3 {
+            assert!(auth.login("alice", "wrong").await.is_err());
+        }
+        let result = auth.login("alice", "wrong").await;
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("too many login attempts")
+        );
+    }
+
+    #[tokio::test]
+    async fn test_rate_limit_resets_on_success() {
+        let db = InMemoryUserDatabase::new();
+        let engine = build_default_engine();
+        let auth = AuthService::new(db, "test-secret", 24, engine, "admin", "viewer")
+            .with_rate_limiter(LoginRateLimiter::new(3, 60, 60));
+
+        auth.register("alice", "password123", None).await.unwrap();
+
+        assert!(auth.login("alice", "wrong").await.is_err());
+        assert!(auth.login("alice", "wrong").await.is_err());
+        assert!(auth.login("alice", "password123").await.is_ok());
+        assert!(auth.login("alice", "wrong").await.is_err());
+        assert!(auth.login("alice", "wrong").await.is_err());
     }
 }
