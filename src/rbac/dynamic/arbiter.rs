@@ -78,6 +78,42 @@ impl AuthorizationArbiter {
         &self.trust_store
     }
 
+    pub fn spawn_trust_decay(
+        &self,
+        interval: std::time::Duration,
+    ) -> tokio::task::JoinHandle<()> {
+        let store = self.trust_store.clone();
+        tokio::spawn(async move {
+            let mut tick = tokio::time::interval(interval);
+            loop {
+                tick.tick().await;
+                let ids = match store.list_ids().await {
+                    Ok(ids) => ids,
+                    Err(e) => {
+                        tracing::error!(target: "kirino::dynamic::trust::decay",
+                            error = %e,
+                            "failed to list trust score ids"
+                        );
+                        continue;
+                    }
+                };
+                let mut decayed = 0;
+                for id in &ids {
+                    if let Ok(Some(mut score)) = store.get(id).await {
+                        score.degrade(interval);
+                        if let Ok(()) = store.set(id, score).await {
+                            decayed += 1;
+                        }
+                    }
+                }
+                tracing::debug!(target: "kirino::dynamic::trust::decay",
+                    decayed_count = decayed,
+                    "trust decay cycle completed"
+                );
+            }
+        })
+    }
+
     pub async fn set_policy(&self, policy: DynamicPolicy) {
         let mut guard = self.policy.write().await;
         *guard = policy;

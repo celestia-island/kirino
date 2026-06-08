@@ -196,6 +196,30 @@ impl TrustDecayWorker {
     pub fn spawn(self) -> tokio::task::JoinHandle<()> {
         tokio::spawn(async move { self.run().await })
     }
+
+    pub fn spawn_resilient(store: Arc<dyn TrustScoreStore>, interval: Duration) -> tokio::task::JoinHandle<()> {
+        tokio::spawn(async move {
+            let worker = Self::new(store.clone(), interval, interval);
+            let mut interval_tick = tokio::time::interval(interval);
+            loop {
+                interval_tick.tick().await;
+                match worker.run_once().await {
+                    Ok(count) => {
+                        tracing::debug!(target: "kirino::dynamic::trust::decay",
+                            decayed_count = count,
+                            "trust decay cycle completed"
+                        );
+                    }
+                    Err(e) => {
+                        tracing::error!(target: "kirino::dynamic::trust::decay",
+                            error = %e,
+                            "trust decay cycle failed, will retry next interval"
+                        );
+                    }
+                }
+            }
+        })
+    }
 }
 
 #[cfg(test)]
