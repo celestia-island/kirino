@@ -197,7 +197,10 @@ impl TrustDecayWorker {
         tokio::spawn(async move { self.run().await })
     }
 
-    pub fn spawn_resilient(store: Arc<dyn TrustScoreStore>, interval: Duration) -> tokio::task::JoinHandle<()> {
+    pub fn spawn_resilient(
+        store: Arc<dyn TrustScoreStore>,
+        interval: Duration,
+    ) -> tokio::task::JoinHandle<()> {
         tokio::spawn(async move {
             let worker = Self::new(store.clone(), interval, interval);
             let mut interval_tick = tokio::time::interval(interval);

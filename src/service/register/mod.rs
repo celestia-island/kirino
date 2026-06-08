@@ -129,7 +129,10 @@ mod tests {
         let auth = make_auth();
 
         auth.register("alice", "Password123!", None).await.unwrap();
-        assert!(auth.register("alice", "Other_Pass456!", None).await.is_err());
+        assert!(auth
+            .register("alice", "Other_Pass456!", None)
+            .await
+            .is_err());
     }
 
     #[tokio::test]
@@ -139,11 +142,10 @@ mod tests {
         assert!(auth.register("alice", "short", None).await.is_err());
         assert!(auth.register("bob", "Password123!", None).await.is_ok());
         assert!(auth.register("alice2", "abc", None).await.is_err());
-        assert!(
-            auth.register("alice3", "simplepassword", None)
-                .await
-                .is_err()
-        );
+        assert!(auth
+            .register("alice3", "simplepassword", None)
+            .await
+            .is_err());
     }
 
     #[tokio::test]
@@ -152,27 +154,30 @@ mod tests {
 
         assert!(auth.register("", "Password123!", None).await.is_err());
         assert!(auth.register("a", "Password123!", None).await.is_err());
-        assert!(
-            auth.register("alice@evil", "Password123!", None)
-                .await
-                .is_err()
-        );
-        assert!(
-            auth.register("alice hack", "Password123!", None)
-                .await
-                .is_err()
-        );
-        assert!(
-            auth.register(
+        assert!(auth
+            .register("alice@evil", "Password123!", None)
+            .await
+            .is_err());
+        assert!(auth
+            .register("alice hack", "Password123!", None)
+            .await
+            .is_err());
+        assert!(auth
+            .register(
                 "a_very_long_username_that_exceeds_the_maximum_allowed_length_limit_here",
                 "Password123!",
                 None
             )
             .await
-            .is_err()
-        );
-        assert!(auth.register("alice_123", "Password123!", None).await.is_ok());
-        assert!(auth.register("alice.1-2", "Password123!", None).await.is_ok());
+            .is_err());
+        assert!(auth
+            .register("alice_123", "Password123!", None)
+            .await
+            .is_ok());
+        assert!(auth
+            .register("alice.1-2", "Password123!", None)
+            .await
+            .is_ok());
     }
 
     #[tokio::test]
@@ -234,12 +239,10 @@ mod tests {
         }
         let result = auth.login("alice", "wrong").await;
         assert!(result.is_err());
-        assert!(
-            result
-                .unwrap_err()
-                .to_string()
-                .contains("too many login attempts")
-        );
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("too many login attempts"));
     }
 
     #[tokio::test]

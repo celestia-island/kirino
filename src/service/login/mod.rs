@@ -86,9 +86,7 @@ pub fn validate_password(password: &str) -> Result<()> {
     let has_uppercase = password.chars().any(|c| c.is_ascii_uppercase());
     let has_lowercase = password.chars().any(|c| c.is_ascii_lowercase());
     let has_digit = password.chars().any(|c| c.is_ascii_digit());
-    let has_special = password
-        .chars()
-        .any(|c| !c.is_ascii_alphanumeric());
+    let has_special = password.chars().any(|c| !c.is_ascii_alphanumeric());
 
     let categories = [has_uppercase, has_lowercase, has_digit, has_special]
         .iter()
@@ -117,22 +115,24 @@ impl LoginRateLimiter {
     pub async fn check(&self, key: &str) -> Result<()> {
         let mut entries = self.entries.write().await;
         let now = Instant::now();
-        let window_duration = std::time::Duration::from_secs(self.window_secs);
 
         if let Some(entry) = entries.get_mut(key) {
             let elapsed = now.duration_since(entry.window_start);
-            if elapsed > std::time::Duration::from_secs(self.window_secs + self.lockout_secs) {
-                entry.attempts = 0;
-                entry.window_start = now;
-            } else if elapsed > window_duration && entry.attempts < self.max_attempts {
+            let total_window =
+                std::time::Duration::from_secs(self.window_secs + self.lockout_secs);
+            let window_duration = std::time::Duration::from_secs(self.window_secs);
+
+            let should_reset = elapsed > total_window
+                || (elapsed > window_duration && entry.attempts < self.max_attempts);
+
+            if should_reset {
                 entry.attempts = 0;
                 entry.window_start = now;
             }
 
             if entry.attempts >= self.max_attempts {
                 let remaining =
-                    std::time::Duration::from_secs(self.window_secs + self.lockout_secs)
-                        - elapsed;
+                    std::time::Duration::from_secs(self.window_secs + self.lockout_secs) - elapsed;
                 if remaining > std::time::Duration::ZERO {
                     return Err(anyhow!(
                         "too many login attempts, try again in {} seconds",

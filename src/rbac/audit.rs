@@ -660,13 +660,8 @@ mod tests {
     async fn test_sink_max_entries_eviction() {
         let sink = InMemoryAuditSink::with_max_entries(5);
         for i in 0..10 {
-            sink.append(make_entry(
-                &format!("u{}", i),
-                "read",
-                true,
-                0.1,
-            ))
-            .await;
+            sink.append(make_entry(&format!("u{}", i), "read", true, 0.1))
+                .await;
         }
         let all = sink.query(&AuditFilter::default()).await;
         assert_eq!(all.len(), 5);

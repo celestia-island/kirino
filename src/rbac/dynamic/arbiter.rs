@@ -78,10 +78,7 @@ impl AuthorizationArbiter {
         &self.trust_store
     }
 
-    pub fn spawn_trust_decay(
-        &self,
-        interval: std::time::Duration,
-    ) -> tokio::task::JoinHandle<()> {
+    pub fn spawn_trust_decay(&self, interval: std::time::Duration) -> tokio::task::JoinHandle<()> {
         let store = self.trust_store.clone();
         tokio::spawn(async move {
             let mut tick = tokio::time::interval(interval);
