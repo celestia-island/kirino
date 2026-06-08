@@ -41,6 +41,33 @@ pub struct LoginRateLimiter {
 
 const MIN_PASSWORD_LEN: usize = 8;
 const MAX_PASSWORD_LEN: usize = 128;
+const MIN_USERNAME_LEN: usize = 2;
+const MAX_USERNAME_LEN: usize = 64;
+
+pub fn validate_username(username: &str) -> Result<()> {
+    let trimmed = username.trim();
+    if trimmed.is_empty() || trimmed.len() < MIN_USERNAME_LEN {
+        return Err(anyhow!(
+            "username must be at least {} characters",
+            MIN_USERNAME_LEN
+        ));
+    }
+    if trimmed.len() > MAX_USERNAME_LEN {
+        return Err(anyhow!(
+            "username must be at most {} characters",
+            MAX_USERNAME_LEN
+        ));
+    }
+    if !trimmed
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-' || c == '.')
+    {
+        return Err(anyhow!(
+            "username may only contain alphanumeric characters, underscores, hyphens, and dots"
+        ));
+    }
+    Ok(())
+}
 
 pub fn validate_password(password: &str) -> Result<()> {
     if password.len() < MIN_PASSWORD_LEN {
@@ -325,13 +352,11 @@ where
         password: &str,
         display_name: Option<&str>,
     ) -> Result<UserInfo> {
-        if username.trim().is_empty() {
-            return Err(anyhow!("username must not be empty"));
-        }
+        validate_username(username)?;
         validate_password(password)?;
 
         if self.db.find_by_username(username).await?.is_some() {
-            return Err(anyhow!("username already exists"));
+            return Err(anyhow!("registration failed"));
         }
 
         let password_hash = hash_password(password)?;
