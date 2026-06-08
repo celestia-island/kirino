@@ -222,6 +222,31 @@ pub struct UserRecord {
     pub updated_at: chrono::DateTime<Utc>,
 }
 
+impl UserRecord {
+    pub fn to_public(&self) -> UserInfo {
+        UserInfo {
+            id: self.id,
+            username: self.username.clone(),
+            display_name: self.display_name.clone(),
+            is_active: self.is_active,
+            identity: self.identity.clone(),
+            created_at: self.created_at,
+            updated_at: self.updated_at,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct UserInfo {
+    pub id: Uuid,
+    pub username: String,
+    pub display_name: Option<String>,
+    pub is_active: bool,
+    pub identity: Identity,
+    pub created_at: chrono::DateTime<Utc>,
+    pub updated_at: chrono::DateTime<Utc>,
+}
+
 #[derive(Debug, Clone)]
 pub struct LoginResult {
     pub token: String,
@@ -299,7 +324,7 @@ where
         username: &str,
         password: &str,
         display_name: Option<&str>,
-    ) -> Result<UserRecord> {
+    ) -> Result<UserInfo> {
         if username.trim().is_empty() {
             return Err(anyhow!("username must not be empty"));
         }
@@ -340,7 +365,7 @@ where
             .assign_role(&subject, role_name)
             .await?;
 
-        Ok(user)
+        Ok(user.to_public())
     }
 
     pub async fn login(&self, username: &str, password: &str) -> Result<LoginResult> {
@@ -438,8 +463,9 @@ where
         self.db.update_password(&uid, &new_hash).await
     }
 
-    pub async fn list_users(&self) -> Result<Vec<UserRecord>> {
-        self.db.list_users().await
+    pub async fn list_users(&self) -> Result<Vec<UserInfo>> {
+        let users = self.db.list_users().await?;
+        Ok(users.iter().map(|u| u.to_public()).collect())
     }
 
     pub async fn delete_user(&self, user_id: &str) -> Result<bool> {
