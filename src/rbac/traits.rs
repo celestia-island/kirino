@@ -5,7 +5,7 @@ use async_trait::async_trait;
 pub trait Permission: Eq + std::hash::Hash + Clone + Send + Sync + 'static {
     fn name(&self) -> &str;
 
-    fn domain(&self) -> &str {
+    fn domain(&self) -> &'static str {
         ""
     }
 }
@@ -13,8 +13,14 @@ pub trait Permission: Eq + std::hash::Hash + Clone + Send + Sync + 'static {
 pub trait Subject: Eq + std::hash::Hash + Clone + Send + Sync + 'static {
     fn subject_id(&self) -> &str;
 
-    fn subject_type(&self) -> &str {
+    fn subject_type(&self) -> &'static str {
         "user"
+    }
+}
+
+impl Subject for String {
+    fn subject_id(&self) -> &str {
+        self
     }
 }
 

@@ -14,6 +14,7 @@ pub struct IdentitySubject {
 }
 
 impl IdentitySubject {
+    #[must_use]
     pub fn new(identity: Identity) -> Self {
         let type_str = match &identity {
             Identity::Anonymous { .. } => "anonymous",
@@ -22,10 +23,10 @@ impl IdentitySubject {
             Identity::Service { .. } => "service",
         };
         let id_str = match &identity {
-            Identity::Anonymous { id, .. } => id.to_string(),
-            Identity::Basic { id } => id.to_string(),
-            Identity::Temporary { id, .. } => id.to_string(),
-            Identity::Service { id, .. } => id.to_string(),
+            Identity::Anonymous { id, .. }
+            | Identity::Basic { id }
+            | Identity::Temporary { id, .. }
+            | Identity::Service { id, .. } => id.to_string(),
         };
         Self {
             identity,
@@ -34,14 +35,17 @@ impl IdentitySubject {
         }
     }
 
+    #[must_use]
     pub fn identity(&self) -> &Identity {
         &self.identity
     }
 
+    #[must_use]
     pub fn into_inner(self) -> Identity {
         self.identity
     }
 
+    #[must_use]
     pub fn is_expired(&self) -> bool {
         match &self.identity {
             Identity::Temporary { expires_at, .. } => *expires_at < chrono::Utc::now(),
@@ -69,7 +73,7 @@ impl Subject for IdentitySubject {
         &self.id_str
     }
 
-    fn subject_type(&self) -> &str {
+    fn subject_type(&self) -> &'static str {
         self.type_str
     }
 }

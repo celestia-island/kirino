@@ -1,9 +1,11 @@
 use anyhow::{anyhow, Result};
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
-use std::collections::{HashMap, HashSet};
-use std::sync::Arc;
-use std::time::Instant;
+use std::{
+    collections::{HashMap, HashSet},
+    sync::Arc,
+    time::Instant,
+};
 use tokio::sync::RwLock;
 use uuid::Uuid;
 
@@ -44,18 +46,18 @@ const MAX_PASSWORD_LEN: usize = 128;
 const MIN_USERNAME_LEN: usize = 2;
 const MAX_USERNAME_LEN: usize = 64;
 
+/// # Errors
+/// Returns an error if the username is too short, too long, or contains invalid characters.
 pub fn validate_username(username: &str) -> Result<()> {
     let trimmed = username.trim();
     if trimmed.is_empty() || trimmed.len() < MIN_USERNAME_LEN {
         return Err(anyhow!(
-            "username must be at least {} characters",
-            MIN_USERNAME_LEN
+            "username must be at least {MIN_USERNAME_LEN} characters"
         ));
     }
     if trimmed.len() > MAX_USERNAME_LEN {
         return Err(anyhow!(
-            "username must be at most {} characters",
-            MAX_USERNAME_LEN
+            "username must be at most {MAX_USERNAME_LEN} characters"
         ));
     }
     if !trimmed
@@ -69,17 +71,17 @@ pub fn validate_username(username: &str) -> Result<()> {
     Ok(())
 }
 
+/// # Errors
+/// Returns an error if the password is too short, too long, or does not meet complexity requirements.
 pub fn validate_password(password: &str) -> Result<()> {
     if password.len() < MIN_PASSWORD_LEN {
         return Err(anyhow!(
-            "password must be at least {} characters",
-            MIN_PASSWORD_LEN
+            "password must be at least {MIN_PASSWORD_LEN} characters"
         ));
     }
     if password.len() > MAX_PASSWORD_LEN {
         return Err(anyhow!(
-            "password must be at most {} characters",
-            MAX_PASSWORD_LEN
+            "password must be at most {MAX_PASSWORD_LEN} characters"
         ));
     }
 
@@ -103,6 +105,7 @@ pub fn validate_password(password: &str) -> Result<()> {
 }
 
 impl LoginRateLimiter {
+    #[must_use]
     pub fn new(max_attempts: u32, window_secs: u64, lockout_secs: u64) -> Self {
         Self {
             max_attempts,
@@ -112,14 +115,18 @@ impl LoginRateLimiter {
         }
     }
 
+    /// # Errors
+    /// Returns an error if too many login attempts have been made within the rate limit window.
+    ///
+    /// # Panics
+    /// Panics if `window_secs + lockout_secs` overflows or is less than elapsed time (should never happen with valid config).
     pub async fn check(&self, key: &str) -> Result<()> {
         let mut entries = self.entries.write().await;
         let now = Instant::now();
 
         if let Some(entry) = entries.get_mut(key) {
             let elapsed = now.duration_since(entry.window_start);
-            let total_window =
-                std::time::Duration::from_secs(self.window_secs + self.lockout_secs);
+            let total_window = std::time::Duration::from_secs(self.window_secs + self.lockout_secs);
             let window_duration = std::time::Duration::from_secs(self.window_secs);
 
             let should_reset = elapsed > total_window
@@ -132,7 +139,9 @@ impl LoginRateLimiter {
 
             if entry.attempts >= self.max_attempts {
                 let remaining =
-                    std::time::Duration::from_secs(self.window_secs + self.lockout_secs) - elapsed;
+                    std::time::Duration::from_secs(self.window_secs + self.lockout_secs)
+                        .checked_sub(elapsed)
+                        .expect("total_window > elapsed should hold");
                 if remaining > std::time::Duration::ZERO {
                     return Err(anyhow!(
                         "too many login attempts, try again in {} seconds",
@@ -182,8 +191,13 @@ pub enum KirinoPermission {
 }
 
 impl KirinoPermission {
+    #[must_use]
     pub fn all() -> HashSet<Self> {
-        use KirinoPermission::*;
+        use KirinoPermission::{
+            AgentExecute, AgentRead, AgentWrite, ConfigRead, ConfigWrite, ContainerRead,
+            ContainerWrite, DeployExecute, DeployRead, KnowledgeRead, KnowledgeWrite, SystemRead,
+            SystemWrite,
+        };
         [
             AgentRead,
             AgentWrite,
@@ -223,7 +237,7 @@ impl Permission for KirinoPermission {
         }
     }
 
-    fn domain(&self) -> &str {
+    fn domain(&self) -> &'static str {
         match self {
             KirinoPermission::AgentRead
             | KirinoPermission::AgentWrite
@@ -250,6 +264,7 @@ pub struct UserRecord {
 }
 
 impl UserRecord {
+    #[must_use]
     pub fn to_public(&self) -> UserInfo {
         UserInfo {
             id: self.id,
@@ -326,16 +341,19 @@ where
         }
     }
 
+    #[must_use]
     pub fn with_rate_limiter(mut self, limiter: LoginRateLimiter) -> Self {
         self.rate_limiter = limiter;
         self
     }
 
+    #[must_use]
     pub fn with_auto_admin_first_user(mut self, enabled: bool) -> Self {
         self.auto_admin_first_user = enabled;
         self
     }
 
+    #[must_use]
     pub fn with_arbiter(mut self, arbiter: AuthorizationArbiter) -> Self {
         self.arbiter = Some(Shared::new(arbiter));
         self
@@ -353,6 +371,8 @@ where
         self.engine.clone()
     }
 
+    /// # Errors
+    /// Returns an error if the username or password is invalid, or if the username already exists.
     pub async fn register(
         &self,
         username: &str,
@@ -375,7 +395,7 @@ where
             id: user_id,
             username: username.to_string(),
             password_hash,
-            display_name: display_name.map(|s| s.to_string()),
+            display_name: display_name.map(ToString::to_string),
             is_active: true,
             identity,
             created_at: now,
@@ -400,6 +420,8 @@ where
         Ok(user.to_public())
     }
 
+    /// # Errors
+    /// Returns an error if rate limited, credentials are invalid, or token issuance fails.
     pub async fn login(&self, username: &str, password: &str) -> Result<LoginResult> {
         self.rate_limiter.check(username).await?;
 
@@ -441,6 +463,8 @@ where
         })
     }
 
+    /// # Errors
+    /// Returns an error if the token is invalid, expired, or has been revoked.
     pub async fn verify_token(
         &self,
         token: &str,
@@ -470,6 +494,8 @@ where
         true
     }
 
+    /// # Errors
+    /// Returns an error if the user ID is invalid, user is not found, old password is incorrect, or the new password is invalid.
     pub async fn change_password(
         &self,
         user_id: &str,
@@ -495,11 +521,15 @@ where
         self.db.update_password(&uid, &new_hash).await
     }
 
+    /// # Errors
+    /// Returns an error if the underlying database operation fails.
     pub async fn list_users(&self) -> Result<Vec<UserInfo>> {
         let users = self.db.list_users().await?;
-        Ok(users.iter().map(|u| u.to_public()).collect())
+        Ok(users.iter().map(UserRecord::to_public).collect())
     }
 
+    /// # Errors
+    /// Returns an error if the user ID is invalid or the underlying database operation fails.
     pub async fn delete_user(&self, user_id: &str) -> Result<bool> {
         let uid = Uuid::parse_str(user_id).map_err(|_| anyhow!("invalid user_id"))?;
         self.jwt.revoke_all_for_user(user_id).await;
@@ -514,6 +544,7 @@ type DefaultEngine = RbacEngine<
     InMemoryAssignmentStore<StringSubject, KirinoPermission>,
 >;
 
+#[must_use]
 pub fn build_default_engine() -> Shared<DefaultEngine> {
     let mut role_reg = StaticRoleRegistry::new();
     role_reg.register(SimpleRole::new("admin", KirinoPermission::all()));

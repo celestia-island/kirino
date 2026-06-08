@@ -2,9 +2,9 @@ use std::{
     collections::{HashMap, HashSet},
     marker::PhantomData,
 };
+use tokio::sync::RwLock;
 
 use async_trait::async_trait;
-use tokio::sync::RwLock;
 
 use crate::rbac::traits::{AssignmentStore, Permission, RoleStore, Subject};
 
@@ -24,6 +24,7 @@ where
     S: Subject,
     P: Permission,
 {
+    #[must_use]
     pub fn new() -> Self {
         Self {
             role_assignments: RwLock::new(HashMap::new()),
@@ -117,6 +118,7 @@ pub struct InMemoryRoleStore<P: Permission> {
 }
 
 impl<P: Permission> InMemoryRoleStore<P> {
+    #[must_use]
     pub fn new() -> Self {
         Self {
             roles: RwLock::new(HashMap::new()),

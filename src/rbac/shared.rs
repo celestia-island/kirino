@@ -18,6 +18,7 @@ impl<T> Shared<T> {
         Self(arc)
     }
 
+    #[must_use]
     pub fn into_arc(self) -> Arc<T> {
         self.0
     }
@@ -28,10 +29,12 @@ impl<T: ?Sized> Shared<T> {
         Self(arc)
     }
 
+    #[must_use]
     pub fn strong_count(&self) -> usize {
         Arc::strong_count(&self.0)
     }
 
+    #[must_use]
     pub fn ptr_eq(&self, other: &Self) -> bool {
         Arc::ptr_eq(&self.0, &other.0)
     }
@@ -65,7 +68,7 @@ impl<T: ?Sized> Eq for Shared<T> {}
 impl<T: ?Sized> std::hash::Hash for Shared<T> {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
         let ptr = Arc::as_ptr(&self.0);
-        let thin = ptr as *const ();
+        let thin = ptr.cast::<()>();
         std::ptr::hash(thin, state);
     }
 }

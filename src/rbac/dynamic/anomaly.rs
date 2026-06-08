@@ -36,6 +36,7 @@ pub struct AnomalyDetector {
 }
 
 impl AnomalyDetector {
+    #[must_use]
     pub fn new(window_size: usize) -> Self {
         Self {
             recent_actions: VecDeque::with_capacity(window_size),
@@ -46,15 +47,18 @@ impl AnomalyDetector {
         }
     }
 
+    #[must_use]
     pub fn with_baseline(mut self, baseline: BehaviorBaseline) -> Self {
         self.baseline = Some(baseline);
         self
     }
 
+    #[must_use]
     pub fn is_baseline_ready(&self) -> bool {
         self.total_observed >= BASELINE_MIN_SAMPLES as u64
     }
 
+    #[must_use]
     pub fn total_observed(&self) -> u64 {
         self.total_observed
     }
@@ -101,10 +105,11 @@ impl AnomalyDetector {
         }
     }
 
+    #[must_use]
+    #[allow(clippy::cast_precision_loss)]
     pub fn pattern_deviation(&self) -> f64 {
-        let baseline = match &self.baseline {
-            Some(b) => b,
-            None => return 0.0,
+        let Some(baseline) = &self.baseline else {
+            return 0.0;
         };
 
         let mut total_deviation = 0.0;
@@ -135,10 +140,11 @@ impl AnomalyDetector {
             return 0.0;
         }
 
-        let avg_deviation = total_deviation / count as f64;
+        let avg_deviation = total_deviation / f64::from(count);
         (avg_deviation / 3.0).min(1.0)
     }
 
+    #[allow(clippy::cast_precision_loss)]
     pub fn build_baseline_from_history(&mut self) {
         if self.total_observed < BASELINE_MIN_SAMPLES as u64 {
             return;
@@ -164,7 +170,7 @@ impl AnomalyDetector {
                 *category_stdevs.entry(rec.category).or_insert(0.0) += diff * diff;
             }
         }
-        for (cat, sum_sq) in category_stdevs.iter_mut() {
+        for (cat, sum_sq) in &mut category_stdevs {
             let mean = category_means.get(cat).copied().unwrap_or(0.0);
             let variance = mean * (1.0 - mean) / n.max(1.0);
             *sum_sq = (variance + *sum_sq / n).sqrt().max(0.01);
@@ -176,6 +182,7 @@ impl AnomalyDetector {
         });
     }
 
+    #[allow(clippy::cast_precision_loss)]
     fn recompute_profile(&mut self) {
         self.category_profile.clear();
         if self.recent_actions.is_empty() {

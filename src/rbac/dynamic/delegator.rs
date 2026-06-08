@@ -49,6 +49,7 @@ impl Delegator {
         }
     }
 
+    #[must_use]
     pub fn with_parent(mut self, parent_id: impl Into<String>) -> Self {
         self.parent_id = Some(parent_id.into());
         self

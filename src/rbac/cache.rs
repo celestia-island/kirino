@@ -38,6 +38,7 @@ where
     S: Subject,
     P: Permission,
 {
+    #[must_use]
     pub fn new(ttl: Duration) -> Self {
         Self {
             cache: RwLock::new(HashMap::new()),
@@ -57,9 +58,8 @@ where
             subject.subject_id().to_string(),
             permission.name().to_string(),
         );
-        let cache = match self.cache.read() {
-            Ok(guard) => guard,
-            Err(_) => return None,
+        let Ok(cache) = self.cache.read() else {
+            return None;
         };
         cache.get(&key).and_then(|entry| {
             if Instant::now() < entry.expires_at {

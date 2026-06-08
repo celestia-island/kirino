@@ -1,8 +1,7 @@
 use anyhow::{anyhow, Result};
 use chrono::{Duration, Utc};
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
-use std::sync::Arc;
+use std::{collections::HashMap, sync::Arc};
 use tokio::sync::RwLock;
 
 use jsonwebtoken::{decode, encode, Algorithm, DecodingKey, EncodingKey, Header, Validation};
@@ -25,6 +24,7 @@ pub struct JwtManager {
 }
 
 impl JwtManager {
+    #[must_use]
     pub fn new(secret: &str, expiration_hours: i64) -> Self {
         Self {
             encoding_key: EncodingKey::from_secret(secret.as_bytes()),
@@ -34,6 +34,7 @@ impl JwtManager {
         }
     }
 
+    #[allow(clippy::missing_errors_doc)]
     pub fn issue(&self, user_id: &str, username: &str, roles: Vec<String>) -> Result<String> {
         let now = Utc::now();
         let claims = Claims {
@@ -44,19 +45,21 @@ impl JwtManager {
             exp: (now + Duration::hours(self.expiration_hours)).timestamp(),
         };
         encode(&Header::default(), &claims, &self.encoding_key)
-            .map_err(|e| anyhow!("JWT encode failed: {}", e))
+            .map_err(|e| anyhow!("JWT encode failed: {e}"))
     }
 
+    #[allow(clippy::missing_errors_doc)]
     pub fn verify(&self, token: &str) -> Result<Claims> {
         let data = decode::<Claims>(
             token,
             &self.decoding_key,
             &Validation::new(Algorithm::HS256),
         )
-        .map_err(|e| anyhow!("JWT verify failed: {}", e))?;
+        .map_err(|e| anyhow!("JWT verify failed: {e}"))?;
         Ok(data.claims)
     }
 
+    #[allow(clippy::missing_errors_doc)]
     pub async fn verify_with_revocation(&self, token: &str) -> Result<Claims> {
         let claims = self.verify(token)?;
         let revocation = self.revocation.read().await;

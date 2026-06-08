@@ -61,25 +61,29 @@ where
             permission_registry: Shared::from_arc_unsized(Arc::new(permission_registry)),
             assignment_store: Shared::new(assignment_store),
             cache: Shared::from_arc_unsized(Arc::new(TtlPermissionCache::new(
-                Duration::from_secs(300),
+                Duration::from_mins(5),
             ))),
             _phantom: PhantomData,
         }
     }
 
+    #[must_use]
     pub fn with_cache(mut self, cache: impl PermissionCache<S, P> + 'static) -> Self {
         self.cache = Shared::from_arc_unsized(Arc::new(cache));
         self
     }
 
+    #[must_use]
     pub fn role_registry(&self) -> Shared<dyn RoleRegistry<R, P>> {
         self.role_registry.clone()
     }
 
+    #[must_use]
     pub fn permission_registry(&self) -> Shared<dyn PermissionRegistry<P>> {
         self.permission_registry.clone()
     }
 
+    #[must_use]
     pub fn assignment_store(&self) -> Shared<A> {
         self.assignment_store.clone()
     }

@@ -24,6 +24,7 @@ impl<P: Permission> HierarchyNode<P> {
         }
     }
 
+    #[must_use]
     pub fn with_parents(mut self, parents: Vec<String>) -> Self {
         self.parents = parents;
         self
@@ -77,6 +78,37 @@ where
     all_perms
 }
 
+fn dfs<P, R>(
+    name: &str,
+    registry: &dyn crate::rbac::traits::RoleRegistry<R, P>,
+    visited: &mut HashSet<String>,
+    path: &mut HashSet<String>,
+) -> bool
+where
+    P: Permission,
+    R: HierarchicalRole<P>,
+{
+    if path.contains(name) {
+        return true;
+    }
+    if visited.contains(name) {
+        return false;
+    }
+    visited.insert(name.to_string());
+    path.insert(name.to_string());
+
+    if let Some(role) = registry.get_role(name) {
+        for parent in role.parent_roles() {
+            if dfs(&parent, registry, visited, path) {
+                return true;
+            }
+        }
+    }
+
+    path.remove(name);
+    false
+}
+
 pub fn detect_cycle<P, R>(
     role_name: &str,
     registry: &dyn crate::rbac::traits::RoleRegistry<R, P>,
@@ -87,36 +119,6 @@ where
 {
     let mut visited = HashSet::new();
     let mut path = HashSet::new();
-    fn dfs<P, R>(
-        name: &str,
-        registry: &dyn crate::rbac::traits::RoleRegistry<R, P>,
-        visited: &mut HashSet<String>,
-        path: &mut HashSet<String>,
-    ) -> bool
-    where
-        P: Permission,
-        R: HierarchicalRole<P>,
-    {
-        if path.contains(name) {
-            return true;
-        }
-        if visited.contains(name) {
-            return false;
-        }
-        visited.insert(name.to_string());
-        path.insert(name.to_string());
-
-        if let Some(role) = registry.get_role(name) {
-            for parent in role.parent_roles() {
-                if dfs(&parent, registry, visited, path) {
-                    return true;
-                }
-            }
-        }
-
-        path.remove(name);
-        false
-    }
 
     dfs(role_name, registry, &mut visited, &mut path)
 }

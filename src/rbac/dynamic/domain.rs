@@ -26,6 +26,7 @@ impl TaskDomain {
         }
     }
 
+    #[must_use]
     pub fn is_resource_allowed(&self, path: &str) -> bool {
         if self.allowed_resource_prefixes.is_empty() {
             return true;
@@ -43,6 +44,7 @@ pub struct DomainScope {
 }
 
 impl DomainScope {
+    #[must_use]
     pub fn single(domain: TaskDomain) -> Self {
         Self {
             current_task_domain: domain,
@@ -50,6 +52,7 @@ impl DomainScope {
         }
     }
 
+    #[must_use]
     pub fn with_adjacent(domain: TaskDomain, adjacent: Vec<TaskDomain>) -> Self {
         Self {
             current_task_domain: domain,
@@ -57,14 +60,14 @@ impl DomainScope {
         }
     }
 
+    #[must_use]
     pub fn evaluate(&self, category: &ActionCategory, resource_path: Option<&str>) -> DomainMatch {
         let in_domain = self
             .current_task_domain
             .allowed_action_categories
             .contains(category);
-        let resource_ok = resource_path
-            .map(|p| self.current_task_domain.is_resource_allowed(p))
-            .unwrap_or(true);
+        let resource_ok =
+            resource_path.is_none_or(|p| self.current_task_domain.is_resource_allowed(p));
 
         if in_domain && resource_ok {
             return DomainMatch::InDomain;
@@ -93,11 +96,13 @@ pub enum DomainMatch {
 }
 
 impl DomainMatch {
+    #[must_use]
     pub fn excess_weight(&self) -> f64 {
         match self {
-            DomainMatch::InDomain => 0.0,
-            DomainMatch::Adjacent { excess_weight } => *excess_weight,
-            DomainMatch::OutOfDomain { excess_weight } => *excess_weight,
+            Self::InDomain => 0.0,
+            Self::Adjacent { excess_weight } | Self::OutOfDomain { excess_weight } => {
+                *excess_weight
+            }
         }
     }
 }

@@ -36,6 +36,7 @@ pub struct StaticPermissionRegistry<P: Permission> {
 }
 
 impl<P: Permission> StaticPermissionRegistry<P> {
+    #[must_use]
     pub fn new(permissions: HashSet<P>) -> Self {
         let by_name = permissions
             .iter()
@@ -72,6 +73,7 @@ where
     R: Role<P>,
     P: Permission,
 {
+    #[must_use]
     pub fn new() -> Self {
         Self {
             roles: HashMap::new(),

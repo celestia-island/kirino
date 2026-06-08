@@ -24,6 +24,7 @@ impl fmt::Display for AutonomyLevel {
 }
 
 impl AutonomyLevel {
+    #[must_use]
     pub fn is_operational(&self) -> bool {
         *self >= AutonomyLevel::L2SemiAutonomous
     }
@@ -72,6 +73,7 @@ pub struct AuthorizationVerdict {
 }
 
 impl AuthorizationVerdict {
+    #[must_use]
     pub fn denied(level: AutonomyLevel, risk: f64, sub_scores: SubScores, reason: &str) -> Self {
         Self {
             allowed: false,

@@ -11,6 +11,7 @@ pub struct DynamicPolicy {
 }
 
 impl DynamicPolicy {
+    #[must_use]
     pub fn map_to_level(&self, risk: f64) -> AutonomyLevel {
         for (level, &(min, max)) in self.autonomy_thresholds.iter().rev() {
             if risk >= min && risk < max {
@@ -20,6 +21,7 @@ impl DynamicPolicy {
         AutonomyLevel::L0Frozen
     }
 
+    #[must_use]
     pub fn strategy_for(&self, level: AutonomyLevel) -> Strategy {
         self.level_strategies
             .get(&level)
@@ -29,15 +31,16 @@ impl DynamicPolicy {
             })
     }
 
+    #[allow(clippy::missing_errors_doc)]
     pub fn validate(&self) -> Result<(), String> {
         let w: f64 = self.dimension_weights.iter().sum();
         if (w - 1.0).abs() > 0.05 {
-            return Err(format!("dimension weights must sum to ~1.0, got {}", w));
+            return Err(format!("dimension weights must sum to ~1.0, got {w}"));
         }
 
         for &w in &self.dimension_weights {
             if !(0.0..=1.0).contains(&w) {
-                return Err(format!("dimension weight must be in [0, 1], got {}", w));
+                return Err(format!("dimension weight must be in [0, 1], got {w}"));
             }
         }
 
@@ -45,6 +48,7 @@ impl DynamicPolicy {
     }
 }
 
+#[must_use]
 pub fn default_dynamic_policy() -> DynamicPolicy {
     DynamicPolicy {
         dimension_weights: [0.10, 0.30, 0.25, 0.25, 0.10],

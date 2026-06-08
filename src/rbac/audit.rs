@@ -36,15 +36,14 @@ pub struct AuditSubScores {
 }
 
 impl AuditEntry {
+    #[must_use]
     pub fn is_denied(&self) -> bool {
         !self.granted
     }
 
+    #[must_use]
     pub fn is_high_risk(&self) -> bool {
-        self.verdict
-            .as_ref()
-            .map(|v| v.risk_score >= 0.6)
-            .unwrap_or(false)
+        self.verdict.as_ref().is_some_and(|v| v.risk_score >= 0.6)
     }
 }
 
@@ -113,30 +112,27 @@ pub enum LogicalOp {
 }
 
 impl AuditCondition {
+    #[must_use]
     pub fn evaluate(&self, entry: &AuditEntry) -> bool {
         match self {
             AuditCondition::Denied => entry.is_denied(),
             AuditCondition::HighRisk { threshold } => entry
                 .verdict
                 .as_ref()
-                .map(|v| v.risk_score >= *threshold)
-                .unwrap_or(false),
+                .is_some_and(|v| v.risk_score >= *threshold),
             AuditCondition::CategorySensitive { min_weight } => entry
                 .verdict
                 .as_ref()
-                .map(|v| v.sub_scores.sensitivity >= *min_weight)
-                .unwrap_or(false),
+                .is_some_and(|v| v.sub_scores.sensitivity >= *min_weight),
             AuditCondition::DomainMismatch { min_weight } => entry
                 .verdict
                 .as_ref()
-                .map(|v| v.sub_scores.domain_mismatch >= *min_weight)
-                .unwrap_or(false),
+                .is_some_and(|v| v.sub_scores.domain_mismatch >= *min_weight),
             AuditCondition::RapidDenials { .. } => false,
             AuditCondition::TrustBelow { threshold } => entry
                 .verdict
                 .as_ref()
-                .map(|v| v.sub_scores.trust_penalty >= 1.0 - *threshold)
-                .unwrap_or(false),
+                .is_some_and(|v| v.sub_scores.trust_penalty >= 1.0 - *threshold),
             AuditCondition::Composite {
                 conditions,
                 operator,
@@ -216,6 +212,7 @@ pub struct InMemoryAuditSink {
 }
 
 impl InMemoryAuditSink {
+    #[must_use]
     pub fn new() -> Self {
         Self {
             entries: RwLock::new(Vec::new()),
@@ -224,6 +221,7 @@ impl InMemoryAuditSink {
         }
     }
 
+    #[must_use]
     pub fn with_max_entries(max_entries: usize) -> Self {
         Self {
             entries: RwLock::new(Vec::new()),
@@ -284,7 +282,7 @@ impl AuditSink for InMemoryAuditSink {
                     }
                 }
                 if let Some(min_risk) = filter.min_risk {
-                    let risk = e.verdict.as_ref().map(|v| v.risk_score).unwrap_or(0.0);
+                    let risk = e.verdict.as_ref().map_or(0.0, |v| v.risk_score);
                     if risk < min_risk {
                         return false;
                     }
@@ -313,6 +311,7 @@ pub struct InMemoryAuditPolicyEngine {
 }
 
 impl InMemoryAuditPolicyEngine {
+    #[must_use]
     pub fn new() -> Self {
         Self {
             rules: RwLock::new(Vec::new()),
@@ -350,6 +349,7 @@ impl AuditPolicyEngine for InMemoryAuditPolicyEngine {
             }
 
             if let Some(&last_time) = last_triggered.get(&rule.id) {
+                #[allow(clippy::cast_sign_loss)]
                 let elapsed = (now - last_time).num_seconds() as u64;
                 if elapsed < rule.cooldown_secs {
                     continue;
@@ -362,13 +362,16 @@ impl AuditPolicyEngine for InMemoryAuditPolicyEngine {
                     min_count,
                 } => {
                     if let Some(ref sink) = self.sink {
-                        let since = now - chrono::Duration::seconds(*window_secs as i64);
+                        #[allow(clippy::cast_possible_wrap)]
+                        let window_secs_i64 = *window_secs as i64;
+                        let since = now - chrono::Duration::seconds(window_secs_i64);
                         let filter = AuditFilter {
                             subject_id: Some(entry.subject_id.clone()),
                             granted: Some(false),
                             since: Some(since),
                             ..Default::default()
                         };
+                        #[allow(clippy::cast_possible_truncation)]
                         let count = sink.query(&filter).await.len() as u32;
                         count >= *min_count
                     } else {
@@ -412,6 +415,7 @@ impl AuditPolicyEngine for InMemoryAuditPolicyEngine {
 pub struct DefaultAuditAnalyzer;
 
 impl DefaultAuditAnalyzer {
+    #[must_use]
     pub fn new() -> Self {
         Self
     }
@@ -447,7 +451,7 @@ impl AuditAnalyzer for DefaultAuditAnalyzer {
             if entry.is_denied() {
                 stats.denied += 1;
             }
-            let risk = entry.verdict.as_ref().map(|v| v.risk_score).unwrap_or(0.0);
+            let risk = entry.verdict.as_ref().map_or(0.0, |v| v.risk_score);
             stats.avg_risk += risk;
             stats.max_risk = stats.max_risk.max(risk);
 
@@ -456,13 +460,16 @@ impl AuditAnalyzer for DefaultAuditAnalyzer {
 
         for stats in by_subject.values_mut() {
             if stats.total > 0 {
-                stats.avg_risk /= stats.total as f64;
+                #[allow(clippy::cast_precision_loss)]
+                {
+                    stats.avg_risk /= stats.total as f64;
+                }
             }
         }
 
         top_risk.sort_by(|a, b| {
-            let ra = a.verdict.as_ref().map(|v| v.risk_score).unwrap_or(0.0);
-            let rb = b.verdict.as_ref().map(|v| v.risk_score).unwrap_or(0.0);
+            let ra = a.verdict.as_ref().map_or(0.0, |v| v.risk_score);
+            let rb = b.verdict.as_ref().map_or(0.0, |v| v.risk_score);
             rb.partial_cmp(&ra).unwrap_or(std::cmp::Ordering::Equal)
         });
         top_risk.truncate(10);
@@ -471,7 +478,10 @@ impl AuditAnalyzer for DefaultAuditAnalyzer {
             total_entries: total,
             denied_count,
             denied_rate: if total > 0 {
-                denied_count as f64 / total as f64
+                #[allow(clippy::cast_precision_loss)]
+                {
+                    denied_count as f64 / total as f64
+                }
             } else {
                 0.0
             },
@@ -500,11 +510,13 @@ impl AuditLogger {
         }
     }
 
+    #[must_use]
     pub fn with_policy_engine(mut self, engine: impl AuditPolicyEngine + 'static) -> Self {
         self.policy_engine = Some(Arc::new(engine));
         self
     }
 
+    #[must_use]
     pub fn with_analyzer(mut self, analyzer: impl AuditAnalyzer + 'static) -> Self {
         self.analyzer = Some(Arc::new(analyzer));
         self

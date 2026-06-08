@@ -12,6 +12,7 @@ pub struct InMemoryUserDatabase {
 }
 
 impl InMemoryUserDatabase {
+    #[must_use]
     pub fn new() -> Self {
         Self::default()
     }

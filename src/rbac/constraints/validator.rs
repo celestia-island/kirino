@@ -11,6 +11,8 @@ impl<S: ConstraintStore> ConstraintValidator<S> {
         Self { store }
     }
 
+    /// # Errors
+    /// Returns an error if adding the new role would violate an SSD policy.
     pub async fn validate_ssd(&self, current_roles: &[String], new_role: &str) -> Result<()> {
         let policies = self.store.list_ssd_policies().await?;
         let mut test_roles = current_roles.to_vec();
@@ -29,6 +31,8 @@ impl<S: ConstraintStore> ConstraintValidator<S> {
         Ok(())
     }
 
+    /// # Errors
+    /// Returns an error if activating the new role would violate a DSD policy.
     pub async fn validate_dsd(&self, active_roles: &[String], new_role: &str) -> Result<()> {
         let policies = self.store.list_dsd_policies().await?;
         let mut test_roles = active_roles.to_vec();
@@ -47,6 +51,8 @@ impl<S: ConstraintStore> ConstraintValidator<S> {
         Ok(())
     }
 
+    /// # Errors
+    /// Returns an error if the cardinality constraint for the role would be exceeded.
     pub async fn validate_cardinality(
         &self,
         role_name: &str,
@@ -66,6 +72,8 @@ impl<S: ConstraintStore> ConstraintValidator<S> {
         Ok(())
     }
 
+    /// # Errors
+    /// Returns an error if the prerequisite role is not present in `current_roles`.
     pub async fn validate_prerequisite(
         &self,
         role_name: &str,
@@ -84,6 +92,8 @@ impl<S: ConstraintStore> ConstraintValidator<S> {
         Ok(())
     }
 
+    /// # Errors
+    /// Returns an error if any SSD, cardinality, or prerequisite constraint is violated.
     pub async fn validate_assignment(
         &self,
         current_roles: &[String],

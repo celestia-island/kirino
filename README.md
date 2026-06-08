@@ -100,7 +100,7 @@ impl Permission for MyPermission {
         }
     }
 
-    fn domain(&self) -> &str {
+    fn domain(&self) -> &'static str {
         match self {
             Self::DocumentRead | Self::DocumentWrite => "document",
             Self::UserManage => "user",
@@ -124,15 +124,17 @@ fn setup() {
     ].into());
 
     // Pass plain values — the engine wraps them internally via Shared<Arc>
-    let engine = RbacEngine::new(role_registry, perm_registry, InMemoryAssignmentStore::new());
+    let engine = RbacEngine::new(role_registry, perm_registry, InMemoryAssignmentStore::<String, MyPermission>::new());
 }
 ```
 
 Or use the built-in `AuthService` for a complete setup:
 
-```rust
+```rust,no_run
 use kirino::service::login::{AuthService, build_default_engine};
+use kirino::database::sql::InMemoryUserDatabase;
 
+let db = InMemoryUserDatabase::new();
 let engine = build_default_engine();
 let service = AuthService::new(db, "jwt-secret", 24, engine, "admin", "viewer");
 ```
@@ -342,7 +344,7 @@ It does **not** prescribe:
 
 - Rust 1.75+ (edition 2021)
 - Tokio async runtime
-- Optional: PostgreSQL (for `rbac-sql`), Redis (for `rbac-redis`)
+- Optional: `PostgreSQL` (for `rbac-sql`), Redis (for `rbac-redis`)
 
 ## License
 

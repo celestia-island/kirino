@@ -17,6 +17,7 @@ pub enum ActionCategory {
 }
 
 impl ActionCategory {
+    #[must_use]
     pub fn base_weight(&self) -> f64 {
         match self {
             ActionCategory::ReadOnly => 0.1,
@@ -74,11 +75,13 @@ impl ActionRequest {
         }
     }
 
+    #[must_use]
     pub fn with_resource(mut self, path: impl Into<String>) -> Self {
         self.resource_path = Some(path.into());
         self
     }
 
+    #[must_use]
     pub fn with_parameters(mut self, params: BTreeMap<String, Value>) -> Self {
         self.parameters = params;
         self

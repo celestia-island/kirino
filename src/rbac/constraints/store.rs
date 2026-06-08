@@ -37,6 +37,7 @@ pub struct InMemoryConstraintStore {
 }
 
 impl InMemoryConstraintStore {
+    #[must_use]
     pub fn new() -> Self {
         Self {
             ssd_policies: tokio::sync::RwLock::new(Vec::new()),

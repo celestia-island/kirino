@@ -33,22 +33,18 @@ impl std::fmt::Debug for AuthorizationArbiter {
         f.debug_struct("AuthorizationArbiter")
             .field(
                 "detectors_count",
-                &self.detectors.try_read().map(|d| d.len()).unwrap_or(0),
+                &self.detectors.try_read().map_or(0, |d| d.len()),
             )
             .field(
                 "has_domain_scope",
-                &self
-                    .domain_scope
-                    .try_read()
-                    .map(|d| d.is_some())
-                    .unwrap_or(false),
+                &self.domain_scope.try_read().is_ok_and(|d| d.is_some()),
             )
             .field(
                 "frozen_count",
-                &self.frozen.try_read().map(|f| f.len()).unwrap_or(0),
+                &self.frozen.try_read().map_or(0, |f| f.len()),
             )
             .field("has_audit", &self.audit.is_some())
-            .finish()
+            .finish_non_exhaustive()
     }
 }
 
@@ -64,20 +60,24 @@ impl AuthorizationArbiter {
         }
     }
 
+    #[must_use]
     pub fn with_audit(mut self, audit: AuditLogger) -> Self {
         self.audit = Some(Shared::new(audit));
         self
     }
 
+    #[must_use]
     pub fn with_domain_scope(mut self, scope: DomainScope) -> Self {
         self.domain_scope = Arc::new(RwLock::new(Some(scope)));
         self
     }
 
+    #[must_use]
     pub fn trust_store(&self) -> &Shared<dyn TrustScoreStore> {
         &self.trust_store
     }
 
+    #[must_use]
     pub fn spawn_trust_decay(&self, interval: std::time::Duration) -> tokio::task::JoinHandle<()> {
         let store = self.trust_store.clone();
         tokio::spawn(async move {
@@ -264,10 +264,10 @@ impl AuthorizationArbiter {
             score.value
         };
 
-        let anomaly_weight_modifier = if !self.is_baseline_ready_for(&request.delegator.id).await {
-            0.5
-        } else {
+        let anomaly_weight_modifier = if self.is_baseline_ready_for(&request.delegator.id).await {
             1.0
+        } else {
+            0.5
         };
 
         let raw = delegator_weight * policy.dimension_weights[0]
@@ -375,8 +375,7 @@ impl AuthorizationArbiter {
         let detectors = self.detectors.read().await;
         let anomaly_ready = detectors
             .get(delegator_id)
-            .map(|d| d.is_baseline_ready())
-            .unwrap_or(false);
+            .is_some_and(super::anomaly::AnomalyDetector::is_baseline_ready);
         serde_json::json!({
             "enabled": true,
             "delegator_id": delegator_id,
@@ -392,8 +391,7 @@ impl AuthorizationArbiter {
         let detectors = self.detectors.read().await;
         detectors
             .get(delegator_id)
-            .map(|d| d.is_baseline_ready())
-            .unwrap_or(false)
+            .is_some_and(super::anomaly::AnomalyDetector::is_baseline_ready)
     }
 
     async fn log_verdict(&self, verdict: &AuthorizationVerdict, request: &ActionRequest) {
@@ -420,7 +418,7 @@ impl AuthorizationArbiter {
                         anomaly: verdict.sub_scores.anomaly,
                     },
                     evidence: verdict.evidence.clone(),
-                    mitigation: verdict.mitigation.as_ref().map(|s| format!("{:?}", s)),
+                    mitigation: verdict.mitigation.as_ref().map(|s| format!("{s:?}")),
                 }),
             };
             audit.log(entry).await;

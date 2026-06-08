@@ -17,6 +17,7 @@ impl SsdPolicy {
         }
     }
 
+    #[must_use]
     pub fn validate(&self, assigned_roles: &[String]) -> bool {
         let count = assigned_roles
             .iter()
@@ -42,6 +43,7 @@ impl DsdPolicy {
         }
     }
 
+    #[must_use]
     pub fn validate(&self, active_roles: &[String]) -> bool {
         let count = active_roles
             .iter()
@@ -65,6 +67,7 @@ impl CardinalityConstraint {
         }
     }
 
+    #[must_use]
     pub fn validate(&self, current_count: usize) -> bool {
         current_count < self.max_subjects
     }
@@ -84,6 +87,7 @@ impl PrerequisiteConstraint {
         }
     }
 
+    #[must_use]
     pub fn validate(&self, assigned_roles: &[String]) -> bool {
         assigned_roles.contains(&self.requires)
     }
@@ -109,6 +113,7 @@ impl TemporalConstraint {
         }
     }
 
+    #[must_use]
     pub fn is_valid(&self) -> bool {
         let now = chrono::Utc::now();
         now >= self.valid_from && now <= self.valid_until

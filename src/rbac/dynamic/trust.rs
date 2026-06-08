@@ -27,6 +27,7 @@ impl Default for TrustScore {
 }
 
 impl TrustScore {
+    #[must_use]
     pub fn new(initial_value: f64) -> Self {
         Self {
             value: initial_value.clamp(0.0, 1.0),
@@ -37,10 +38,12 @@ impl TrustScore {
         }
     }
 
+    #[must_use]
     pub fn weighted(&self) -> f64 {
         self.value * self.confidence
     }
 
+    #[allow(clippy::cast_precision_loss)]
     pub fn on_compliant_behavior(&mut self, severity: f64) {
         let delta = 0.01 * severity;
         self.value = (self.value + delta).min(1.0);
@@ -49,6 +52,7 @@ impl TrustScore {
         self.last_updated = Utc::now();
     }
 
+    #[allow(clippy::cast_precision_loss)]
     pub fn on_policy_violation(&mut self, severity: f64) {
         let penalty = if severity > 0.8 {
             0.3 * severity
@@ -84,6 +88,7 @@ pub struct InMemoryTrustScoreStore {
 }
 
 impl InMemoryTrustScoreStore {
+    #[must_use]
     pub fn new() -> Self {
         Self {
             scores: RwLock::new(HashMap::new()),
@@ -156,9 +161,10 @@ impl TrustDecayWorker {
     }
 
     pub fn hourly(store: Arc<dyn TrustScoreStore>) -> Self {
-        Self::new(store, Duration::from_secs(3600), Duration::from_secs(3600))
+        Self::new(store, Duration::from_hours(1), Duration::from_hours(1))
     }
 
+    #[allow(clippy::missing_errors_doc)]
     pub async fn run_once(&self) -> anyhow::Result<usize> {
         let ids = self.store.list_ids().await?;
         let mut decayed = 0;
@@ -193,6 +199,7 @@ impl TrustDecayWorker {
         }
     }
 
+    #[must_use]
     pub fn spawn(self) -> tokio::task::JoinHandle<()> {
         tokio::spawn(async move { self.run().await })
     }

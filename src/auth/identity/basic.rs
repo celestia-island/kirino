@@ -30,6 +30,7 @@ pub struct IdentityRecord {
 }
 
 impl InMemoryIdentityProvider {
+    #[must_use]
     pub fn new() -> Self {
         Self {
             identities: Vec::new(),
@@ -54,10 +55,10 @@ impl IdentityProvider for InMemoryIdentityProvider {
             .identities
             .iter()
             .find(|r| match &r.identity {
-                Identity::Basic { id: uid } => *uid == id,
-                Identity::Anonymous { id: uid, .. } => *uid == id,
-                Identity::Temporary { id: uid, .. } => *uid == id,
-                Identity::Service { id: uid, .. } => *uid == id,
+                Identity::Basic { id: uid }
+                | Identity::Anonymous { id: uid, .. }
+                | Identity::Temporary { id: uid, .. }
+                | Identity::Service { id: uid, .. } => *uid == id,
             })
             .map(|r| r.identity.clone()))
     }
