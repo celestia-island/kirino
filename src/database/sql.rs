@@ -1,9 +1,9 @@
-use anyhow::{anyhow, Result};
 use std::collections::HashMap;
 use uuid::Uuid;
 
 use async_trait::async_trait;
 
+use crate::error::{KirinoError, KirinoResult};
 use crate::service::login::{UserDatabase, UserRecord};
 
 #[derive(Clone, Default)]
@@ -20,34 +20,34 @@ impl InMemoryUserDatabase {
 
 #[async_trait]
 impl UserDatabase for InMemoryUserDatabase {
-    async fn create_user(&self, user: &UserRecord) -> Result<()> {
+    async fn create_user(&self, user: &UserRecord) -> KirinoResult<()> {
         let mut users = self.users.write().await;
         users.insert(user.username.clone(), user.clone());
         Ok(())
     }
 
-    async fn find_by_username(&self, username: &str) -> Result<Option<UserRecord>> {
+    async fn find_by_username(&self, username: &str) -> KirinoResult<Option<UserRecord>> {
         let users = self.users.read().await;
         Ok(users.get(username).cloned())
     }
 
-    async fn find_by_id(&self, id: &Uuid) -> Result<Option<UserRecord>> {
+    async fn find_by_id(&self, id: &Uuid) -> KirinoResult<Option<UserRecord>> {
         let users = self.users.read().await;
         Ok(users.values().find(|u| &u.id == id).cloned())
     }
 
-    async fn update_password(&self, id: &Uuid, new_hash: &str) -> Result<()> {
+    async fn update_password(&self, id: &Uuid, new_hash: &str) -> KirinoResult<()> {
         let mut users = self.users.write().await;
         let user = users
             .values_mut()
             .find(|u| &u.id == id)
-            .ok_or_else(|| anyhow!("user not found"))?;
+            .ok_or_else(|| KirinoError::NotFound("user not found".to_string()))?;
         user.password_hash = new_hash.to_string();
         user.updated_at = chrono::Utc::now();
         Ok(())
     }
 
-    async fn delete_user(&self, id: &Uuid) -> Result<bool> {
+    async fn delete_user(&self, id: &Uuid) -> KirinoResult<bool> {
         let mut users = self.users.write().await;
         let username = users
             .values()
@@ -59,12 +59,12 @@ impl UserDatabase for InMemoryUserDatabase {
         }
     }
 
-    async fn list_users(&self) -> Result<Vec<UserRecord>> {
+    async fn list_users(&self) -> KirinoResult<Vec<UserRecord>> {
         let users = self.users.read().await;
         Ok(users.values().cloned().collect())
     }
 
-    async fn count_users(&self) -> Result<u64> {
+    async fn count_users(&self) -> KirinoResult<u64> {
         let users = self.users.read().await;
         Ok(users.len() as u64)
     }

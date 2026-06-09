@@ -277,6 +277,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::error::{KirinoError, KirinoResult};
     use crate::rbac::store::memory::InMemoryAssignmentStore;
     use crate::rbac::store::registry::{SimpleRole, StaticPermissionRegistry, StaticRoleRegistry};
 
@@ -733,36 +734,36 @@ mod tests {
 
     #[async_trait::async_trait]
     impl AssignmentStore<TestSubject, TestPerm> for FailingAssignmentStore {
-        async fn assign_role(&self, _: &TestSubject, _: &str) -> anyhow::Result<()> {
+        async fn assign_role(&self, _: &TestSubject, _: &str) -> KirinoResult<()> {
             Ok(())
         }
-        async fn revoke_role(&self, _: &TestSubject, _: &str) -> anyhow::Result<()> {
+        async fn revoke_role(&self, _: &TestSubject, _: &str) -> KirinoResult<()> {
             Ok(())
         }
-        async fn roles_of(&self, _: &TestSubject) -> anyhow::Result<Vec<String>> {
-            Err(anyhow::anyhow!("store error"))
+        async fn roles_of(&self, _: &TestSubject) -> KirinoResult<Vec<String>> {
+            Err(KirinoError::Store("store error".to_string()))
         }
-        async fn subjects_with_role(&self, _: &str) -> anyhow::Result<Vec<String>> {
+        async fn subjects_with_role(&self, _: &str) -> KirinoResult<Vec<String>> {
             Ok(vec![])
         }
-        async fn extra_permissions(&self, _: &TestSubject) -> anyhow::Result<HashSet<TestPerm>> {
-            Err(anyhow::anyhow!("store error"))
+        async fn extra_permissions(&self, _: &TestSubject) -> KirinoResult<HashSet<TestPerm>> {
+            Err(KirinoError::Store("store error".to_string()))
         }
         async fn set_extra_permissions(
             &self,
             _: &TestSubject,
             _: HashSet<TestPerm>,
-        ) -> anyhow::Result<()> {
+        ) -> KirinoResult<()> {
             Ok(())
         }
-        async fn denied_permissions(&self, _: &TestSubject) -> anyhow::Result<HashSet<TestPerm>> {
-            Err(anyhow::anyhow!("store error"))
+        async fn denied_permissions(&self, _: &TestSubject) -> KirinoResult<HashSet<TestPerm>> {
+            Err(KirinoError::Store("store error".to_string()))
         }
         async fn set_denied_permissions(
             &self,
             _: &TestSubject,
             _: HashSet<TestPerm>,
-        ) -> anyhow::Result<()> {
+        ) -> KirinoResult<()> {
             Ok(())
         }
     }
@@ -771,36 +772,36 @@ mod tests {
 
     #[async_trait::async_trait]
     impl AssignmentStore<TestSubject, TestPerm> for DeniedOnlyFailingStore {
-        async fn assign_role(&self, subject: &TestSubject, role: &str) -> anyhow::Result<()> {
+        async fn assign_role(&self, subject: &TestSubject, role: &str) -> KirinoResult<()> {
             self.0.assign_role(subject, role).await
         }
-        async fn revoke_role(&self, subject: &TestSubject, role: &str) -> anyhow::Result<()> {
+        async fn revoke_role(&self, subject: &TestSubject, role: &str) -> KirinoResult<()> {
             self.0.revoke_role(subject, role).await
         }
-        async fn roles_of(&self, subject: &TestSubject) -> anyhow::Result<Vec<String>> {
+        async fn roles_of(&self, subject: &TestSubject) -> KirinoResult<Vec<String>> {
             self.0.roles_of(subject).await
         }
-        async fn subjects_with_role(&self, role: &str) -> anyhow::Result<Vec<String>> {
+        async fn subjects_with_role(&self, role: &str) -> KirinoResult<Vec<String>> {
             self.0.subjects_with_role(role).await
         }
-        async fn extra_permissions(&self, subject: &TestSubject) -> anyhow::Result<HashSet<TestPerm>> {
+        async fn extra_permissions(&self, subject: &TestSubject) -> KirinoResult<HashSet<TestPerm>> {
             self.0.extra_permissions(subject).await
         }
         async fn set_extra_permissions(
             &self,
             subject: &TestSubject,
             perms: HashSet<TestPerm>,
-        ) -> anyhow::Result<()> {
+        ) -> KirinoResult<()> {
             self.0.set_extra_permissions(subject, perms).await
         }
-        async fn denied_permissions(&self, _: &TestSubject) -> anyhow::Result<HashSet<TestPerm>> {
-            Err(anyhow::anyhow!("denied store error"))
+        async fn denied_permissions(&self, _: &TestSubject) -> KirinoResult<HashSet<TestPerm>> {
+            Err(KirinoError::Store("denied store error".to_string()))
         }
         async fn set_denied_permissions(
             &self,
             subject: &TestSubject,
             perms: HashSet<TestPerm>,
-        ) -> anyhow::Result<()> {
+        ) -> KirinoResult<()> {
             self.0.set_denied_permissions(subject, perms).await
         }
     }
@@ -825,36 +826,36 @@ mod tests {
 
     #[async_trait::async_trait]
     impl AssignmentStore<TestSubject, TestPerm> for ExtraOnlyFailingStore {
-        async fn assign_role(&self, subject: &TestSubject, role: &str) -> anyhow::Result<()> {
+        async fn assign_role(&self, subject: &TestSubject, role: &str) -> KirinoResult<()> {
             self.0.assign_role(subject, role).await
         }
-        async fn revoke_role(&self, subject: &TestSubject, role: &str) -> anyhow::Result<()> {
+        async fn revoke_role(&self, subject: &TestSubject, role: &str) -> KirinoResult<()> {
             self.0.revoke_role(subject, role).await
         }
-        async fn roles_of(&self, subject: &TestSubject) -> anyhow::Result<Vec<String>> {
+        async fn roles_of(&self, subject: &TestSubject) -> KirinoResult<Vec<String>> {
             self.0.roles_of(subject).await
         }
-        async fn subjects_with_role(&self, role: &str) -> anyhow::Result<Vec<String>> {
+        async fn subjects_with_role(&self, role: &str) -> KirinoResult<Vec<String>> {
             self.0.subjects_with_role(role).await
         }
-        async fn extra_permissions(&self, _: &TestSubject) -> anyhow::Result<HashSet<TestPerm>> {
-            Err(anyhow::anyhow!("extra store error"))
+        async fn extra_permissions(&self, _: &TestSubject) -> KirinoResult<HashSet<TestPerm>> {
+            Err(KirinoError::Store("extra store error".to_string()))
         }
         async fn set_extra_permissions(
             &self,
             subject: &TestSubject,
             perms: HashSet<TestPerm>,
-        ) -> anyhow::Result<()> {
+        ) -> KirinoResult<()> {
             self.0.set_extra_permissions(subject, perms).await
         }
-        async fn denied_permissions(&self, subject: &TestSubject) -> anyhow::Result<HashSet<TestPerm>> {
+        async fn denied_permissions(&self, subject: &TestSubject) -> KirinoResult<HashSet<TestPerm>> {
             self.0.denied_permissions(subject).await
         }
         async fn set_denied_permissions(
             &self,
             subject: &TestSubject,
             perms: HashSet<TestPerm>,
-        ) -> anyhow::Result<()> {
+        ) -> KirinoResult<()> {
             self.0.set_denied_permissions(subject, perms).await
         }
     }

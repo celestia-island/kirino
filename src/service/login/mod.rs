@@ -1,4 +1,4 @@
-use anyhow::{anyhow, Result};
+use anyhow::anyhow;
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use std::{
@@ -14,6 +14,7 @@ use crate::auth::credential::basic::JwtManager;
 #[cfg(feature = "auth-password")]
 use crate::auth::passport::static_password::{hash_password, verify_password};
 use crate::{
+    error::{KirinoError, KirinoResult},
     models::identity::Identity,
     rbac::{
         engine::RbacEngine,
@@ -48,39 +49,40 @@ const MAX_PASSWORD_LEN: usize = 128;
 const MIN_USERNAME_LEN: usize = 2;
 const MAX_USERNAME_LEN: usize = 64;
 
-pub fn validate_username(username: &str) -> Result<String> {
+pub fn validate_username(username: &str) -> KirinoResult<String> {
     let trimmed = username.trim();
     if trimmed.is_empty() || trimmed.len() < MIN_USERNAME_LEN {
-        return Err(anyhow!(
+        return Err(KirinoError::Validation(format!(
             "username must be at least {MIN_USERNAME_LEN} characters"
-        ));
+        )));
     }
     if trimmed.len() > MAX_USERNAME_LEN {
-        return Err(anyhow!(
+        return Err(KirinoError::Validation(format!(
             "username must be at most {MAX_USERNAME_LEN} characters"
-        ));
+        )));
     }
     if !trimmed
         .chars()
         .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-' || c == '.')
     {
-        return Err(anyhow!(
+        return Err(KirinoError::Validation(
             "username may only contain alphanumeric characters, underscores, hyphens, and dots"
+                .to_string(),
         ));
     }
     Ok(trimmed.to_string())
 }
 
-pub fn validate_password(password: &str) -> Result<()> {
+pub fn validate_password(password: &str) -> KirinoResult<()> {
     if password.len() < MIN_PASSWORD_LEN {
-        return Err(anyhow!(
+        return Err(KirinoError::Validation(format!(
             "password must be at least {MIN_PASSWORD_LEN} characters"
-        ));
+        )));
     }
     if password.len() > MAX_PASSWORD_LEN {
-        return Err(anyhow!(
+        return Err(KirinoError::Validation(format!(
             "password must be at most {MAX_PASSWORD_LEN} characters"
-        ));
+        )));
     }
 
     let has_uppercase = password.chars().any(|c| c.is_uppercase());
@@ -94,8 +96,9 @@ pub fn validate_password(password: &str) -> Result<()> {
         .count();
 
     if categories < 3 {
-        return Err(anyhow!(
+        return Err(KirinoError::Validation(
             "password must contain at least 3 of: uppercase, lowercase, digit, special character"
+                .to_string(),
         ));
     }
 
@@ -113,7 +116,7 @@ impl LoginRateLimiter {
         }
     }
 
-    pub async fn check_and_record_failure(&self, key: &str) -> Result<()> {
+    pub async fn check_and_record_failure(&self, key: &str) -> anyhow::Result<()> {
         let mut entries = self.entries.write().await;
         let now = Instant::now();
 
@@ -318,7 +321,7 @@ where
         engine: Shared<RbacEngine<StringSubject, P, R, A>>,
         first_user_role: &str,
         default_role: &str,
-    ) -> anyhow::Result<Self> {
+    ) -> KirinoResult<Self> {
         Ok(Self {
             db,
             jwt: JwtManager::new(jwt_secret, jwt_expiration_hours)?,
@@ -370,7 +373,7 @@ where
         username: &str,
         password: &str,
         display_name: Option<&str>,
-    ) -> Result<UserInfo> {
+    ) -> KirinoResult<UserInfo> {
         // Validate all inputs before consuming rate limit budget.
         // This prevents attackers from exhausting rate limiter entries
         // with a high volume of malformed requests (a DoS vector).
@@ -382,7 +385,7 @@ where
             .await?;
 
         if self.db.find_by_username(&username).await?.is_some() {
-            return Err(anyhow!("registration failed"));
+            return Err(KirinoError::Internal("registration failed".to_string()));
         }
 
         let password_hash = hash_password(password)?;
@@ -424,7 +427,7 @@ where
     const DUMMY_HASH: &str =
         "$argon2id$v=19$m=19456,t=2,p=1$dummy salts are not used$dummyhashvaluethatisnotused";
 
-    pub async fn login(&self, username: &str, password: &str) -> Result<LoginResult> {
+    pub async fn login(&self, username: &str, password: &str) -> KirinoResult<LoginResult> {
         let username = username.trim();
         self.rate_limiter.check_and_record_failure(username).await?;
 
@@ -432,16 +435,16 @@ where
             Some(u) => u,
             None => {
                 let _ = verify_password(password, Self::DUMMY_HASH);
-                return Err(anyhow!("invalid credentials"));
+                return Err(KirinoError::AuthenticationFailed);
             }
         };
 
         if !user.is_active {
-            return Err(anyhow!("invalid credentials"));
+            return Err(KirinoError::AuthenticationFailed);
         }
 
         if !verify_password(password, &user.password_hash)? {
-            return Err(anyhow!("invalid credentials"));
+            return Err(KirinoError::AuthenticationFailed);
         }
 
         self.rate_limiter.reset(username).await;
@@ -481,8 +484,8 @@ where
     pub async fn verify_token(
         &self,
         token: &str,
-    ) -> Result<crate::auth::credential::basic::Claims> {
-        self.jwt.verify_with_revocation(token).await
+    ) -> KirinoResult<crate::auth::credential::basic::Claims> {
+        self.jwt.verify_with_revocation(token).await.map_err(Into::into)
     }
 
     pub async fn check_permission(&self, user_id: &str, permission: &P) -> bool {
@@ -513,17 +516,17 @@ where
         user_id: &str,
         old_password: &str,
         new_password: &str,
-    ) -> Result<()> {
-        let uid = Uuid::parse_str(user_id).map_err(|_| anyhow!("invalid user_id"))?;
+    ) -> KirinoResult<()> {
+        let uid = Uuid::parse_str(user_id).map_err(|_| KirinoError::Validation("invalid user_id".to_string()))?;
 
         let user = self
             .db
             .find_by_id(&uid)
             .await?
-            .ok_or_else(|| anyhow!("user not found"))?;
+            .ok_or_else(|| KirinoError::NotFound("user not found".to_string()))?;
 
         if !verify_password(old_password, &user.password_hash)? {
-            return Err(anyhow!("old password is incorrect"));
+            return Err(KirinoError::AuthenticationFailed);
         }
 
         validate_password(new_password)?;
@@ -533,13 +536,13 @@ where
         self.db.update_password(&uid, &new_hash).await
     }
 
-    pub async fn list_users(&self) -> Result<Vec<UserInfo>> {
+    pub async fn list_users(&self) -> KirinoResult<Vec<UserInfo>> {
         let users = self.db.list_users().await?;
         Ok(users.iter().map(UserRecord::to_public).collect())
     }
 
-    pub async fn delete_user(&self, user_id: &str) -> Result<bool> {
-        let uid = Uuid::parse_str(user_id).map_err(|_| anyhow!("invalid user_id"))?;
+    pub async fn delete_user(&self, user_id: &str) -> KirinoResult<bool> {
+        let uid = Uuid::parse_str(user_id).map_err(|_| KirinoError::Validation("invalid user_id".to_string()))?;
         self.jwt.revoke_all_for_user(user_id).await;
         self.db.delete_user(&uid).await
     }
@@ -550,7 +553,7 @@ where
         password: &str,
         session_mgr: &SM,
         session_ttl: chrono::Duration,
-    ) -> Result<(LoginResult, crate::rbac::session::Session<StringSubject>)>
+    ) -> KirinoResult<(LoginResult, crate::rbac::session::Session<StringSubject>)>
     where
         SM: crate::rbac::session::SessionManager<StringSubject>,
     {
@@ -590,7 +593,7 @@ where
         ))
     }
 
-    pub async fn logout<SM>(&self, user_id: &str, session_id: Uuid, session_mgr: &SM) -> Result<()>
+    pub async fn logout<SM>(&self, user_id: &str, session_id: Uuid, session_mgr: &SM) -> KirinoResult<()>
     where
         SM: crate::rbac::session::SessionManager<StringSubject>,
     {
@@ -661,13 +664,13 @@ pub fn build_default_engine() -> Shared<DefaultEngine> {
 
 #[async_trait::async_trait]
 pub trait UserDatabase: Send + Sync + Clone + 'static {
-    async fn create_user(&self, user: &UserRecord) -> Result<()>;
-    async fn find_by_username(&self, username: &str) -> Result<Option<UserRecord>>;
-    async fn find_by_id(&self, id: &Uuid) -> Result<Option<UserRecord>>;
-    async fn update_password(&self, id: &Uuid, new_hash: &str) -> Result<()>;
-    async fn delete_user(&self, id: &Uuid) -> Result<bool>;
-    async fn list_users(&self) -> Result<Vec<UserRecord>>;
-    async fn count_users(&self) -> Result<u64>;
+    async fn create_user(&self, user: &UserRecord) -> KirinoResult<()>;
+    async fn find_by_username(&self, username: &str) -> KirinoResult<Option<UserRecord>>;
+    async fn find_by_id(&self, id: &Uuid) -> KirinoResult<Option<UserRecord>>;
+    async fn update_password(&self, id: &Uuid, new_hash: &str) -> KirinoResult<()>;
+    async fn delete_user(&self, id: &Uuid) -> KirinoResult<bool>;
+    async fn list_users(&self) -> KirinoResult<Vec<UserRecord>>;
+    async fn count_users(&self) -> KirinoResult<u64>;
 }
 
 #[cfg(test)]

@@ -6,6 +6,7 @@ use tokio::sync::RwLock;
 
 use async_trait::async_trait;
 
+use crate::error::KirinoResult;
 use crate::rbac::traits::{AssignmentStore, Permission, RoleStore, Subject};
 
 pub struct InMemoryAssignmentStore<S, P>
@@ -51,7 +52,7 @@ where
     S: Subject,
     P: Permission,
 {
-    async fn assign_role(&self, subject: &S, role_name: &str) -> anyhow::Result<()> {
+    async fn assign_role(&self, subject: &S, role_name: &str) -> KirinoResult<()> {
         let key = subject.subject_id().to_string();
         let mut assignments = self.role_assignments.write().await;
         let roles = assignments.entry(key).or_default();
@@ -61,7 +62,7 @@ where
         Ok(())
     }
 
-    async fn revoke_role(&self, subject: &S, role_name: &str) -> anyhow::Result<()> {
+    async fn revoke_role(&self, subject: &S, role_name: &str) -> KirinoResult<()> {
         let key = subject.subject_id().to_string();
         let mut assignments = self.role_assignments.write().await;
         if let Some(roles) = assignments.get_mut(&key) {
@@ -70,13 +71,13 @@ where
         Ok(())
     }
 
-    async fn roles_of(&self, subject: &S) -> anyhow::Result<Vec<String>> {
+    async fn roles_of(&self, subject: &S) -> KirinoResult<Vec<String>> {
         let key = subject.subject_id().to_string();
         let assignments = self.role_assignments.read().await;
         Ok(assignments.get(&key).cloned().unwrap_or_default())
     }
 
-    async fn subjects_with_role(&self, role_name: &str) -> anyhow::Result<Vec<String>> {
+    async fn subjects_with_role(&self, role_name: &str) -> KirinoResult<Vec<String>> {
         let assignments = self.role_assignments.read().await;
         let subjects: Vec<String> = assignments
             .iter()
@@ -86,26 +87,26 @@ where
         Ok(subjects)
     }
 
-    async fn extra_permissions(&self, subject: &S) -> anyhow::Result<HashSet<P>> {
+    async fn extra_permissions(&self, subject: &S) -> KirinoResult<HashSet<P>> {
         let key = subject.subject_id().to_string();
         let perms = self.extra_perms.read().await;
         Ok(perms.get(&key).cloned().unwrap_or_default())
     }
 
-    async fn set_extra_permissions(&self, subject: &S, perms: HashSet<P>) -> anyhow::Result<()> {
+    async fn set_extra_permissions(&self, subject: &S, perms: HashSet<P>) -> KirinoResult<()> {
         let key = subject.subject_id().to_string();
         let mut extra = self.extra_perms.write().await;
         extra.insert(key, perms);
         Ok(())
     }
 
-    async fn denied_permissions(&self, subject: &S) -> anyhow::Result<HashSet<P>> {
+    async fn denied_permissions(&self, subject: &S) -> KirinoResult<HashSet<P>> {
         let key = subject.subject_id().to_string();
         let perms = self.denied_perms.read().await;
         Ok(perms.get(&key).cloned().unwrap_or_default())
     }
 
-    async fn set_denied_permissions(&self, subject: &S, perms: HashSet<P>) -> anyhow::Result<()> {
+    async fn set_denied_permissions(&self, subject: &S, perms: HashSet<P>) -> KirinoResult<()> {
         let key = subject.subject_id().to_string();
         let mut denied = self.denied_perms.write().await;
         denied.insert(key, perms);
@@ -134,23 +135,23 @@ impl<P: Permission> Default for InMemoryRoleStore<P> {
 
 #[async_trait]
 impl<P: Permission> RoleStore<P> for InMemoryRoleStore<P> {
-    async fn create_role(&self, role_name: &str, permissions: HashSet<P>) -> anyhow::Result<()> {
+    async fn create_role(&self, role_name: &str, permissions: HashSet<P>) -> KirinoResult<()> {
         let mut roles = self.roles.write().await;
         roles.insert(role_name.to_string(), permissions);
         Ok(())
     }
 
-    async fn delete_role(&self, role_name: &str) -> anyhow::Result<bool> {
+    async fn delete_role(&self, role_name: &str) -> KirinoResult<bool> {
         let mut roles = self.roles.write().await;
         Ok(roles.remove(role_name).is_some())
     }
 
-    async fn get_role_permissions(&self, role_name: &str) -> anyhow::Result<Option<HashSet<P>>> {
+    async fn get_role_permissions(&self, role_name: &str) -> KirinoResult<Option<HashSet<P>>> {
         let roles = self.roles.read().await;
         Ok(roles.get(role_name).cloned())
     }
 
-    async fn list_roles(&self) -> anyhow::Result<Vec<String>> {
+    async fn list_roles(&self) -> KirinoResult<Vec<String>> {
         let roles = self.roles.read().await;
         Ok(roles.keys().cloned().collect())
     }
