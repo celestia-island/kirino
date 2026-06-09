@@ -7,7 +7,7 @@ use yuuka::derive_enum;
 
 use super::credential::Credential;
 
-pub type MACAddress = [u8; 6];
+pub type MACAddress = String;
 
 derive_enum!(
     #[derive(PartialEq, Serialize, Deserialize)]

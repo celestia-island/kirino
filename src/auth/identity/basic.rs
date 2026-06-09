@@ -5,8 +5,10 @@ use uuid::Uuid;
 
 use async_trait::async_trait;
 
-use crate::error::KirinoResult;
-use crate::models::identity::Identity;
+use crate::{
+    error::{KirinoError, KirinoResult},
+    models::identity::Identity,
+};
 
 fn identity_id(identity: &Identity) -> Uuid {
     match identity {
@@ -59,6 +61,19 @@ impl Default for InMemoryIdentityProvider {
 impl IdentityProvider for InMemoryIdentityProvider {
     async fn create(&self, record: IdentityRecord) -> KirinoResult<()> {
         let mut records = self.records.write().await;
+        if records.iter().any(|r| r.username == record.username) {
+            return Err(KirinoError::Validation(
+                "username already exists".to_string(),
+            ));
+        }
+        if records
+            .iter()
+            .any(|r| identity_id(&r.identity) == identity_id(&record.identity))
+        {
+            return Err(KirinoError::Validation(
+                "identity already exists".to_string(),
+            ));
+        }
         records.push(record);
         Ok(())
     }
@@ -172,5 +187,13 @@ mod tests {
         let provider = InMemoryIdentityProvider::new();
         let list = provider.list().await.unwrap();
         assert!(list.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_create_duplicate_username_rejected() {
+        let provider = InMemoryIdentityProvider::new();
+        provider.create(make_record("alice")).await.unwrap();
+        let err = provider.create(make_record("alice")).await.unwrap_err();
+        assert!(matches!(err, KirinoError::Validation(_)));
     }
 }

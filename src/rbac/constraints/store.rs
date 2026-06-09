@@ -1,10 +1,9 @@
 use async_trait::async_trait;
 
-use crate::error::KirinoResult;
-
 use super::policies::{
     CardinalityConstraint, DsdPolicy, PrerequisiteConstraint, SsdPolicy, TemporalConstraint,
 };
+use crate::error::KirinoResult;
 
 #[async_trait]
 pub trait ConstraintStore: Send + Sync {

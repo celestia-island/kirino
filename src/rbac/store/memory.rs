@@ -6,8 +6,10 @@ use tokio::sync::RwLock;
 
 use async_trait::async_trait;
 
-use crate::error::KirinoResult;
-use crate::rbac::traits::{AssignmentStore, Permission, RoleStore, Subject};
+use crate::{
+    error::KirinoResult,
+    rbac::traits::{AssignmentStore, Permission, RoleStore, Subject},
+};
 
 pub struct InMemoryAssignmentStore<S, P>
 where

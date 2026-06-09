@@ -1,3 +1,4 @@
+use futures::future::join_all;
 use std::{
     collections::{HashMap, HashSet},
     marker::PhantomData,
@@ -5,16 +6,13 @@ use std::{
     time::Duration,
 };
 
-use futures::future::join_all;
-
+#[cfg(feature = "rbac-hierarchy")]
+use crate::rbac::hierarchy::resolve_role_chain;
 use crate::rbac::{
     cache::{PermissionCache, TtlPermissionCache},
     shared::Shared,
     traits::{AssignmentStore, Permission, PermissionRegistry, RoleRegistry, Subject},
 };
-
-#[cfg(feature = "rbac-hierarchy")]
-use crate::rbac::hierarchy::resolve_role_chain;
 
 pub struct RbacEngine<S, P, A>
 where

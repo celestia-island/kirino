@@ -1,4 +1,3 @@
-use anyhow::anyhow;
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use std::{
@@ -13,6 +12,8 @@ use uuid::Uuid;
 use crate::auth::credential::basic::JwtManager;
 #[cfg(feature = "auth-password")]
 use crate::auth::passport::static_password::{hash_password, verify_password};
+#[cfg(feature = "rbac-dynamic")]
+use crate::rbac::dynamic::arbiter::AuthorizationArbiter;
 use crate::{
     error::{KirinoError, KirinoResult},
     models::identity::Identity,
@@ -24,12 +25,12 @@ use crate::{
             registry::{SimpleRole, StaticPermissionRegistry, StaticRoleRegistry},
         },
         subject::StringSubject,
-        traits::{AssignmentStore, Permission},
+        traits::Permission,
     },
 };
 
-#[cfg(feature = "rbac-dynamic")]
-use crate::rbac::dynamic::arbiter::AuthorizationArbiter;
+#[cfg(all(feature = "auth-password", feature = "auth-jwt"))]
+use crate::rbac::traits::AssignmentStore;
 
 #[derive(Debug, Clone)]
 struct RateLimitEntry {
@@ -116,7 +117,7 @@ impl LoginRateLimiter {
         }
     }
 
-    pub async fn check_and_record_failure(&self, key: &str) -> anyhow::Result<()> {
+    pub async fn check_and_record_failure(&self, key: &str) -> KirinoResult<()> {
         let mut entries = self.entries.write().await;
         let now = Instant::now();
 
@@ -140,10 +141,10 @@ impl LoginRateLimiter {
         if entry.attempts >= self.max_attempts {
             let remaining = total_window.saturating_sub(elapsed);
             if remaining > std::time::Duration::ZERO {
-                return Err(anyhow!(
+                return Err(KirinoError::Validation(format!(
                     "too many login attempts, try again in {} seconds",
                     remaining.as_secs()
-                ));
+                )));
             }
             entry.attempts = 0;
             entry.window_start = now;
@@ -392,7 +393,9 @@ where
         display_name: Option<&str>,
     ) -> KirinoResult<UserInfo> {
         if self.db.find_by_username(username).await?.is_some() {
-            return Err(KirinoError::Internal("registration failed".to_string()));
+            return Err(KirinoError::Validation(
+                "username already exists".to_string(),
+            ));
         }
 
         let password_hash = hash_password(password)?;

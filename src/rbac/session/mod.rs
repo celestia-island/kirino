@@ -6,14 +6,15 @@ use std::{
 };
 use uuid::Uuid;
 
-use crate::error::{KirinoError, KirinoResult};
-use crate::rbac::{
-    shared::Shared,
-    traits::{AssignmentStore, Permission, Subject},
-};
-
 #[cfg(feature = "rbac-constraints")]
 use crate::rbac::constraints::store::ConstraintStore;
+use crate::{
+    error::{KirinoError, KirinoResult},
+    rbac::{
+        shared::Shared,
+        traits::{AssignmentStore, Permission, Subject},
+    },
+};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Session<S: Subject> {

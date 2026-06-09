@@ -1,6 +1,5 @@
 use anyhow::{anyhow, Result};
-use std::collections::HashMap;
-use std::sync::Arc;
+use std::{collections::HashMap, sync::Arc};
 use tokio::sync::RwLock;
 
 /// Reference implementation of a WebAuthn-like assertion verifier.

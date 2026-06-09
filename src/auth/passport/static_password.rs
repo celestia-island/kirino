@@ -1,5 +1,6 @@
 use anyhow::{anyhow, Result};
 use rand::rngs::OsRng;
+use std::sync::OnceLock;
 
 use argon2::{
     password_hash::{PasswordHash, PasswordHasher, PasswordVerifier, SaltString},
@@ -10,10 +11,13 @@ const ARGON2_M_COST: u32 = 19456;
 const ARGON2_T_COST: u32 = 2;
 const ARGON2_P_COST: u32 = 1;
 
-fn argon2_instance() -> Argon2<'static> {
-    let params = Params::new(ARGON2_M_COST, ARGON2_T_COST, ARGON2_P_COST, None)
-        .expect("hardcoded Argon2 parameters are valid by construction");
-    Argon2::new(Algorithm::Argon2id, Version::V0x13, params)
+fn argon2_instance() -> &'static Argon2<'static> {
+    static INSTANCE: OnceLock<Argon2<'static>> = OnceLock::new();
+    INSTANCE.get_or_init(|| {
+        let params = Params::new(ARGON2_M_COST, ARGON2_T_COST, ARGON2_P_COST, None)
+            .expect("hardcoded Argon2 parameters are valid by construction");
+        Argon2::new(Algorithm::Argon2id, Version::V0x13, params)
+    })
 }
 
 /// Hashes a password using Argon2id.

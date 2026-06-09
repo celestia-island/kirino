@@ -1,6 +1,7 @@
 use anyhow::{anyhow, Result};
-use hmac::{Hmac, Mac};
 use rand::Rng;
+
+use hmac::{Hmac, Mac};
 
 use crate::utils::constant_time_eq;
 

@@ -1,8 +1,10 @@
 use anyhow::{anyhow, Result};
 use rand::Rng;
-use std::collections::HashMap;
-use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::{
+    collections::HashMap,
+    sync::Arc,
+    time::{Duration, Instant},
+};
 use tokio::sync::RwLock;
 
 use crate::utils::constant_time_eq;

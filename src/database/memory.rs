@@ -3,8 +3,10 @@ use uuid::Uuid;
 
 use async_trait::async_trait;
 
-use crate::error::{KirinoError, KirinoResult};
-use crate::service::login::{UserDatabase, UserRecord};
+use crate::{
+    error::{KirinoError, KirinoResult},
+    service::login::{UserDatabase, UserRecord},
+};
 
 #[derive(Clone, Default)]
 pub struct InMemoryUserDatabase {
@@ -22,6 +24,11 @@ impl InMemoryUserDatabase {
 impl UserDatabase for InMemoryUserDatabase {
     async fn create_user(&self, user: &UserRecord) -> KirinoResult<()> {
         let mut users = self.users.write().await;
+        if users.contains_key(&user.username) {
+            return Err(KirinoError::Validation(
+                "username already exists".to_string(),
+            ));
+        }
         users.insert(user.username.clone(), user.clone());
         Ok(())
     }
@@ -156,7 +163,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_duplicate_username_overwrites() {
+    async fn test_duplicate_username_rejected() {
         let db = InMemoryUserDatabase::new();
         let u1 = make_user("alice");
         db.create_user(&u1).await.unwrap();
@@ -165,10 +172,8 @@ mod tests {
             username: "alice".to_string(),
             ..make_user("alice")
         };
-        db.create_user(&u2).await.unwrap();
-
-        let found = db.find_by_username("alice").await.unwrap().unwrap();
-        assert_eq!(found.id, u2.id);
+        let err = db.create_user(&u2).await.unwrap_err();
+        assert!(matches!(err, KirinoError::Validation(_)));
     }
 
     #[tokio::test]

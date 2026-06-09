@@ -1,10 +1,7 @@
 use anyhow::Result;
-use std::collections::HashMap;
-use std::sync::Arc;
-use std::time::Duration;
-use tokio::sync::RwLock;
-
 use rand::Rng;
+use std::{collections::HashMap, sync::Arc, time::Duration};
+use tokio::sync::RwLock;
 
 use crate::utils::constant_time_eq;
 

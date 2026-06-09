@@ -4,9 +4,9 @@ use std::{
     sync::atomic::{AtomicUsize, Ordering},
     time::{Duration, Instant},
 };
+use tokio::sync::RwLock;
 
 use async_trait::async_trait;
-use tokio::sync::RwLock;
 
 use super::traits::{Permission, Subject};
 

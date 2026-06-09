@@ -1,5 +1,5 @@
 use anyhow::{anyhow, Result};
-use chrono::{Duration, Utc};
+use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, sync::Arc};
 use tokio::sync::RwLock;
@@ -72,7 +72,11 @@ impl JwtManager {
             permissions,
             session_id,
             iat: now.timestamp(),
-            exp: (now + Duration::hours(self.expiration_hours)).timestamp(),
+            exp: (now
+                + chrono::Duration::try_hours(self.expiration_hours).unwrap_or_else(|| {
+                    chrono::Duration::hours(87600) // cap at ~10 years
+                }))
+            .timestamp(),
         };
         encode(&Header::default(), &claims, &self.encoding_key)
             .map_err(|e| anyhow!("JWT encode failed: {e}"))

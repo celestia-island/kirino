@@ -2,7 +2,10 @@ use anyhow::Result;
 use hmac::{Hmac, Mac};
 
 use super::Credential;
-use crate::utils::constant_time_eq;
+use crate::{
+    error::{KirinoError, KirinoResult},
+    utils::constant_time_eq,
+};
 
 type HmacSha256 = Hmac<sha2::Sha256>;
 
@@ -12,13 +15,17 @@ pub struct ServiceCredential {
 }
 
 impl ServiceCredential {
-    pub fn from_shared_key(key: &[u8], token: &str) -> Self {
-        assert!(!key.is_empty(), "ServiceCredential key must not be empty");
+    pub fn from_shared_key(key: &[u8], token: &str) -> KirinoResult<Self> {
+        if key.is_empty() {
+            return Err(KirinoError::Validation(
+                "ServiceCredential key must not be empty".to_string(),
+            ));
+        }
         let hash = hmac_sha256_hex(key, token.as_bytes());
-        Self {
+        Ok(Self {
             token_hash: hash,
             key: key.to_vec(),
-        }
+        })
     }
 
     pub fn from_hash(token_hash: String, key: Vec<u8>) -> Self {
@@ -55,7 +62,7 @@ mod tests {
     #[test]
     fn test_from_shared_key_and_verify() {
         let key = b"my-service-key-that-is-long-enough";
-        let cred = ServiceCredential::from_shared_key(key, "my-service-token");
+        let cred = ServiceCredential::from_shared_key(key, "my-service-token").unwrap();
         assert!(cred.verify("my-service-token").unwrap());
         assert!(!cred.verify("wrong-token").unwrap());
     }
@@ -63,22 +70,24 @@ mod tests {
     #[test]
     fn test_deterministic_hash() {
         let key = b"test-key-for-determinism-check-1234";
-        let c1 = ServiceCredential::from_shared_key(key, "token");
-        let c2 = ServiceCredential::from_shared_key(key, "token");
+        let c1 = ServiceCredential::from_shared_key(key, "token").unwrap();
+        let c2 = ServiceCredential::from_shared_key(key, "token").unwrap();
         assert_eq!(c1.token_hash, c2.token_hash);
     }
 
     #[test]
     fn test_different_keys_different_hashes() {
-        let c1 = ServiceCredential::from_shared_key(b"key-a-that-is-long-enough-aaaa", "token");
-        let c2 = ServiceCredential::from_shared_key(b"key-b-that-is-long-enough-bbbb", "token");
+        let c1 =
+            ServiceCredential::from_shared_key(b"key-a-that-is-long-enough-aaaa", "token").unwrap();
+        let c2 =
+            ServiceCredential::from_shared_key(b"key-b-that-is-long-enough-bbbb", "token").unwrap();
         assert_ne!(c1.token_hash, c2.token_hash);
     }
 
     #[test]
     fn test_from_hash_with_known_key() {
         let key = b"key-for-from-hash-test-1234567890";
-        let cred = ServiceCredential::from_shared_key(key, "token");
+        let cred = ServiceCredential::from_shared_key(key, "token").unwrap();
         let hash = cred.token_hash.clone();
 
         let cred2 = ServiceCredential::from_hash(hash, key.to_vec());
@@ -88,7 +97,7 @@ mod tests {
     #[test]
     fn test_empty_token() {
         let key = b"key-for-empty-token-test-1234567890";
-        let cred = ServiceCredential::from_shared_key(key, "");
+        let cred = ServiceCredential::from_shared_key(key, "").unwrap();
         assert!(cred.verify("").unwrap());
         assert!(!cred.verify("x").unwrap());
     }
@@ -96,11 +105,16 @@ mod tests {
     #[test]
     fn test_constant_time_verification() {
         let key = b"key-for-timing-test-123456789012";
-        let cred = ServiceCredential::from_shared_key(key, "test-token-value");
+        let cred = ServiceCredential::from_shared_key(key, "test-token-value").unwrap();
 
         assert!(cred.verify("test-token-value").unwrap());
         assert!(!cred.verify("fest-token-value").unwrap());
         assert!(!cred.verify("test-token-valuf").unwrap());
         assert!(!cred.verify("completely-different").unwrap());
+    }
+
+    #[test]
+    fn test_empty_key_returns_error() {
+        assert!(ServiceCredential::from_shared_key(b"", "token").is_err());
     }
 }

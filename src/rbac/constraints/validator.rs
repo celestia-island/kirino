@@ -1,6 +1,5 @@
-use crate::error::{KirinoError, KirinoResult};
-
 use super::store::ConstraintStore;
+use crate::error::{KirinoError, KirinoResult};
 
 pub struct ConstraintValidator<S: ConstraintStore> {
     store: S,

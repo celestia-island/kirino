@@ -1,4 +1,5 @@
 pub mod base64 {
+
     use anyhow::{anyhow, Result};
 
     pub fn decode(input: &str) -> Result<Vec<u8>> {

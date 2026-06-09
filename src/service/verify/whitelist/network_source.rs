@@ -35,7 +35,10 @@ fn ip_in_cidr(ip: IpAddr, cidr: &str) -> bool {
         };
     }
 
-    let prefix_len: u32 = parts[1].parse().unwrap_or(0);
+    let prefix_len: u32 = match parts[1].parse() {
+        Ok(n) => n,
+        Err(_) => return false,
+    };
 
     match ip {
         IpAddr::V4(v4) => {
@@ -134,6 +137,14 @@ mod tests {
         let v = NetworkSourceVerifier::new(vec!["not-a-cidr".to_string()]);
         assert!(!v
             .is_allowed(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)))
+            .unwrap());
+    }
+
+    #[test]
+    fn test_invalid_cidr_prefix_returns_false() {
+        let v = NetworkSourceVerifier::new(vec!["10.0.0.0/abc".to_string()]);
+        assert!(!v
+            .is_allowed(IpAddr::V4(Ipv4Addr::new(10, 0, 0, 1)))
             .unwrap());
     }
 

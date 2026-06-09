@@ -15,6 +15,37 @@ pub mod subject;
 pub mod traits;
 pub mod prelude {
 
+    #[cfg(feature = "rbac-constraints")]
+    pub use crate::rbac::constraints::{
+        CardinalityConstraint, ConstraintStore, ConstraintValidator, DsdPolicy,
+        InMemoryConstraintStore, PrerequisiteConstraint, SsdPolicy, TemporalConstraint,
+    };
+    #[cfg(feature = "rbac-dynamic")]
+    pub use crate::rbac::dynamic::{
+        anomaly::{AnomalyDetector, AnomalyScore, BehaviorBaseline},
+        arbiter::AuthorizationArbiter,
+        delegator::{Delegator, DelegatorType},
+        domain::{DomainMatch, DomainScope, TaskDomain},
+        metrics::{ActionCategory, ActionRequest, ActionSensitivity},
+        policy::{default_dynamic_policy, DynamicPolicy},
+        trust::{
+            InMemoryTrustScoreStore, TrustDecayHandle, TrustDecayWorker, TrustScore,
+            TrustScoreStore,
+        },
+        verdict::{
+            ActionOutcome, AuthorizationVerdict, AutonomyLevel, RiskScore, Strategy, SubScores,
+        },
+    };
+    #[cfg(feature = "rbac-hierarchy")]
+    pub use crate::rbac::hierarchy::{
+        detect_cycle, resolve_role_chain, HierarchicalRole, HierarchyNode,
+    };
+    #[cfg(feature = "rbac-constraints")]
+    pub use crate::rbac::store::persistence::{
+        AssignmentRow, AuditRow, ConstraintRow, PersistentAssignmentStore, PersistentAuditStore,
+        PersistentConstraintStore, PersistentRoleStore, PersistentStore, PersistentTrustStore,
+        RoleRow,
+    };
     pub use crate::rbac::{
         audit::{
             AuditAction, AuditAlert, AuditAnalyzer, AuditCondition, AuditEntry, AuditFilter,
@@ -34,40 +65,5 @@ pub mod prelude {
         traits::{
             AssignmentStore, Permission, PermissionRegistry, Role, RoleRegistry, RoleStore, Subject,
         },
-    };
-
-    #[cfg(feature = "rbac-constraints")]
-    pub use crate::rbac::constraints::{
-        CardinalityConstraint, ConstraintStore, ConstraintValidator, DsdPolicy,
-        InMemoryConstraintStore, PrerequisiteConstraint, SsdPolicy, TemporalConstraint,
-    };
-
-    #[cfg(feature = "rbac-dynamic")]
-    pub use crate::rbac::dynamic::{
-        anomaly::{AnomalyDetector, AnomalyScore, BehaviorBaseline},
-        arbiter::AuthorizationArbiter,
-        delegator::{Delegator, DelegatorType},
-        domain::{DomainMatch, DomainScope, TaskDomain},
-        metrics::{ActionCategory, ActionRequest, ActionSensitivity},
-        policy::{default_dynamic_policy, DynamicPolicy},
-        trust::{
-            InMemoryTrustScoreStore, TrustDecayHandle, TrustDecayWorker, TrustScore,
-            TrustScoreStore,
-        },
-        verdict::{
-            ActionOutcome, AuthorizationVerdict, AutonomyLevel, RiskScore, Strategy, SubScores,
-        },
-    };
-
-    #[cfg(feature = "rbac-hierarchy")]
-    pub use crate::rbac::hierarchy::{
-        detect_cycle, resolve_role_chain, HierarchicalRole, HierarchyNode,
-    };
-
-    #[cfg(feature = "rbac-constraints")]
-    pub use crate::rbac::store::persistence::{
-        AssignmentRow, AuditRow, ConstraintRow, PersistentAssignmentStore, PersistentAuditStore,
-        PersistentConstraintStore, PersistentRoleStore, PersistentStore, PersistentTrustStore,
-        RoleRow,
     };
 }
