@@ -2,6 +2,15 @@ use anyhow::{anyhow, Result};
 
 use crate::utils::base64;
 
+/// Reference OAuth verifier that extracts claims from JWT-format access tokens.
+///
+/// # Security Warning
+///
+/// This implementation does **not** verify the JWT signature. Any token with a
+/// valid base64-encoded JSON payload containing a `"sub"` field will be accepted.
+/// **Do not use in production.** Replace with a verifier that validates the
+/// signature against the authorization server's public key (e.g. via the
+/// `jsonwebtoken` crate) or performs an opaque token introspection call.
 pub struct OAuthVerifier {
     provider: String,
     client_id: String,

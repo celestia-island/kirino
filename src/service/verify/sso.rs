@@ -2,6 +2,14 @@ use anyhow::{anyhow, Result};
 
 use crate::utils::base64;
 
+/// Reference SSO verifier that extracts claims from JWT-format tokens.
+///
+/// # Security Warning
+///
+/// This implementation does **not** verify the JWT signature. Any token with a
+/// valid base64-encoded JSON payload containing a `"sub"` field will be accepted.
+/// **Do not use in production.** Replace with a verifier that validates the
+/// signature against the IdP's public key (e.g. via the `jsonwebtoken` crate).
 pub struct SsoVerifier {
     provider: String,
 }

@@ -2,6 +2,16 @@ use anyhow::{anyhow, Result};
 
 use crate::utils::base64;
 
+/// Reference certificate authority verifier.
+///
+/// # Security Warning
+///
+/// This implementation only checks PEM envelope format and minimum data length.
+/// It does **not** verify the certificate chain, signature, expiry, or
+/// revocation status. The `subject` and `issuer` fields are extracted from raw
+/// bytes and will contain nonsensical data for real certificates.
+/// **Do not use in production.** Replace with a proper X.509 verification
+/// library (e.g. `x509-parser` + `rustls`/`openssl`).
 pub struct CertificateAuthorityVerifier;
 
 impl CertificateAuthorityVerifier {

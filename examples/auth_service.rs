@@ -16,6 +16,7 @@ async fn main() {
         "admin",
         "viewer",
     )
+    .unwrap()
     .with_auto_admin_first_user(true);
 
     let alice = service

@@ -28,18 +28,18 @@ pub struct JwtManager {
 }
 
 impl JwtManager {
-    #[must_use]
-    pub fn new(secret: &str, expiration_hours: i64) -> Self {
-        assert!(
-            secret.len() >= 32,
-            "JWT secret must be at least 32 bytes for HS256 security"
-        );
-        Self {
+    pub fn new(secret: &str, expiration_hours: i64) -> Result<Self> {
+        if secret.len() < 32 {
+            return Err(anyhow!(
+                "JWT secret must be at least 32 bytes for HS256 security"
+            ));
+        }
+        Ok(Self {
             encoding_key: EncodingKey::from_secret(secret.as_bytes()),
             decoding_key: DecodingKey::from_secret(secret.as_bytes()),
             expiration_hours: expiration_hours.max(1),
             revocation: Arc::new(RwLock::new(HashMap::new())),
-        }
+        })
     }
 
     #[allow(clippy::missing_errors_doc)]
@@ -110,9 +110,13 @@ impl JwtManager {
 mod tests {
     use super::*;
 
+    fn make_mgr() -> JwtManager {
+        JwtManager::new("test-secret-that-is-at-least-32-bytes-long", 24).unwrap()
+    }
+
     #[test]
     fn test_issue_and_verify() {
-        let mgr = JwtManager::new("test-secret-that-is-at-least-32-bytes-long", 24);
+        let mgr = make_mgr();
         let token = mgr.issue("user-1", "alice", vec!["admin".into()]).unwrap();
         let claims = mgr.verify(&token).unwrap();
         assert_eq!(claims.sub, "alice");
@@ -122,29 +126,26 @@ mod tests {
 
     #[test]
     fn test_invalid_token() {
-        let mgr = JwtManager::new("test-secret-that-is-at-least-32-bytes-long", 24);
+        let mgr = make_mgr();
         assert!(mgr.verify("garbage.token.here").is_err());
     }
 
     #[test]
     fn test_tampered_token() {
-        let mgr = JwtManager::new("test-secret-that-is-at-least-32-bytes-long", 24);
+        let mgr = make_mgr();
         let token = mgr.issue("user-1", "alice", vec!["admin".into()]).unwrap();
         let tampered = format!("{}.TAMPERED.{}", &token[..20], &token[token.len() - 20..]);
         assert!(mgr.verify(&tampered).is_err());
     }
 
     #[test]
-    fn test_secret_too_short_panics() {
-        let result = std::panic::catch_unwind(|| {
-            let _ = JwtManager::new("short", 24);
-        });
-        assert!(result.is_err());
+    fn test_secret_too_short_returns_error() {
+        assert!(JwtManager::new("short", 24).is_err());
     }
 
     #[test]
     fn test_expiration_hours_minimum_one() {
-        let mgr = JwtManager::new("test-secret-that-is-at-least-32-bytes-long", 0);
+        let mgr = JwtManager::new("test-secret-that-is-at-least-32-bytes-long", 0).unwrap();
         let token = mgr.issue("u1", "user", vec![]).unwrap();
         let claims = mgr.verify(&token).unwrap();
         assert!(claims.exp > claims.iat);
@@ -152,7 +153,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_revoke_all_for_user() {
-        let mgr = JwtManager::new("test-secret-that-is-at-least-32-bytes-long", 24);
+        let mgr = make_mgr();
         let token = mgr.issue("user-1", "alice", vec!["admin".into()]).unwrap();
         let claims = mgr.verify_with_revocation(&token).await.unwrap();
         assert_eq!(claims.sub, "alice");
@@ -163,7 +164,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_new_token_after_revocation() {
-        let mgr = JwtManager::new("test-secret-that-is-at-least-32-bytes-long", 24);
+        let mgr = make_mgr();
         let old_token = mgr.issue("user-1", "alice", vec!["admin".into()]).unwrap();
         mgr.revoke_all_for_user("user-1").await;
         assert!(mgr.verify_with_revocation(&old_token).await.is_err());
@@ -175,7 +176,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_revocation_does_not_affect_other_users() {
-        let mgr = JwtManager::new("test-secret-that-is-at-least-32-bytes-long", 24);
+        let mgr = make_mgr();
         let token_a = mgr.issue("user-a", "alice", vec!["admin".into()]).unwrap();
         let token_b = mgr.issue("user-b", "bob", vec!["viewer".into()]).unwrap();
 
@@ -186,7 +187,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_cleanup_revocation() {
-        let mgr = JwtManager::new("test-secret-that-is-at-least-32-bytes-long", 24);
+        let mgr = make_mgr();
         mgr.revoke_all_for_user("user-1").await;
         mgr.revoke_all_for_user("user-2").await;
 
@@ -198,7 +199,7 @@ mod tests {
 
     #[test]
     fn test_issue_with_permissions_and_session() {
-        let mgr = JwtManager::new("test-secret-that-is-at-least-32-bytes-long", 24);
+        let mgr = make_mgr();
         let token = mgr
             .issue_with_options(
                 "user-1",
@@ -215,7 +216,7 @@ mod tests {
 
     #[test]
     fn test_backward_compat_old_token_deserialize() {
-        let mgr = JwtManager::new("test-secret-that-is-at-least-32-bytes-long", 24);
+        let mgr = make_mgr();
         let token = mgr.issue("user-1", "alice", vec!["admin".into()]).unwrap();
         let claims = mgr.verify(&token).unwrap();
         assert!(claims.permissions.is_empty());
@@ -224,7 +225,7 @@ mod tests {
 
     #[test]
     fn test_claims_serializable() {
-        let mgr = JwtManager::new("test-secret-that-is-at-least-32-bytes-long", 24);
+        let mgr = make_mgr();
         let token = mgr
             .issue_with_options("u1", "user", vec!["role".into()], vec!["perm".into()], None)
             .unwrap();

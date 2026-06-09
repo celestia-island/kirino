@@ -318,10 +318,10 @@ where
         engine: Shared<RbacEngine<StringSubject, P, R, A>>,
         first_user_role: &str,
         default_role: &str,
-    ) -> Self {
-        Self {
+    ) -> anyhow::Result<Self> {
+        Ok(Self {
             db,
-            jwt: JwtManager::new(jwt_secret, jwt_expiration_hours),
+            jwt: JwtManager::new(jwt_secret, jwt_expiration_hours)?,
             engine,
             #[cfg(feature = "rbac-dynamic")]
             arbiter: None,
@@ -330,7 +330,7 @@ where
             first_user_role: first_user_role.to_string(),
             default_role: default_role.to_string(),
             auto_admin_first_user: false,
-        }
+        })
     }
 
     #[must_use]

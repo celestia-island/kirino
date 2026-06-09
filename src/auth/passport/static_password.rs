@@ -12,7 +12,7 @@ const ARGON2_P_COST: u32 = 1;
 
 fn argon2_instance() -> Argon2<'static> {
     let params = Params::new(ARGON2_M_COST, ARGON2_T_COST, ARGON2_P_COST, None)
-        .expect("valid argon2 params");
+        .expect("hardcoded Argon2 parameters are valid by construction");
     Argon2::new(Algorithm::Argon2id, Version::V0x13, params)
 }
 

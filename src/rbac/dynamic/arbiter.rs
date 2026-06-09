@@ -306,7 +306,13 @@ impl AuthorizationArbiter {
             }
         }
 
-        let _ = self.trust_store.set(&request.delegator.id, trust).await;
+        if let Err(e) = self.trust_store.set(&request.delegator.id, trust).await {
+            tracing::error!(target: "kirino::dynamic::arbiter",
+                delegator_id = %request.delegator.id,
+                error = %e,
+                "failed to persist trust score after feedback"
+            );
+        }
     }
 
     pub async fn lockdown(&self, delegator_id: &str, reason: &str) {
@@ -318,7 +324,13 @@ impl AuthorizationArbiter {
         let mut trust = TrustScore::new(0.0);
         trust.confidence = 1.0;
         trust.evidence_count = 999;
-        let _ = self.trust_store.set(delegator_id, trust).await;
+        if let Err(e) = self.trust_store.set(delegator_id, trust).await {
+            tracing::error!(target: "kirino::dynamic::arbiter",
+                delegator_id = delegator_id,
+                error = %e,
+                "failed to persist lockdown trust score"
+            );
+        }
 
         tracing::warn!(target: "kirino::dynamic::arbiter",
             delegator_id = delegator_id,
@@ -344,7 +356,13 @@ impl AuthorizationArbiter {
         let mut trust = TrustScore::new(target_trust);
         trust.confidence = 0.8;
         trust.evidence_count = 10;
-        let _ = self.trust_store.set(delegator_id, trust).await;
+        if let Err(e) = self.trust_store.set(delegator_id, trust).await {
+            tracing::error!(target: "kirino::dynamic::arbiter",
+                delegator_id = delegator_id,
+                error = %e,
+                "failed to persist restored trust score"
+            );
+        }
 
         let mut detectors = self.detectors.write().await;
         detectors.remove(delegator_id);

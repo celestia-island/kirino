@@ -27,6 +27,7 @@ mod tests {
             "admin",
             "viewer",
         )
+        .unwrap()
     }
 
     #[tokio::test]
@@ -60,6 +61,7 @@ mod tests {
             "admin",
             "viewer",
         )
+        .unwrap()
         .with_auto_admin_first_user(true);
 
         auth.register("admin", "Password123!", None).await.unwrap();
@@ -83,7 +85,8 @@ mod tests {
             engine,
             "admin",
             "viewer",
-        );
+        )
+        .unwrap();
 
         auth.register("first", "Password123!", None).await.unwrap();
         assert!(
@@ -258,6 +261,7 @@ mod tests {
             "admin",
             "viewer",
         )
+        .unwrap()
         .with_rate_limiter(LoginRateLimiter::new(3, 60, 60));
 
         auth.register("alice", "Password123!", None).await.unwrap();
@@ -285,6 +289,7 @@ mod tests {
             "admin",
             "viewer",
         )
+        .unwrap()
         .with_rate_limiter(LoginRateLimiter::new(3, 60, 60));
 
         auth.register("alice", "Password123!", None).await.unwrap();

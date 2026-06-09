@@ -1,6 +1,7 @@
 use anyhow::Result;
 use rand::Rng;
 use std::{
+    cell::Cell,
     collections::HashMap,
     sync::Arc,
     time::{Duration, Instant},
@@ -13,7 +14,7 @@ use crate::utils::constant_time_eq;
 
 pub struct OneTimeCredential {
     token: String,
-    used: bool,
+    used: Cell<bool>,
 }
 
 impl OneTimeCredential {
@@ -21,14 +22,17 @@ impl OneTimeCredential {
     pub fn new(token: &str) -> Self {
         Self {
             token: token.to_string(),
-            used: false,
+            used: Cell::new(false),
         }
     }
 
     #[must_use]
     pub fn generate() -> Self {
         let token = Self::generate_token(32);
-        Self { token, used: false }
+        Self {
+            token,
+            used: Cell::new(false),
+        }
     }
 
     #[must_use]
@@ -38,7 +42,7 @@ impl OneTimeCredential {
 
     #[must_use]
     pub fn is_used(&self) -> bool {
-        self.used
+        self.used.get()
     }
 
     fn generate_token(len: usize) -> String {
@@ -55,10 +59,14 @@ impl OneTimeCredential {
 
 impl super::Credential for OneTimeCredential {
     fn verify(&self, token: &str) -> Result<bool> {
-        if self.used {
+        if self.used.get() {
             return Ok(false);
         }
-        Ok(constant_time_eq(self.token.as_bytes(), token.as_bytes()))
+        if constant_time_eq(self.token.as_bytes(), token.as_bytes()) {
+            self.used.set(true);
+            return Ok(true);
+        }
+        Ok(false)
     }
 }
 
@@ -76,6 +84,13 @@ impl InMemoryOneTimeStore {
         Self {
             tokens: Arc::new(RwLock::new(HashMap::new())),
         }
+    }
+
+    pub async fn cleanup_expired(&self) -> usize {
+        let mut tokens = self.tokens.write().await;
+        let before = tokens.len();
+        tokens.retain(|_, v| Instant::now() < v.expires_at);
+        before - tokens.len()
     }
 }
 
@@ -149,11 +164,8 @@ mod tests {
     fn test_credential_is_one_time() {
         let cred = OneTimeCredential::generate();
         let token = cred.token().to_string();
-
-        let mut cred = cred;
         assert!(cred.verify(&token).unwrap());
-
-        cred.used = true;
+        assert!(cred.is_used());
         assert!(!cred.verify(&token).unwrap());
     }
 
@@ -205,5 +217,33 @@ mod tests {
         assert_ne!(t1, t2);
         assert!(store.claim(&t1).await.unwrap());
         assert!(store.claim(&t2).await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn test_store_expired_token_rejected() {
+        let store = InMemoryOneTimeStore::new();
+        let token = store.issue(0).await.unwrap();
+        tokio::time::sleep(Duration::from_millis(10)).await;
+        assert!(!store.claim(&token).await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn test_cleanup_expired() {
+        let store = InMemoryOneTimeStore::new();
+        let t1 = store.issue(0).await.unwrap();
+        let t2 = store.issue(300).await.unwrap();
+        tokio::time::sleep(Duration::from_millis(10)).await;
+        let removed = store.cleanup_expired().await;
+        assert_eq!(removed, 1);
+        assert!(!store.claim(&t1).await.unwrap());
+        assert!(store.claim(&t2).await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn test_cleanup_nothing_when_all_valid() {
+        let store = InMemoryOneTimeStore::new();
+        store.issue(300).await.unwrap();
+        store.issue(300).await.unwrap();
+        assert_eq!(store.cleanup_expired().await, 0);
     }
 }

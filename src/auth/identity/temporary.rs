@@ -1,6 +1,3 @@
-#![allow(missing_docs)]
-#![allow(clippy::missing_errors_doc)]
-
 use anyhow::Result;
 use chrono::{DateTime, Utc};
 use uuid::Uuid;

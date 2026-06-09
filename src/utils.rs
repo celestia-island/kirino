@@ -78,6 +78,16 @@ pub mod base64 {
     }
 }
 
+/// Constant-time byte comparison.
+///
+/// Returns `true` if `a` and `b` are identical, `false` otherwise.
+///
+/// # Caveat
+///
+/// Inputs of different lengths short-circuit with `false`. An attacker who
+/// can measure response time may infer the expected length. For maximum
+/// security, compare fixed-length hashes (e.g. SHA-256) rather than raw
+/// secrets.
 pub fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
     if a.len() != b.len() {
         return false;

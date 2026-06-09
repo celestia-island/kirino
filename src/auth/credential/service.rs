@@ -13,6 +13,7 @@ pub struct ServiceCredential {
 
 impl ServiceCredential {
     pub fn from_shared_key(key: &[u8], token: &str) -> Self {
+        assert!(!key.is_empty(), "ServiceCredential key must not be empty");
         let hash = hmac_sha256_hex(key, token.as_bytes());
         Self {
             token_hash: hash,
@@ -36,7 +37,8 @@ impl Credential for ServiceCredential {
 }
 
 fn hmac_sha256_hex(key: &[u8], data: &[u8]) -> String {
-    let mut mac = HmacSha256::new_from_slice(key).expect("HMAC key is always valid");
+    let mut mac = HmacSha256::new_from_slice(key)
+        .expect("HMAC key must not be empty; validated at construction");
     mac.update(data);
     let result = mac.finalize().into_bytes();
     let mut hex = String::with_capacity(result.len() * 2);
