@@ -566,7 +566,9 @@ mod tests {
 
         let req = human_request(ActionCategory::ReadOnly);
         let verdict = arbiter.authorize(&req).await;
-        assert!(verdict.evidence.is_empty() || !verdict.evidence.is_empty());
+        assert!(!verdict.evidence.is_empty(), "evidence should be populated after authorize");
+        assert!(verdict.evidence[0].contains("risk="), "evidence should contain risk info");
+        assert!(verdict.timestamp.timestamp() > 0, "timestamp should be set");
     }
 
     #[tokio::test]
