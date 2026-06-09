@@ -15,13 +15,13 @@ impl ThirdPartyIframeVerifier {
     }
 
     pub fn verify(&self, _response_token: &str) -> Result<bool> {
-        todo!(
+        unimplemented!(
             "implement third-party CAPTCHA iframe verification for {}",
             self.provider
         )
     }
 
     pub fn render_url(&self, _site_key: &str) -> String {
-        todo!("implement third-party CAPTCHA render URL generation")
+        unimplemented!("third-party CAPTCHA render URL generation")
     }
 }

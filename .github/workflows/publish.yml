@@ -16,7 +16,7 @@ jobs:
     timeout-minutes: 10
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
 
       - uses: Swatinem/rust-cache@v2
@@ -29,5 +29,4 @@ jobs:
             --all-features \
             --allow-branch HEAD \
             --no-confirm \
-            --no-verify \
             --execute

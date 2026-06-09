@@ -21,7 +21,7 @@ impl OneTimeCredential {
     }
 
     pub fn generate() -> Self {
-        todo!("implement one-time token generation")
+        unimplemented!("one-time token generation")
     }
 
     pub fn is_used(&self) -> bool {

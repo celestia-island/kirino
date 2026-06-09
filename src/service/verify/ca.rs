@@ -12,7 +12,7 @@ impl CertificateAuthorityVerifier {
     }
 
     pub fn verify_certificate(&self, _cert_pem: &str) -> Result<CertificateInfo> {
-        todo!("implement X.509 certificate verification")
+        unimplemented!("X.509 certificate verification")
     }
 }
 

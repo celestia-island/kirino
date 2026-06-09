@@ -18,11 +18,11 @@ impl WebAuthnVerifier {
         _client_data_json: &[u8],
         _signature: &[u8],
     ) -> Result<bool> {
-        todo!("implement WebAuthn assertion verification")
+        unimplemented!("WebAuthn assertion verification")
     }
 
     pub fn start_registration(&self, _user_id: &str) -> Result<RegistrationChallenge> {
-        todo!("implement WebAuthn registration challenge generation")
+        unimplemented!("WebAuthn registration challenge generation")
     }
 }
 

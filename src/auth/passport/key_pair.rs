@@ -17,11 +17,11 @@ impl KeyPairVerifier {
         _message: &[u8],
         _signature: &[u8],
     ) -> Result<bool> {
-        todo!("implement key-pair signature verification")
+        unimplemented!("key-pair signature verification")
     }
 
     pub fn generate_keypair(&self) -> Result<(Vec<u8>, Vec<u8>)> {
-        todo!("implement key-pair generation")
+        unimplemented!("key-pair generation")
     }
 }
 

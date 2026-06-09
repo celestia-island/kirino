@@ -17,13 +17,13 @@ impl ServiceCredential {
     }
 
     pub fn from_plain_token(_token: &str) -> Self {
-        todo!("implement service token hashing")
+        unimplemented!("service token hashing")
     }
 }
 
 impl Credential for ServiceCredential {
     fn verify(&self, token: &str) -> Result<bool> {
         let _ = (token, &self.token_hash);
-        todo!("implement service token verification")
+        unimplemented!("service token verification")
     }
 }

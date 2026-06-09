@@ -12,7 +12,7 @@ impl PreviousCredentialVerifier {
     }
 
     pub fn verify(&self, _user_id: &str, _credential_hash: &str) -> Result<bool> {
-        todo!("implement previous credential whitelist verification")
+        unimplemented!("previous credential whitelist verification")
     }
 }
 

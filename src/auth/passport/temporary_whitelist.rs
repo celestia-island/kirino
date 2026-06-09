@@ -30,12 +30,12 @@ impl WhitelistVerifier {
 
     pub fn is_whitelisted(&self, source: &ClientSource) -> Result<bool> {
         let _ = source;
-        todo!("implement whitelist checking with expiry")
+        unimplemented!("whitelist checking with expiry")
     }
 
     pub fn add(&mut self, source: ClientSource, ttl: Option<std::time::Duration>) {
         let _ = (source, ttl);
-        todo!("implement whitelist entry addition")
+        unimplemented!("whitelist entry addition")
     }
 }
 

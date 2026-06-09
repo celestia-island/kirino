@@ -55,4 +55,18 @@ jobs:
         run: cargo fmt --all -- --check
 
       - name: Run tests
-        run: cargo test --lib
+        run: cargo test --lib --all-features
+
+      - name: Run doc tests
+        run: cargo test --doc --all-features
+
+      - name: Check minimal features
+        run: cargo check --no-default-features --features rbac-core
+
+      - name: Check rbac-full features
+        run: cargo check --all-features --all-targets
+
+      - name: Check MSRV
+        run: |
+          rustup install 1.75.0 --profile minimal
+          cargo +1.75.0 check --all-features

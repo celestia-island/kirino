@@ -15,7 +15,7 @@ impl SsoVerifier {
     }
 
     pub fn verify(&self, _token: &str) -> Result<SsoClaims> {
-        todo!(
+        unimplemented!(
             "implement SSO token verification for provider {}",
             self.provider
         )

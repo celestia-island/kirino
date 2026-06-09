@@ -15,10 +15,10 @@ impl EmailVerifier {
     }
 
     pub fn send_code(&self, _address: &str, _code: &str) -> Result<()> {
-        todo!("implement email verification code sending")
+        unimplemented!("email verification code sending")
     }
 
     pub fn verify_code(&self, _address: &str, _code: &str) -> Result<bool> {
-        todo!("implement email verification code checking")
+        unimplemented!("email verification code checking")
     }
 }

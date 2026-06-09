@@ -12,7 +12,7 @@ impl BiologicalVerifier {
     }
 
     pub fn verify(&self, _sample: &[u8], _template: &[u8]) -> Result<bool> {
-        todo!("implement biological verification (fingerprint, face, etc.)")
+        unimplemented!("biological verification (fingerprint, face, etc.)")
     }
 }
 

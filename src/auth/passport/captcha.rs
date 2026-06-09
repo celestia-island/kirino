@@ -12,11 +12,11 @@ impl CaptchaVerifier {
     }
 
     pub fn verify(&self, _challenge_id: &str, _user_response: &str) -> Result<bool> {
-        todo!("implement CAPTCHA verification")
+        unimplemented!("CAPTCHA verification")
     }
 
     pub fn generate_challenge(&self) -> Result<CaptchaChallenge> {
-        todo!("implement CAPTCHA challenge generation")
+        unimplemented!("CAPTCHA challenge generation")
     }
 }
 

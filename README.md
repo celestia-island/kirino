@@ -191,8 +191,8 @@ graph TD
 
     subgraph DB["Database Layer"]
         MEMORY["InMemory Stores<br/>(zero-dependency ref impl)"]
-        SQL["SQL Backend<br/>(feature: rbac-sql)"]
-        REDIS["Redis Cache<br/>(feature: rbac-redis)"]
+        DYNAMIC["Dynamic Auth<br/>(feature: rbac-dynamic)"]
+        CACHE["Permission Cache<br/>(TTL-based)"]
     end
 
     IDENTITY --> CREDENTIAL --> PASSPORT --> AUTH --> SESSION
@@ -309,18 +309,18 @@ Trust scores decay exponentially over time. Anomaly detection uses sliding-windo
 
 ```toml
 [features]
-default = []                    # RBAC core + in-memory backends
-rbac-core = []                  # Traits and engine only
-rbac-inmemory = ["rbac-core"]   # In-memory assignment/role stores
-rbac-hierarchy = ["rbac-core"]  # RBAC1 hierarchical role inheritance
-rbac-constraints = ["rbac-core"]# RBAC2 constraint models (SSD/DSD)
-rbac-sql = ["rbac-core"]        # SQL-based persistent stores
-rbac-sea-orm = ["rbac-core"]    # SeaORM entity models
-rbac-redis = ["rbac-core"]      # Redis-based permission cache
-rbac-full = [                   # All features enabled
+default = ["rbac-inmemory", "auth-password", "auth-jwt"]
+rbac-core = []                     # Traits and engine only
+rbac-inmemory = ["rbac-core"]      # In-memory assignment/role stores
+rbac-hierarchy = ["rbac-core"]     # RBAC1 hierarchical role inheritance
+rbac-constraints = ["rbac-core"]   # RBAC2 constraint models (SSD/DSD)
+rbac-dynamic = ["rbac-core"]       # Dynamic risk-based authorization
+rbac-full = [                      # All features enabled
     "rbac-inmemory", "rbac-hierarchy", "rbac-constraints",
-    "rbac-sql", "rbac-sea-orm", "rbac-redis"
+    "rbac-dynamic", "auth-password", "auth-jwt"
 ]
+auth-password = ["dep:argon2"]     # Argon2 password hashing
+auth-jwt = ["dep:jsonwebtoken"]    # JWT token issuance/verification
 ```
 
 ## Design Philosophy
@@ -344,7 +344,6 @@ It does **not** prescribe:
 
 - Rust 1.75+ (edition 2021)
 - Tokio async runtime
-- Optional: `PostgreSQL` (for `rbac-sql`), Redis (for `rbac-redis`)
 
 ## License
 

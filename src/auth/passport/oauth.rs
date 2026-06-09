@@ -20,11 +20,11 @@ impl OAuthVerifier {
     }
 
     pub fn verify_token(&self, _access_token: &str) -> Result<OAuthClaims> {
-        todo!("implement OAuth token verification")
+        unimplemented!("OAuth token verification")
     }
 
     pub fn authorization_url(&self, _redirect_uri: &str, _state: &str) -> String {
-        todo!("implement OAuth authorization URL generation")
+        unimplemented!("OAuth authorization URL generation")
     }
 }
 

@@ -23,11 +23,11 @@ impl TotpVerifier {
     }
 
     pub fn verify(&self, _code: &str) -> Result<bool> {
-        todo!("implement TOTP verification (RFC 6238)")
+        unimplemented!("TOTP verification (RFC 6238)")
     }
 
     pub fn generate(&self) -> Result<String> {
-        todo!("implement TOTP code generation")
+        unimplemented!("TOTP code generation")
     }
 }
 
@@ -45,6 +45,6 @@ impl HotpVerifier {
     }
 
     pub fn verify(&self, _code: &str) -> Result<bool> {
-        todo!("implement HOTP verification (RFC 4226)")
+        unimplemented!("HOTP verification (RFC 4226)")
     }
 }

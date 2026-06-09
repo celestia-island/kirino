@@ -15,10 +15,10 @@ impl SmsVerifier {
     }
 
     pub fn send_code(&self, _phone: &str, _code: &str) -> Result<()> {
-        todo!("implement SMS verification code sending")
+        unimplemented!("SMS verification code sending")
     }
 
     pub fn verify_code(&self, _phone: &str, _code: &str) -> Result<bool> {
-        todo!("implement SMS verification code checking")
+        unimplemented!("SMS verification code checking")
     }
 }
