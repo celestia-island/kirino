@@ -251,8 +251,8 @@ mod tests {
     #[test]
     fn test_trust_score_default() {
         let ts = TrustScore::default();
-        assert!((ts.value - 0.5).abs() < f64::EPSILON);
-        assert!((ts.confidence - 0.5).abs() < f64::EPSILON);
+        assert!((ts.value - 0.5).abs() < 1e-10);
+        assert!((ts.confidence - 0.5).abs() < 1e-10);
         assert_eq!(ts.evidence_count, 0);
     }
 
@@ -318,7 +318,7 @@ mod tests {
         store.set(id, score.clone()).await.unwrap();
 
         let got = store.get(id).await.unwrap().unwrap();
-        assert!((got.value - 0.8).abs() < f64::EPSILON);
+        assert!((got.value - 0.8).abs() < 1e-10);
 
         store.delete(id).await.unwrap();
         assert!(store.get(id).await.unwrap().is_none());

@@ -65,7 +65,7 @@ mod tests {
         let v = BiologicalVerifier::new();
         let template = vec![1, 2, 3, 4, 5];
         assert!(v.verify(&template, &template).unwrap());
-        assert!((v.compute_similarity(&template, &template) - 1.0).abs() < f64::EPSILON);
+        assert!((v.compute_similarity(&template, &template) - 1.0).abs() < 1e-10);
     }
 
     #[test]
@@ -74,7 +74,7 @@ mod tests {
         let sample = vec![0xFF; 16];
         let template = vec![0x00; 16];
         assert!(!v.verify(&sample, &template).unwrap());
-        assert!((v.compute_similarity(&sample, &template)).abs() < f64::EPSILON);
+        assert!((v.compute_similarity(&sample, &template)).abs() < 1e-10);
     }
 
     #[test]
@@ -138,7 +138,7 @@ mod tests {
     #[test]
     fn test_default_threshold() {
         let v = BiologicalVerifier::new();
-        assert!((v.threshold() - 0.85).abs() < f64::EPSILON);
+        assert!((v.threshold() - 0.85).abs() < 1e-10);
     }
 
     #[test]

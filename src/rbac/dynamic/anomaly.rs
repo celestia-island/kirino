@@ -124,7 +124,7 @@ impl AnomalyDetector {
             let stdev = baseline.category_stdevs.get(cat).copied().unwrap_or(0.1);
             let z_score = if stdev > 0.0 {
                 (current_freq - mean) / stdev
-            } else if (current_freq - mean).abs() < f64::EPSILON {
+            } else if (current_freq - mean).abs() < 1e-12 {
                 0.0
             } else {
                 2.0

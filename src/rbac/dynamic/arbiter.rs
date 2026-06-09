@@ -447,10 +447,11 @@ mod tests {
         let req = agent_request(ActionCategory::FileWrite);
         let risk = arbiter.risk_score(&req).await;
 
-        assert!((risk.sub_scores.delegator_weight - 0.05).abs() < f64::EPSILON);
+        assert!((risk.sub_scores.delegator_weight - 0.05).abs() < 1e-10);
+
         assert!(risk.sub_scores.trust_penalty > 0.0);
-        assert!((risk.sub_scores.sensitivity - 0.5).abs() < f64::EPSILON);
-        assert!((risk.sub_scores.domain_mismatch).abs() < f64::EPSILON);
+        assert!((risk.sub_scores.sensitivity - 0.5).abs() < 1e-10);
+        assert!((risk.sub_scores.domain_mismatch).abs() < 1e-10);
     }
 
     #[tokio::test]

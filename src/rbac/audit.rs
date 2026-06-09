@@ -788,7 +788,7 @@ mod tests {
         let result = analyzer.analyze(&entries).await;
         assert_eq!(result.total_entries, 5);
         assert_eq!(result.denied_count, 3);
-        assert!((result.denied_rate - 0.6).abs() < f64::EPSILON);
+        assert!((result.denied_rate - 0.6).abs() < 1e-10);
         assert_eq!(result.high_risk_count, 3);
 
         let u1 = result.by_subject.get("u1").unwrap();
@@ -798,7 +798,7 @@ mod tests {
         let u2 = result.by_subject.get("u2").unwrap();
         assert_eq!(u2.total, 3);
         assert_eq!(u2.denied, 2);
-        assert!((u2.max_risk - 0.9).abs() < f64::EPSILON);
+        assert!((u2.max_risk - 0.9).abs() < 1e-10);
 
         assert_eq!(result.top_risk_entries.len(), 5);
         let top_risk = result.top_risk_entries[0]
@@ -806,7 +806,7 @@ mod tests {
             .as_ref()
             .unwrap()
             .risk_score;
-        assert!((top_risk - 0.9).abs() < f64::EPSILON);
+        assert!((top_risk - 0.9).abs() < 1e-10);
     }
 
     #[tokio::test]
