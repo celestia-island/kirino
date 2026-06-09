@@ -77,7 +77,6 @@ impl AuthorizationArbiter {
         &self.trust_store
     }
 
-    #[must_use]
     pub fn spawn_trust_decay(&self, interval: std::time::Duration) -> TrustDecayHandle {
         let store = self.trust_store.clone_arc();
         TrustDecayWorker::spawn_resilient(store, interval)
