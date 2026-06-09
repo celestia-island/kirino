@@ -108,28 +108,55 @@ where
             return granted;
         }
 
-        if let Ok(denied) = self.assignment_store.denied_permissions(subject).await {
-            if denied.contains(permission) {
-                self.cache.set(subject, permission, false);
-                return false;
+        match self.assignment_store.denied_permissions(subject).await {
+            Ok(denied) => {
+                if denied.contains(permission) {
+                    self.cache.set(subject, permission, false);
+                    return false;
+                }
+            }
+            Err(e) => {
+                tracing::warn!(target: "kirino::rbac::engine",
+                    subject = %subject.subject_id(),
+                    error = %e,
+                    "failed to query denied permissions"
+                );
             }
         }
 
-        if let Ok(extra) = self.assignment_store.extra_permissions(subject).await {
-            if extra.contains(permission) {
-                self.cache.set(subject, permission, true);
-                return true;
+        match self.assignment_store.extra_permissions(subject).await {
+            Ok(extra) => {
+                if extra.contains(permission) {
+                    self.cache.set(subject, permission, true);
+                    return true;
+                }
+            }
+            Err(e) => {
+                tracing::warn!(target: "kirino::rbac::engine",
+                    subject = %subject.subject_id(),
+                    error = %e,
+                    "failed to query extra permissions"
+                );
             }
         }
 
-        if let Ok(role_names) = self.assignment_store.roles_of(subject).await {
-            for role_name in &role_names {
-                if let Some(role) = self.role_registry.get_role(role_name) {
-                    if role.permissions().contains(permission) {
-                        self.cache.set(subject, permission, true);
-                        return true;
+        match self.assignment_store.roles_of(subject).await {
+            Ok(role_names) => {
+                for role_name in &role_names {
+                    if let Some(role) = self.role_registry.get_role(role_name) {
+                        if role.permissions().contains(permission) {
+                            self.cache.set(subject, permission, true);
+                            return true;
+                        }
                     }
                 }
+            }
+            Err(e) => {
+                tracing::warn!(target: "kirino::rbac::engine",
+                    subject = %subject.subject_id(),
+                    error = %e,
+                    "failed to query roles"
+                );
             }
         }
 
@@ -148,11 +175,20 @@ where
     pub async fn effective_permissions(&self, subject: &S) -> HashSet<P> {
         let mut perms = HashSet::new();
 
-        if let Ok(role_names) = self.assignment_store.roles_of(subject).await {
-            for role_name in &role_names {
-                if let Some(role) = self.role_registry.get_role(role_name) {
-                    perms.extend(role.permissions().iter().cloned());
+        match self.assignment_store.roles_of(subject).await {
+            Ok(role_names) => {
+                for role_name in &role_names {
+                    if let Some(role) = self.role_registry.get_role(role_name) {
+                        perms.extend(role.permissions().iter().cloned());
+                    }
                 }
+            }
+            Err(e) => {
+                tracing::warn!(target: "kirino::rbac::engine",
+                    subject = %subject.subject_id(),
+                    error = %e,
+                    "failed to query roles for effective permissions"
+                );
             }
         }
 
@@ -367,6 +403,24 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_deny_overrides_extra() {
+        let engine = build_engine();
+        let user = TestSubject("deny-extra-user".to_string());
+        engine
+            .assignment_store()
+            .set_extra_permissions(&user, [TestPerm::Write].into_iter().collect())
+            .await
+            .unwrap();
+        engine
+            .assignment_store()
+            .set_denied_permissions(&user, [TestPerm::Write].into_iter().collect())
+            .await
+            .unwrap();
+
+        assert!(!engine.check(&user, &TestPerm::Write).await);
+    }
+
+    #[tokio::test]
     async fn test_extra_permissions() {
         let engine = build_engine();
         let user = TestSubject("extra-user".to_string());
@@ -408,6 +462,14 @@ mod tests {
         assert!(results[&TestPerm::Read]);
         assert!(results[&TestPerm::Write]);
         assert!(!results[&TestPerm::Delete]);
+    }
+
+    #[tokio::test]
+    async fn test_check_batch_empty() {
+        let engine = build_engine();
+        let user = TestSubject("batch-empty".to_string());
+        let results = engine.check_batch(&user, &HashSet::new()).await;
+        assert!(results.is_empty());
     }
 
     #[tokio::test]
@@ -455,6 +517,14 @@ mod tests {
         assert!(eff.contains(&TestPerm::Write));
         assert!(!eff.contains(&TestPerm::Admin));
         assert!(!eff.contains(&TestPerm::Delete));
+    }
+
+    #[tokio::test]
+    async fn test_effective_permissions_no_roles() {
+        let engine = build_engine();
+        let anon = TestSubject("ep-anon".to_string());
+        let eff = engine.effective_permissions(&anon).await;
+        assert!(eff.is_empty());
     }
 
     #[tokio::test]
@@ -520,5 +590,96 @@ mod tests {
         assert!(reg.get_permission("read").is_some());
         assert!(reg.get_permission("nonexistent").is_none());
         assert_eq!(reg.all_permissions().len(), 4);
+    }
+
+    #[tokio::test]
+    async fn test_cache_invalidation() {
+        let engine = build_engine();
+        let user = TestSubject("cache-user".to_string());
+        engine
+            .assignment_store()
+            .assign_role(&user, "admin")
+            .await
+            .unwrap();
+
+        assert!(engine.check(&user, &TestPerm::Admin).await);
+
+        engine.invalidate_subject_cache(&user);
+        engine
+            .assignment_store()
+            .revoke_role(&user, "admin")
+            .await
+            .unwrap();
+
+        assert!(!engine.check(&user, &TestPerm::Admin).await);
+    }
+
+    #[tokio::test]
+    async fn test_cache_invalidate_all() {
+        let engine = build_engine();
+        let user1 = TestSubject("cache-u1".to_string());
+        let user2 = TestSubject("cache-u2".to_string());
+        engine
+            .assignment_store()
+            .assign_role(&user1, "viewer")
+            .await
+            .unwrap();
+        engine
+            .assignment_store()
+            .assign_role(&user2, "viewer")
+            .await
+            .unwrap();
+
+        assert!(engine.check(&user1, &TestPerm::Read).await);
+        assert!(engine.check(&user2, &TestPerm::Read).await);
+
+        engine.invalidate_all_cache();
+        engine
+            .assignment_store()
+            .revoke_role(&user1, "viewer")
+            .await
+            .unwrap();
+
+        assert!(!engine.check(&user1, &TestPerm::Read).await);
+        assert!(engine.check(&user2, &TestPerm::Read).await);
+    }
+
+    #[tokio::test]
+    async fn test_multiple_roles() {
+        let engine = build_engine();
+        let user = TestSubject("multi-role".to_string());
+        engine
+            .assignment_store()
+            .assign_role(&user, "viewer")
+            .await
+            .unwrap();
+        engine
+            .assignment_store()
+            .assign_role(&user, "editor")
+            .await
+            .unwrap();
+
+        assert!(engine.check(&user, &TestPerm::Read).await);
+        assert!(engine.check(&user, &TestPerm::Write).await);
+        assert!(!engine.check(&user, &TestPerm::Admin).await);
+    }
+
+    #[tokio::test]
+    async fn test_assign_duplicate_role() {
+        let engine = build_engine();
+        let user = TestSubject("dup-role".to_string());
+        engine
+            .assignment_store()
+            .assign_role(&user, "viewer")
+            .await
+            .unwrap();
+        engine
+            .assignment_store()
+            .assign_role(&user, "viewer")
+            .await
+            .unwrap();
+
+        let roles = engine.assignment_store().roles_of(&user).await.unwrap();
+        assert_eq!(roles.len(), 1);
     }
 }

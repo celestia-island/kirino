@@ -8,8 +8,15 @@ async fn main() {
     let db = InMemoryUserDatabase::new();
     let engine = build_default_engine();
 
-    let service = AuthService::new(db, "my-jwt-secret-key", 24, engine, "admin", "viewer")
-        .with_auto_admin_first_user(true);
+    let service = AuthService::new(
+        db,
+        "my-jwt-secret-key-that-is-at-least-32-bytes-long",
+        24,
+        engine,
+        "admin",
+        "viewer",
+    )
+    .with_auto_admin_first_user(true);
 
     let alice = service
         .register("alice", "SecureP@ss1", Some("Alice"))

@@ -1,10 +1,9 @@
-#![allow(missing_docs)]
-#![allow(clippy::missing_errors_doc)]
-
 use anyhow::Result;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
+
+use crate::utils::constant_time_eq;
 
 pub struct PreviousCredentialVerifier {
     store: Arc<RwLock<HashMap<String, String>>>,
@@ -28,18 +27,16 @@ impl PreviousCredentialVerifier {
     pub async fn verify(&self, user_id: &str, credential_hash: &str) -> Result<bool> {
         let store = self.store.read().await;
         if let Some(stored) = store.get(user_id) {
-            let a = stored.as_bytes();
-            let b = credential_hash.as_bytes();
-            if a.len() != b.len() {
-                return Ok(false);
-            }
-            let mut diff = 0u8;
-            for (x, y) in a.iter().zip(b.iter()) {
-                diff |= x ^ y;
-            }
-            return Ok(diff == 0);
+            return Ok(constant_time_eq(
+                stored.as_bytes(),
+                credential_hash.as_bytes(),
+            ));
         }
         Ok(false)
+    }
+
+    pub async fn unregister(&self, user_id: &str) {
+        self.store.write().await.remove(user_id);
     }
 }
 
@@ -71,5 +68,33 @@ mod tests {
     async fn test_unknown_user() {
         let v = PreviousCredentialVerifier::new();
         assert!(!v.verify("unknown", "any-hash").await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn test_unregister() {
+        let v = PreviousCredentialVerifier::new();
+        v.register("user-1", "hash").await;
+        assert!(v.verify("user-1", "hash").await.unwrap());
+        v.unregister("user-1").await;
+        assert!(!v.verify("user-1", "hash").await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn test_overwrite_credential() {
+        let v = PreviousCredentialVerifier::new();
+        v.register("user-1", "old-hash").await;
+        v.register("user-1", "new-hash").await;
+        assert!(!v.verify("user-1", "old-hash").await.unwrap());
+        assert!(v.verify("user-1", "new-hash").await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn test_multiple_users() {
+        let v = PreviousCredentialVerifier::new();
+        v.register("user-a", "hash-a").await;
+        v.register("user-b", "hash-b").await;
+        assert!(v.verify("user-a", "hash-a").await.unwrap());
+        assert!(v.verify("user-b", "hash-b").await.unwrap());
+        assert!(!v.verify("user-a", "hash-b").await.unwrap());
     }
 }

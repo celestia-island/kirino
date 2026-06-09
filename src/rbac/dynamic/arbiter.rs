@@ -262,17 +262,11 @@ impl AuthorizationArbiter {
             score.value
         };
 
-        let anomaly_weight_modifier = if self.is_baseline_ready_for(&request.delegator.id).await {
-            1.0
-        } else {
-            0.5
-        };
-
         let raw = delegator_weight * policy.dimension_weights[0]
             + trust_penalty * policy.dimension_weights[1]
             + sensitivity * policy.dimension_weights[2]
             + domain_mismatch * policy.dimension_weights[3]
-            + anomaly * anomaly_weight_modifier * policy.dimension_weights[4];
+            + anomaly * policy.dimension_weights[4];
 
         let value = raw.clamp(0.0, 1.0);
 
@@ -384,13 +378,6 @@ impl AuthorizationArbiter {
             "trust_evidence_count": trust.evidence_count,
             "anomaly_baseline_ready": anomaly_ready,
         })
-    }
-
-    async fn is_baseline_ready_for(&self, delegator_id: &str) -> bool {
-        let detectors = self.detectors.read().await;
-        detectors
-            .get(delegator_id)
-            .is_some_and(super::anomaly::AnomalyDetector::is_baseline_ready)
     }
 
     async fn log_verdict(&self, verdict: &AuthorizationVerdict, request: &ActionRequest) {
