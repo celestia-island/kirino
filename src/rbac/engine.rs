@@ -103,16 +103,20 @@ where
         self.cache.invalidate_all().await;
     }
 
-    pub async fn check(&self, subject: &S, permission: &P) -> bool {
+    /// Check cache, denied permissions, and extra permissions.
+    /// Returns `Ok(Some(result))` if a decision was reached,
+    /// `Err(())` if a store error caused denial,
+    /// `Ok(None)` if role checking is still needed.
+    async fn check_cached_deny_extra(&self, subject: &S, permission: &P) -> Result<Option<bool>, ()> {
         if let Some(granted) = self.cache.get(subject, permission).await {
-            return granted;
+            return Ok(Some(granted));
         }
 
         match self.assignment_store.denied_permissions(subject).await {
             Ok(denied) => {
                 if denied.contains(permission) {
                     self.cache.set(subject, permission, false).await;
-                    return false;
+                    return Ok(Some(false));
                 }
             }
             Err(e) => {
@@ -122,7 +126,7 @@ where
                     "failed to query denied permissions — denying access"
                 );
                 self.cache.set(subject, permission, false).await;
-                return false;
+                return Err(());
             }
         }
 
@@ -130,7 +134,7 @@ where
             Ok(extra) => {
                 if extra.contains(permission) {
                     self.cache.set(subject, permission, true).await;
-                    return true;
+                    return Ok(Some(true));
                 }
             }
             Err(e) => {
@@ -140,8 +144,18 @@ where
                     "failed to query extra permissions — denying access"
                 );
                 self.cache.set(subject, permission, false).await;
-                return false;
+                return Err(());
             }
+        }
+
+        Ok(None)
+    }
+
+    pub async fn check(&self, subject: &S, permission: &P) -> bool {
+        match self.check_cached_deny_extra(subject, permission).await {
+            Ok(Some(result)) => return result,
+            Err(()) => return false,
+            Ok(None) => {}
         }
 
         match self.assignment_store.roles_of(subject).await {
@@ -217,44 +231,10 @@ where
     A: AssignmentStore<S, P>,
 {
     pub async fn check_hierarchical(&self, subject: &S, permission: &P) -> bool {
-        if let Some(granted) = self.cache.get(subject, permission).await {
-            return granted;
-        }
-
-        match self.assignment_store.denied_permissions(subject).await {
-            Ok(denied) => {
-                if denied.contains(permission) {
-                    self.cache.set(subject, permission, false).await;
-                    return false;
-                }
-            }
-            Err(e) => {
-                tracing::error!(target: "kirino::rbac::engine",
-                    subject = %subject.subject_id(),
-                    error = %e,
-                    "failed to query denied permissions — denying access"
-                );
-                self.cache.set(subject, permission, false).await;
-                return false;
-            }
-        }
-
-        match self.assignment_store.extra_permissions(subject).await {
-            Ok(extra) => {
-                if extra.contains(permission) {
-                    self.cache.set(subject, permission, true).await;
-                    return true;
-                }
-            }
-            Err(e) => {
-                tracing::error!(target: "kirino::rbac::engine",
-                    subject = %subject.subject_id(),
-                    error = %e,
-                    "failed to query extra permissions — denying access"
-                );
-                self.cache.set(subject, permission, false).await;
-                return false;
-            }
+        match self.check_cached_deny_extra(subject, permission).await {
+            Ok(Some(result)) => return result,
+            Err(()) => return false,
+            Ok(None) => {}
         }
 
         if let Ok(role_names) = self.assignment_store.roles_of(subject).await {
