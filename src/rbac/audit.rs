@@ -3,6 +3,8 @@ use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, sync::Arc};
 use tokio::sync::RwLock;
 
+use crate::error::KirinoResult;
+
 type AlertHook = Box<dyn Fn(AuditAlert) + Send + Sync>;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -175,7 +177,7 @@ pub struct AuditFilter {
 pub trait AuditPolicyEngine: Send + Sync {
     async fn evaluate(&self, entry: &AuditEntry) -> Vec<AuditAlert>;
     async fn add_rule(&self, rule: AuditRule);
-    async fn remove_rule(&self, rule_id: &str);
+    async fn remove_rule(&self, rule_id: &str) -> KirinoResult<bool>;
     async fn list_rules(&self) -> Vec<AuditRule>;
 }
 
@@ -436,9 +438,11 @@ impl AuditPolicyEngine for InMemoryAuditPolicyEngine {
         rules.push(rule);
     }
 
-    async fn remove_rule(&self, rule_id: &str) {
+    async fn remove_rule(&self, rule_id: &str) -> KirinoResult<bool> {
         let mut rules = self.rules.write().await;
+        let before = rules.len();
         rules.retain(|r| r.id != rule_id);
+        Ok(rules.len() < before)
     }
 
     async fn list_rules(&self) -> Vec<AuditRule> {
@@ -921,7 +925,7 @@ mod tests {
             .await;
 
         assert_eq!(engine.list_rules().await.len(), 1);
-        engine.remove_rule("r1").await;
+        assert!(engine.remove_rule("r1").await.unwrap());
         assert!(engine.list_rules().await.is_empty());
     }
 
