@@ -371,15 +371,15 @@ where
         password: &str,
         display_name: Option<&str>,
     ) -> Result<UserInfo> {
-        // Validate username format before consuming rate limit budget.
+        // Validate all inputs before consuming rate limit budget.
         // This prevents attackers from exhausting rate limiter entries
         // with a high volume of malformed requests (a DoS vector).
         let username = validate_username(username)?;
+        validate_password(password)?;
 
         self.register_rate_limiter
             .check_and_record_failure(&username)
             .await?;
-        validate_password(password)?;
 
         if self.db.find_by_username(&username).await?.is_some() {
             return Err(anyhow!("registration failed"));
