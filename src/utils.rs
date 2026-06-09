@@ -78,16 +78,27 @@ pub mod base64 {
     }
 }
 
+/// Minimal percent-encoding for URL query parameters.
+pub fn url_encode(input: &str) -> String {
+    const HEX: &[u8] = b"0123456789ABCDEF";
+    let mut result = String::with_capacity(input.len());
+    for &byte in input.as_bytes() {
+        match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'~' => {
+                result.push(byte as char);
+            }
+            b' ' => result.push_str("%20"),
+            _ => {
+                result.push('%');
+                result.push(HEX[(byte >> 4) as usize] as char);
+                result.push(HEX[(byte & 0x0F) as usize] as char);
+            }
+        }
+    }
+    result
+}
+
 /// Constant-time byte comparison.
-///
-/// Returns `true` if `a` and `b` are identical, `false` otherwise.
-///
-/// # Caveat
-///
-/// Inputs of different lengths short-circuit with `false`. An attacker who
-/// can measure response time may infer the expected length. For maximum
-/// security, compare fixed-length hashes (e.g. SHA-256) rather than raw
-/// secrets.
 pub fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
     if a.len() != b.len() {
         return false;
@@ -154,5 +165,33 @@ mod tests {
         assert_eq!(base64::decode("YQ=="), b"a");
         assert_eq!(base64::decode("YWI="), b"ab");
         assert_eq!(base64::decode("YWJj"), b"abc");
+    }
+
+    #[test]
+    fn test_url_encode_plain_text() {
+        assert_eq!(url_encode("hello"), "hello");
+        assert_eq!(url_encode("abc123"), "abc123");
+    }
+
+    #[test]
+    fn test_url_encode_spaces() {
+        assert_eq!(url_encode("a b"), "a%20b");
+        assert_eq!(url_encode("hello world"), "hello%20world");
+    }
+
+    #[test]
+    fn test_url_encode_special_chars() {
+        assert_eq!(url_encode("a&b=c"), "a%26b%3Dc");
+        assert_eq!(url_encode("https://example.com/path?q=1"), "https%3A%2F%2Fexample.com%2Fpath%3Fq%3D1");
+    }
+
+    #[test]
+    fn test_url_encode_unreserved_safe() {
+        assert_eq!(url_encode("-._~"), "-._~");
+    }
+
+    #[test]
+    fn test_url_encode_empty() {
+        assert_eq!(url_encode(""), "");
     }
 }

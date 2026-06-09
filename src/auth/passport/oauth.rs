@@ -63,18 +63,20 @@ impl OAuthVerifier {
     }
 
     pub fn authorization_url(&self, redirect_uri: &str, state: &str) -> String {
+        let encoded_redirect = crate::utils::url_encode(redirect_uri);
+        let encoded_state = crate::utils::url_encode(state);
         match self.provider.as_str() {
             "google" => format!(
                 "https://accounts.google.com/o/oauth2/v2/auth?client_id={}&redirect_uri={}&response_type=code&scope=openid+email+profile&state={}",
-                self.client_id, redirect_uri, state
+                self.client_id, encoded_redirect, encoded_state
             ),
             "github" => format!(
                 "https://github.com/login/oauth/authorize?client_id={}&redirect_uri={}&state={}",
-                self.client_id, redirect_uri, state
+                self.client_id, encoded_redirect, encoded_state
             ),
             _ => format!(
                 "https://{}/oauth/authorize?client_id={}&redirect_uri={}&response_type=code&state={}",
-                self.provider, self.client_id, redirect_uri, state
+                self.provider, self.client_id, encoded_redirect, encoded_state
             ),
         }
     }
@@ -97,6 +99,8 @@ mod tests {
         let url = v.authorization_url("http://localhost/cb", "state123");
         assert!(url.contains("accounts.google.com"));
         assert!(url.contains("my-client"));
+        assert!(url.contains("redirect_uri=http%3A%2F%2Flocalhost%2Fcb"));
+        assert!(url.contains("state=state123"));
     }
 
     #[test]
@@ -105,6 +109,7 @@ mod tests {
         let url = v.authorization_url("/callback", "xyz");
         assert!(url.contains("github.com"));
         assert!(url.contains("gh-client"));
+        assert!(url.contains("redirect_uri=%2Fcallback"));
     }
 
     #[test]
@@ -112,6 +117,14 @@ mod tests {
         let v = OAuthVerifier::new("sso.example.com".to_string(), "cid".to_string());
         let url = v.authorization_url("/callback", "xyz");
         assert!(url.contains("sso.example.com"));
+    }
+
+    #[test]
+    fn test_authorization_url_encodes_special_chars() {
+        let v = OAuthVerifier::new("google".to_string(), "id".to_string());
+        let url = v.authorization_url("http://example.com/cb?foo=bar&baz=1", "state with spaces");
+        assert!(url.contains("redirect_uri=http%3A%2F%2Fexample.com%2Fcb%3Ffoo%3Dbar%26baz%3D1"));
+        assert!(url.contains("state=state%20with%20spaces"));
     }
 
     #[test]
