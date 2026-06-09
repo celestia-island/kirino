@@ -16,7 +16,12 @@ fn argon2_instance() -> Argon2<'static> {
     Argon2::new(Algorithm::Argon2id, Version::V0x13, params)
 }
 
-#[allow(clippy::missing_errors_doc)]
+/// Hashes a password using Argon2id.
+///
+/// # Errors
+///
+/// Returns an error if the Argon2 hashing fails (e.g. password exceeds
+/// Argon2's internal limits, which is unlikely in practice).
 pub fn hash_password(password: &str) -> Result<String> {
     let salt = SaltString::generate(&mut OsRng);
     let hash = argon2_instance()
@@ -25,7 +30,11 @@ pub fn hash_password(password: &str) -> Result<String> {
     Ok(hash.to_string())
 }
 
-#[allow(clippy::missing_errors_doc)]
+/// Verifies a password against an Argon2id hash string.
+///
+/// # Errors
+///
+/// Returns an error if `hash` is not a valid PHC hash string.
 pub fn verify_password(password: &str, hash: &str) -> Result<bool> {
     let parsed = PasswordHash::new(hash).map_err(|e| anyhow!("invalid hash format: {e}"))?;
     Ok(argon2_instance()

@@ -237,4 +237,97 @@ mod tests {
         );
         assert!(detect_cycle("self_ref", &reg));
     }
+
+    #[test]
+    fn test_resolve_chain_with_cycle_terminates() {
+        let mut reg = StaticRoleRegistry::new();
+        reg.register(
+            HierarchyNode::new("a", [TestPerm::Read].into_iter().collect())
+                .with_parents(vec!["b".to_string()]),
+        );
+        reg.register(
+            HierarchyNode::new("b", [TestPerm::Write].into_iter().collect())
+                .with_parents(vec!["a".to_string()]),
+        );
+        let perms = resolve_role_chain("a", &reg);
+        assert!(perms.contains(&TestPerm::Read));
+        assert!(perms.contains(&TestPerm::Write));
+    }
+
+    #[test]
+    fn test_three_way_cycle() {
+        let mut reg = StaticRoleRegistry::new();
+        reg.register(
+            HierarchyNode::new("a", [TestPerm::Read].into_iter().collect())
+                .with_parents(vec!["b".to_string()]),
+        );
+        reg.register(
+            HierarchyNode::new("b", [TestPerm::Write].into_iter().collect())
+                .with_parents(vec!["c".to_string()]),
+        );
+        reg.register(
+            HierarchyNode::new("c", [TestPerm::Delete].into_iter().collect())
+                .with_parents(vec!["a".to_string()]),
+        );
+        assert!(detect_cycle("a", &reg));
+        assert!(detect_cycle("b", &reg));
+        assert!(detect_cycle("c", &reg));
+
+        let perms = resolve_role_chain("a", &reg);
+        assert_eq!(perms.len(), 3);
+    }
+
+    #[test]
+    fn test_deep_chain() {
+        let mut reg = StaticRoleRegistry::new();
+        reg.register(
+            HierarchyNode::new("level0", [TestPerm::Admin].into_iter().collect())
+                .with_parents(vec!["level1".to_string()]),
+        );
+        for i in 1..10 {
+            reg.register(HierarchyNode::new(
+                format!("level{i}"),
+                [TestPerm::Read].into_iter().collect(),
+            ));
+        }
+        let perms = resolve_role_chain("level0", &reg);
+        assert!(perms.contains(&TestPerm::Admin));
+        assert!(perms.contains(&TestPerm::Read));
+    }
+
+    #[test]
+    fn test_diamond_inheritance() {
+        let mut reg = StaticRoleRegistry::new();
+        reg.register(
+            HierarchyNode::new("root", [TestPerm::Admin].into_iter().collect())
+                .with_parents(vec!["left".to_string(), "right".to_string()]),
+        );
+        reg.register(
+            HierarchyNode::new("left", [TestPerm::Read].into_iter().collect())
+                .with_parents(vec!["base".to_string()]),
+        );
+        reg.register(
+            HierarchyNode::new("right", [TestPerm::Write].into_iter().collect())
+                .with_parents(vec!["base".to_string()]),
+        );
+        reg.register(HierarchyNode::new(
+            "base",
+            [TestPerm::Delete].into_iter().collect(),
+        ));
+
+        let perms = resolve_role_chain("root", &reg);
+        assert!(perms.contains(&TestPerm::Admin));
+        assert!(perms.contains(&TestPerm::Read));
+        assert!(perms.contains(&TestPerm::Write));
+        assert!(perms.contains(&TestPerm::Delete));
+        assert_eq!(perms.len(), 4);
+
+        assert!(!detect_cycle("root", &reg));
+    }
+
+    #[test]
+    fn test_detect_cycle_nonexistent_role() {
+        let reg: StaticRoleRegistry<HierarchyNode<TestPerm>, TestPerm> = StaticRoleRegistry::new();
+        assert!(!detect_cycle("nonexistent", &reg));
+    }
 }

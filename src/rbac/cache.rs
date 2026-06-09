@@ -238,4 +238,90 @@ mod tests {
         assert_eq!(cache.get(&subject, &read_perm), Some(true));
         assert_eq!(cache.get(&subject, &write_perm), Some(false));
     }
+
+    #[test]
+    fn test_cache_different_subjects_isolated() {
+        let cache = TtlPermissionCache::new(Duration::from_secs(300));
+        let s1 = TestSubject { id: "user1".into() };
+        let s2 = TestSubject { id: "user2".into() };
+        let perm = TestPerm {
+            name: "read".into(),
+        };
+
+        cache.set(&s1, &perm, true);
+        cache.set(&s2, &perm, false);
+
+        assert_eq!(cache.get(&s1, &perm), Some(true));
+        assert_eq!(cache.get(&s2, &perm), Some(false));
+    }
+
+    #[test]
+    fn test_cache_invalidate_one_subject_preserves_others() {
+        let cache = TtlPermissionCache::new(Duration::from_secs(300));
+        let s1 = TestSubject { id: "u1".into() };
+        let s2 = TestSubject { id: "u2".into() };
+        let s3 = TestSubject { id: "u3".into() };
+        let perm = TestPerm {
+            name: "read".into(),
+        };
+
+        cache.set(&s1, &perm, true);
+        cache.set(&s2, &perm, false);
+        cache.set(&s3, &perm, true);
+
+        cache.invalidate_subject(&s2);
+
+        assert_eq!(cache.get(&s1, &perm), Some(true));
+        assert_eq!(cache.get(&s2, &perm), None);
+        assert_eq!(cache.get(&s3, &perm), Some(true));
+    }
+
+    #[test]
+    fn test_cache_get_nonexistent_perm() {
+        let cache = TtlPermissionCache::new(Duration::from_secs(300));
+        let subject = TestSubject { id: "user1".into() };
+        let perm = TestPerm {
+            name: "read".into(),
+        };
+
+        assert_eq!(cache.get(&subject, &perm), None);
+    }
+
+    #[test]
+    fn test_cache_invalidate_all_drops_everything() {
+        let cache = TtlPermissionCache::new(Duration::from_secs(300));
+        let s1 = TestSubject { id: "u1".into() };
+        let s2 = TestSubject { id: "u2".into() };
+        let p1 = TestPerm {
+            name: "read".into(),
+        };
+        let p2 = TestPerm {
+            name: "write".into(),
+        };
+
+        cache.set(&s1, &p1, true);
+        cache.set(&s1, &p2, false);
+        cache.set(&s2, &p1, true);
+
+        cache.invalidate_all();
+
+        assert_eq!(cache.get(&s1, &p1), None);
+        assert_eq!(cache.get(&s1, &p2), None);
+        assert_eq!(cache.get(&s2, &p1), None);
+    }
+
+    #[test]
+    fn test_cache_invalidate_nonexistent_subject_is_noop() {
+        let cache = TtlPermissionCache::new(Duration::from_secs(300));
+        let s1 = TestSubject { id: "u1".into() };
+        let s2 = TestSubject { id: "u2".into() };
+        let perm = TestPerm {
+            name: "read".into(),
+        };
+
+        cache.set(&s1, &perm, true);
+        cache.invalidate_subject(&s2);
+
+        assert_eq!(cache.get(&s1, &perm), Some(true));
+    }
 }

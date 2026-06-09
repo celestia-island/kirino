@@ -42,12 +42,20 @@ impl JwtManager {
         })
     }
 
-    #[allow(clippy::missing_errors_doc)]
+    /// Issues a JWT for the given user.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if JWT encoding fails.
     pub fn issue(&self, user_id: &str, username: &str, roles: Vec<String>) -> Result<String> {
         self.issue_with_options(user_id, username, roles, vec![], None)
     }
 
-    #[allow(clippy::missing_errors_doc)]
+    /// Issues a JWT with optional permissions and session ID.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if JWT encoding fails.
     pub fn issue_with_options(
         &self,
         user_id: &str,
@@ -70,7 +78,11 @@ impl JwtManager {
             .map_err(|e| anyhow!("JWT encode failed: {e}"))
     }
 
-    #[allow(clippy::missing_errors_doc)]
+    /// Verifies a JWT and returns the decoded claims.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the token is invalid, expired, or has an invalid signature.
     pub fn verify(&self, token: &str) -> Result<Claims> {
         let data = decode::<Claims>(
             token,
@@ -81,7 +93,11 @@ impl JwtManager {
         Ok(data.claims)
     }
 
-    #[allow(clippy::missing_errors_doc)]
+    /// Verifies a JWT and checks it against the revocation list.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the token is invalid, expired, or has been revoked.
     pub async fn verify_with_revocation(&self, token: &str) -> Result<Claims> {
         let claims = self.verify(token)?;
         let revocation = self.revocation.read().await;

@@ -171,7 +171,11 @@ impl TrustDecayWorker {
         Self::new(store, Duration::from_secs(3600), Duration::from_secs(3600))
     }
 
-    #[allow(clippy::missing_errors_doc)]
+    /// Runs a single trust decay cycle, degrading all stored trust scores.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if listing, getting, or setting trust scores fails.
     pub async fn run_once(&self) -> anyhow::Result<usize> {
         let ids = self.store.list_ids().await?;
         let mut decayed = 0;

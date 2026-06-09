@@ -413,6 +413,8 @@ where
             .assign_role(&subject, role_name)
             .await?;
 
+        self.register_rate_limiter.reset(username).await;
+
         Ok(user.to_public())
     }
 
@@ -662,4 +664,211 @@ pub trait UserDatabase: Send + Sync + Clone + 'static {
     async fn delete_user(&self, id: &Uuid) -> Result<bool>;
     async fn list_users(&self) -> Result<Vec<UserRecord>>;
     async fn count_users(&self) -> Result<u64>;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_validate_username_valid() {
+        assert!(validate_username("alice").is_ok());
+        assert!(validate_username("bob_123").is_ok());
+        assert!(validate_username("user.name").is_ok());
+        assert!(validate_username("a-b").is_ok());
+    }
+
+    #[test]
+    fn test_validate_username_too_short() {
+        assert!(validate_username("a").is_err());
+        assert!(validate_username("").is_err());
+    }
+
+    #[test]
+    fn test_validate_username_too_long() {
+        let long = "a".repeat(65);
+        assert!(validate_username(&long).is_err());
+    }
+
+    #[test]
+    fn test_validate_username_exactly_max_length() {
+        let max = "a".repeat(64);
+        assert!(validate_username(&max).is_ok());
+    }
+
+    #[test]
+    fn test_validate_username_invalid_chars() {
+        assert!(validate_username("alice bob").is_err());
+        assert!(validate_username("alice@domain").is_err());
+        assert!(validate_username("用户").is_err());
+        assert!(validate_username("user!name").is_err());
+    }
+
+    #[test]
+    fn test_validate_username_whitespace_only() {
+        assert!(validate_username("  ").is_err());
+    }
+
+    #[test]
+    fn test_validate_username_trimmed() {
+        assert!(validate_username("  ab  ").is_ok());
+    }
+
+    #[test]
+    fn test_validate_password_valid() {
+        assert!(validate_password("Password1!").is_ok());
+        assert!(validate_password("Abcdefg1").is_ok());
+        assert!(validate_password("HELLOworld123!").is_ok());
+    }
+
+    #[test]
+    fn test_validate_password_too_short() {
+        assert!(validate_password("Ab1!").is_err());
+    }
+
+    #[test]
+    fn test_validate_password_exactly_8() {
+        assert!(validate_password("Abcd123!").is_ok());
+    }
+
+    #[test]
+    fn test_validate_password_too_long() {
+        let long = "Aa1!".repeat(33);
+        assert!(validate_password(&long).is_err());
+    }
+
+    #[test]
+    fn test_validate_password_exactly_max() {
+        let max = "A".repeat(96) + "a1!";
+        assert!(validate_password(&max).is_ok());
+    }
+
+    #[test]
+    fn test_validate_password_only_two_categories() {
+        assert!(validate_password("abcdefgh").is_err());
+        assert!(validate_password("ABCDEFGH").is_err());
+        assert!(validate_password("12345678").is_err());
+        assert!(validate_password("abcdABCD").is_err());
+        assert!(validate_password("abcd1234").is_err());
+        assert!(validate_password("ABCD1234").is_err());
+    }
+
+    #[test]
+    fn test_validate_password_exactly_three_categories() {
+        assert!(validate_password("ABCDefgh1").is_ok());
+        assert!(validate_password("Abcd1234").is_ok());
+        assert!(validate_password("abcd123!").is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_rate_limiter_allows_under_max() {
+        let limiter = LoginRateLimiter::new(3, 300, 900);
+        assert!(limiter.check_and_record_failure("user").await.is_ok());
+        assert!(limiter.check_and_record_failure("user").await.is_ok());
+        assert!(limiter.check_and_record_failure("user").await.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_rate_limiter_blocks_at_max() {
+        let limiter = LoginRateLimiter::new(3, 300, 900);
+        limiter.check_and_record_failure("user").await.unwrap();
+        limiter.check_and_record_failure("user").await.unwrap();
+        limiter.check_and_record_failure("user").await.unwrap();
+        assert!(limiter.check_and_record_failure("user").await.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_rate_limiter_independent_keys() {
+        let limiter = LoginRateLimiter::new(2, 300, 900);
+        limiter.check_and_record_failure("user-a").await.unwrap();
+        limiter.check_and_record_failure("user-a").await.unwrap();
+        assert!(limiter.check_and_record_failure("user-a").await.is_err());
+        assert!(limiter.check_and_record_failure("user-b").await.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_rate_limiter_reset() {
+        let limiter = LoginRateLimiter::new(2, 300, 900);
+        limiter.check_and_record_failure("user").await.unwrap();
+        limiter.check_and_record_failure("user").await.unwrap();
+        limiter.reset("user").await;
+        assert!(limiter.check_and_record_failure("user").await.is_ok());
+        assert!(limiter.check_and_record_failure("user").await.is_ok());
+        assert!(limiter.check_and_record_failure("user").await.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_rate_limiter_reset_nonexistent_key() {
+        let limiter = LoginRateLimiter::new(2, 300, 900);
+        limiter.reset("nonexistent").await;
+        assert!(limiter
+            .check_and_record_failure("nonexistent")
+            .await
+            .is_ok());
+    }
+
+    #[test]
+    fn test_build_default_engine_roles() {
+        let engine = build_default_engine();
+        let reg = engine.role_registry();
+        assert!(reg.get_role("admin").is_some());
+        assert!(reg.get_role("operator").is_some());
+        assert!(reg.get_role("viewer").is_some());
+        assert!(reg.get_role("agent").is_some());
+        assert!(reg.get_role("nonexistent").is_none());
+    }
+
+    #[test]
+    fn test_build_default_engine_admin_has_all_perms() {
+        let engine = build_default_engine();
+        let admin = engine.role_registry().get_role("admin").unwrap();
+        assert_eq!(admin.permissions().len(), KirinoPermission::all().len());
+    }
+
+    #[test]
+    fn test_build_default_engine_viewer_is_read_only() {
+        let engine = build_default_engine();
+        let viewer = engine.role_registry().get_role("viewer").unwrap();
+        for perm in viewer.permissions() {
+            assert!(
+                perm.name().ends_with("_read"),
+                "viewer should only have read perms, got {}",
+                perm.name()
+            );
+        }
+    }
+
+    #[test]
+    fn test_kirino_permission_all_count() {
+        assert_eq!(KirinoPermission::all().len(), 13);
+    }
+
+    #[test]
+    fn test_kirino_permission_domains() {
+        assert_eq!(KirinoPermission::AgentRead.domain(), "agent");
+        assert_eq!(KirinoPermission::ConfigWrite.domain(), "config");
+        assert_eq!(KirinoPermission::SystemRead.domain(), "system");
+        assert_eq!(KirinoPermission::DeployExecute.domain(), "deploy");
+    }
+
+    #[test]
+    fn test_user_record_to_public() {
+        let id = Uuid::now_v7();
+        let now = Utc::now();
+        let record = UserRecord {
+            id,
+            username: "alice".to_string(),
+            password_hash: "hash".to_string(),
+            display_name: Some("Alice".to_string()),
+            is_active: true,
+            identity: Identity::Basic { id },
+            created_at: now,
+            updated_at: now,
+        };
+        let info = record.to_public();
+        assert_eq!(info.id, id);
+        assert_eq!(info.username, "alice");
+        assert_eq!(info.display_name, Some("Alice".to_string()));
+        assert!(info.is_active);
+    }
 }

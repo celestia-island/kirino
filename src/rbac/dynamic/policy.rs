@@ -31,7 +31,12 @@ impl DynamicPolicy {
             })
     }
 
-    #[allow(clippy::missing_errors_doc)]
+    /// Validates the policy configuration.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Err(description)` if dimension weights do not sum to ~1.0 or
+    /// any weight is outside [0, 1].
     pub fn validate(&self) -> Result<(), String> {
         let w: f64 = self.dimension_weights.iter().sum();
         if (w - 1.0).abs() > 0.05 {
