@@ -134,11 +134,13 @@ where
                 }
             }
             Err(e) => {
-                tracing::warn!(target: "kirino::rbac::engine",
+                tracing::error!(target: "kirino::rbac::engine",
                     subject = %subject.subject_id(),
                     error = %e,
-                    "failed to query extra permissions"
+                    "failed to query extra permissions — denying access"
                 );
+                self.cache.set(subject, permission, false).await;
+                return false;
             }
         }
 
@@ -237,10 +239,21 @@ where
             }
         }
 
-        if let Ok(extra) = self.assignment_store.extra_permissions(subject).await {
-            if extra.contains(permission) {
-                self.cache.set(subject, permission, true).await;
-                return true;
+        match self.assignment_store.extra_permissions(subject).await {
+            Ok(extra) => {
+                if extra.contains(permission) {
+                    self.cache.set(subject, permission, true).await;
+                    return true;
+                }
+            }
+            Err(e) => {
+                tracing::error!(target: "kirino::rbac::engine",
+                    subject = %subject.subject_id(),
+                    error = %e,
+                    "failed to query extra permissions — denying access"
+                );
+                self.cache.set(subject, permission, false).await;
+                return false;
             }
         }
 
@@ -824,6 +837,72 @@ mod tests {
             FailingAssignmentStore,
         );
         let user = TestSubject("user".to_string());
+        assert!(!engine.check(&user, &TestPerm::Read).await);
+    }
+
+    struct ExtraOnlyFailingStore(InMemoryAssignmentStore<TestSubject, TestPerm>);
+
+    #[async_trait::async_trait]
+    impl AssignmentStore<TestSubject, TestPerm> for ExtraOnlyFailingStore {
+        async fn assign_role(&self, subject: &TestSubject, role: &str) -> anyhow::Result<()> {
+            self.0.assign_role(subject, role).await
+        }
+        async fn revoke_role(&self, subject: &TestSubject, role: &str) -> anyhow::Result<()> {
+            self.0.revoke_role(subject, role).await
+        }
+        async fn roles_of(&self, subject: &TestSubject) -> anyhow::Result<Vec<String>> {
+            self.0.roles_of(subject).await
+        }
+        async fn subjects_with_role(&self, role: &str) -> anyhow::Result<Vec<String>> {
+            self.0.subjects_with_role(role).await
+        }
+        async fn extra_permissions(&self, _: &TestSubject) -> anyhow::Result<HashSet<TestPerm>> {
+            Err(anyhow::anyhow!("extra store error"))
+        }
+        async fn set_extra_permissions(
+            &self,
+            subject: &TestSubject,
+            perms: HashSet<TestPerm>,
+        ) -> anyhow::Result<()> {
+            self.0.set_extra_permissions(subject, perms).await
+        }
+        async fn denied_permissions(&self, subject: &TestSubject) -> anyhow::Result<HashSet<TestPerm>> {
+            self.0.denied_permissions(subject).await
+        }
+        async fn set_denied_permissions(
+            &self,
+            subject: &TestSubject,
+            perms: HashSet<TestPerm>,
+        ) -> anyhow::Result<()> {
+            self.0.set_denied_permissions(subject, perms).await
+        }
+    }
+
+    #[tokio::test]
+    async fn test_deny_on_extra_permissions_store_error() {
+        let mut role_reg = StaticRoleRegistry::new();
+        role_reg.register(SimpleRole::new(
+            "viewer",
+            [TestPerm::Read].into_iter().collect(),
+        ));
+        let perm_reg = StaticPermissionRegistry::new(
+            [TestPerm::Read].into_iter().collect(),
+        );
+
+        let engine = RbacEngine::<
+            TestSubject,
+            TestPerm,
+            SimpleRole<TestPerm>,
+            ExtraOnlyFailingStore,
+        >::new(role_reg, perm_reg, ExtraOnlyFailingStore(InMemoryAssignmentStore::new()));
+
+        let user = TestSubject("user".to_string());
+        engine
+            .assignment_store()
+            .assign_role(&user, "viewer")
+            .await
+            .unwrap();
+
         assert!(!engine.check(&user, &TestPerm::Read).await);
     }
 
