@@ -116,11 +116,13 @@ where
                 }
             }
             Err(e) => {
-                tracing::warn!(target: "kirino::rbac::engine",
+                tracing::error!(target: "kirino::rbac::engine",
                     subject = %subject.subject_id(),
                     error = %e,
-                    "failed to query denied permissions"
+                    "failed to query denied permissions — denying access"
                 );
+                self.cache.set(subject, permission, false);
+                return false;
             }
         }
 
@@ -217,8 +219,19 @@ where
             return granted;
         }
 
-        if let Ok(denied) = self.assignment_store.denied_permissions(subject).await {
-            if denied.contains(permission) {
+        match self.assignment_store.denied_permissions(subject).await {
+            Ok(denied) => {
+                if denied.contains(permission) {
+                    self.cache.set(subject, permission, false);
+                    return false;
+                }
+            }
+            Err(e) => {
+                tracing::error!(target: "kirino::rbac::engine",
+                    subject = %subject.subject_id(),
+                    error = %e,
+                    "failed to query denied permissions — denying access"
+                );
                 self.cache.set(subject, permission, false);
                 return false;
             }
@@ -719,6 +732,126 @@ mod tests {
             .await
             .unwrap();
 
+        assert!(!engine.check(&user, &TestPerm::Write).await);
+    }
+
+    struct FailingAssignmentStore;
+
+    #[async_trait::async_trait]
+    impl AssignmentStore<TestSubject, TestPerm> for FailingAssignmentStore {
+        async fn assign_role(&self, _: &TestSubject, _: &str) -> anyhow::Result<()> {
+            Ok(())
+        }
+        async fn revoke_role(&self, _: &TestSubject, _: &str) -> anyhow::Result<()> {
+            Ok(())
+        }
+        async fn roles_of(&self, _: &TestSubject) -> anyhow::Result<Vec<String>> {
+            Err(anyhow::anyhow!("store error"))
+        }
+        async fn subjects_with_role(&self, _: &str) -> anyhow::Result<Vec<String>> {
+            Ok(vec![])
+        }
+        async fn extra_permissions(&self, _: &TestSubject) -> anyhow::Result<HashSet<TestPerm>> {
+            Err(anyhow::anyhow!("store error"))
+        }
+        async fn set_extra_permissions(
+            &self,
+            _: &TestSubject,
+            _: HashSet<TestPerm>,
+        ) -> anyhow::Result<()> {
+            Ok(())
+        }
+        async fn denied_permissions(&self, _: &TestSubject) -> anyhow::Result<HashSet<TestPerm>> {
+            Err(anyhow::anyhow!("store error"))
+        }
+        async fn set_denied_permissions(
+            &self,
+            _: &TestSubject,
+            _: HashSet<TestPerm>,
+        ) -> anyhow::Result<()> {
+            Ok(())
+        }
+    }
+
+    struct DeniedOnlyFailingStore(InMemoryAssignmentStore<TestSubject, TestPerm>);
+
+    #[async_trait::async_trait]
+    impl AssignmentStore<TestSubject, TestPerm> for DeniedOnlyFailingStore {
+        async fn assign_role(&self, subject: &TestSubject, role: &str) -> anyhow::Result<()> {
+            self.0.assign_role(subject, role).await
+        }
+        async fn revoke_role(&self, subject: &TestSubject, role: &str) -> anyhow::Result<()> {
+            self.0.revoke_role(subject, role).await
+        }
+        async fn roles_of(&self, subject: &TestSubject) -> anyhow::Result<Vec<String>> {
+            self.0.roles_of(subject).await
+        }
+        async fn subjects_with_role(&self, role: &str) -> anyhow::Result<Vec<String>> {
+            self.0.subjects_with_role(role).await
+        }
+        async fn extra_permissions(&self, subject: &TestSubject) -> anyhow::Result<HashSet<TestPerm>> {
+            self.0.extra_permissions(subject).await
+        }
+        async fn set_extra_permissions(
+            &self,
+            subject: &TestSubject,
+            perms: HashSet<TestPerm>,
+        ) -> anyhow::Result<()> {
+            self.0.set_extra_permissions(subject, perms).await
+        }
+        async fn denied_permissions(&self, _: &TestSubject) -> anyhow::Result<HashSet<TestPerm>> {
+            Err(anyhow::anyhow!("denied store error"))
+        }
+        async fn set_denied_permissions(
+            &self,
+            subject: &TestSubject,
+            perms: HashSet<TestPerm>,
+        ) -> anyhow::Result<()> {
+            self.0.set_denied_permissions(subject, perms).await
+        }
+    }
+
+    #[tokio::test]
+    async fn test_deny_on_denied_permissions_store_error() {
+        let engine = RbacEngine::<
+            TestSubject,
+            TestPerm,
+            SimpleRole<TestPerm>,
+            FailingAssignmentStore,
+        >::new(
+            StaticRoleRegistry::<SimpleRole<TestPerm>, TestPerm>::new(),
+            StaticPermissionRegistry::new(HashSet::new()),
+            FailingAssignmentStore,
+        );
+        let user = TestSubject("user".to_string());
+        assert!(!engine.check(&user, &TestPerm::Read).await);
+    }
+
+    #[tokio::test]
+    async fn test_deny_on_denied_permissions_store_error_with_role() {
+        let mut role_reg = StaticRoleRegistry::new();
+        role_reg.register(SimpleRole::new(
+            "admin",
+            [TestPerm::Read, TestPerm::Write].into_iter().collect(),
+        ));
+        let perm_reg = StaticPermissionRegistry::new(
+            [TestPerm::Read, TestPerm::Write].into_iter().collect(),
+        );
+
+        let engine = RbacEngine::<
+            TestSubject,
+            TestPerm,
+            SimpleRole<TestPerm>,
+            DeniedOnlyFailingStore,
+        >::new(role_reg, perm_reg, DeniedOnlyFailingStore(InMemoryAssignmentStore::new()));
+        let user = TestSubject("user".to_string());
+        engine
+            .assignment_store()
+            .assign_role(&user, "admin")
+            .await
+            .unwrap();
+
+        assert!(!engine.check(&user, &TestPerm::Read).await);
         assert!(!engine.check(&user, &TestPerm::Write).await);
     }
 }
