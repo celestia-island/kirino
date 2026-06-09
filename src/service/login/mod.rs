@@ -48,7 +48,7 @@ const MAX_PASSWORD_LEN: usize = 128;
 const MIN_USERNAME_LEN: usize = 2;
 const MAX_USERNAME_LEN: usize = 64;
 
-pub fn validate_username(username: &str) -> Result<()> {
+pub fn validate_username(username: &str) -> Result<String> {
     let trimmed = username.trim();
     if trimmed.is_empty() || trimmed.len() < MIN_USERNAME_LEN {
         return Err(anyhow!(
@@ -68,7 +68,7 @@ pub fn validate_username(username: &str) -> Result<()> {
             "username may only contain alphanumeric characters, underscores, hyphens, and dots"
         ));
     }
-    Ok(())
+    Ok(trimmed.to_string())
 }
 
 pub fn validate_password(password: &str) -> Result<()> {
@@ -83,10 +83,10 @@ pub fn validate_password(password: &str) -> Result<()> {
         ));
     }
 
-    let has_uppercase = password.chars().any(|c| c.is_ascii_uppercase());
-    let has_lowercase = password.chars().any(|c| c.is_ascii_lowercase());
+    let has_uppercase = password.chars().any(|c| c.is_uppercase());
+    let has_lowercase = password.chars().any(|c| c.is_lowercase());
     let has_digit = password.chars().any(|c| c.is_ascii_digit());
-    let has_special = password.chars().any(|c| !c.is_ascii_alphanumeric());
+    let has_special = password.chars().any(|c| !c.is_alphanumeric());
 
     let categories = [has_uppercase, has_lowercase, has_digit, has_special]
         .iter()
@@ -371,14 +371,14 @@ where
         password: &str,
         display_name: Option<&str>,
     ) -> Result<UserInfo> {
-        self.register_rate_limiter
-            .check_and_record_failure(username)
-            .await?;
+        let username = validate_username(username)?;
 
-        validate_username(username)?;
+        self.register_rate_limiter
+            .check_and_record_failure(&username)
+            .await?;
         validate_password(password)?;
 
-        if self.db.find_by_username(username).await?.is_some() {
+        if self.db.find_by_username(&username).await?.is_some() {
             return Err(anyhow!("registration failed"));
         }
 
@@ -389,7 +389,7 @@ where
 
         let user = UserRecord {
             id: user_id,
-            username: username.to_string(),
+            username: username.clone(),
             password_hash,
             display_name: display_name.map(ToString::to_string),
             is_active: true,
@@ -413,7 +413,7 @@ where
             .assign_role(&subject, role_name)
             .await?;
 
-        self.register_rate_limiter.reset(username).await;
+        self.register_rate_limiter.reset(&username).await;
 
         Ok(user.to_public())
     }
@@ -422,6 +422,7 @@ where
         "$argon2id$v=19$m=19456,t=2,p=1$dummy salts are not used$dummyhashvaluethatisnotused";
 
     pub async fn login(&self, username: &str, password: &str) -> Result<LoginResult> {
+        let username = username.trim();
         self.rate_limiter.check_and_record_failure(username).await?;
 
         let user = match self.db.find_by_username(username).await? {
@@ -672,10 +673,10 @@ mod tests {
 
     #[test]
     fn test_validate_username_valid() {
-        assert!(validate_username("alice").is_ok());
-        assert!(validate_username("bob_123").is_ok());
-        assert!(validate_username("user.name").is_ok());
-        assert!(validate_username("a-b").is_ok());
+        assert_eq!(validate_username("alice").unwrap(), "alice");
+        assert_eq!(validate_username("bob_123").unwrap(), "bob_123");
+        assert_eq!(validate_username("user.name").unwrap(), "user.name");
+        assert_eq!(validate_username("a-b").unwrap(), "a-b");
     }
 
     #[test]
@@ -711,7 +712,7 @@ mod tests {
 
     #[test]
     fn test_validate_username_trimmed() {
-        assert!(validate_username("  ab  ").is_ok());
+        assert_eq!(validate_username("  ab  ").unwrap(), "ab");
     }
 
     #[test]
@@ -758,6 +759,26 @@ mod tests {
         assert!(validate_password("ABCDefgh1").is_ok());
         assert!(validate_password("Abcd1234").is_ok());
         assert!(validate_password("abcd123!").is_ok());
+    }
+
+    #[test]
+    fn test_validate_password_unicode_uppercase_lowercase() {
+        assert!(validate_password("Élève1!").is_ok(), "French accented chars should work");
+        assert!(validate_password("ÜberCafé1!").is_ok(), "German umlauts should work");
+        assert!(validate_password("Niño123!").is_ok(), "Spanish tilde should work");
+        assert!(validate_password("中文密码A1!").is_ok(), "CJK + ascii uppercase + digit + special");
+    }
+
+    #[test]
+    fn test_validate_password_unicode_all_one_category() {
+        assert!(validate_password("abcdefgh").is_err(), "only lowercase fails");
+        assert!(validate_password("ÉÉÉÉÉÉÉÉ").is_err(), "only unicode uppercase fails");
+        assert!(validate_password("汉字汉字汉字汉字").is_err(), "only CJK fails");
+    }
+
+    #[test]
+    fn test_validate_password_unicode_with_special() {
+        assert!(validate_password("Passエンド1!").is_ok(), "mixed ascii + CJK + special");
     }
 
     #[tokio::test]
