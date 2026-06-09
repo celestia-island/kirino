@@ -1,9 +1,10 @@
 use std::{
     collections::HashMap,
     marker::PhantomData,
-    sync::RwLock,
     time::{Duration, Instant},
 };
+
+use tokio::sync::RwLock;
 
 use super::traits::{Permission, Subject};
 
@@ -58,16 +59,17 @@ where
             subject.subject_id().to_string(),
             permission.name().to_string(),
         );
-        let Ok(cache) = self.cache.read() else {
-            return None;
-        };
-        cache.get(&key).and_then(|entry| {
-            if Instant::now() < entry.expires_at {
-                Some(entry.granted)
-            } else {
-                None
-            }
-        })
+        let cache = self.cache.try_read();
+        match cache {
+            Ok(cache) => cache.get(&key).and_then(|entry| {
+                if Instant::now() < entry.expires_at {
+                    Some(entry.granted)
+                } else {
+                    None
+                }
+            }),
+            Err(_) => None,
+        }
     }
 
     fn set(&self, subject: &S, permission: &P, granted: bool) {
@@ -75,7 +77,7 @@ where
             subject.subject_id().to_string(),
             permission.name().to_string(),
         );
-        if let Ok(mut cache) = self.cache.write() {
+        if let Ok(mut cache) = self.cache.try_write() {
             cache.insert(
                 key,
                 CacheEntry {
@@ -88,13 +90,13 @@ where
 
     fn invalidate_subject(&self, subject: &S) {
         let sid = subject.subject_id().to_string();
-        if let Ok(mut cache) = self.cache.write() {
+        if let Ok(mut cache) = self.cache.try_write() {
             cache.retain(|(s, _), _| s != &sid);
         }
     }
 
     fn invalidate_all(&self) {
-        if let Ok(mut cache) = self.cache.write() {
+        if let Ok(mut cache) = self.cache.try_write() {
             cache.clear();
         }
     }
@@ -104,68 +106,136 @@ where
 mod tests {
     use super::*;
 
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-    struct TestPerm(&'static str);
+    #[derive(Debug, Clone, PartialEq, Eq, Hash)]
+    struct TestPerm {
+        name: String,
+    }
 
     impl Permission for TestPerm {
         fn name(&self) -> &str {
-            self.0
+            &self.name
         }
     }
 
     #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-    struct TestSubject(String);
+    struct TestSubject {
+        id: String,
+    }
 
     impl Subject for TestSubject {
         fn subject_id(&self) -> &str {
-            &self.0
+            &self.id
         }
     }
 
     #[test]
     fn test_cache_set_and_get() {
-        let cache = TtlPermissionCache::<TestSubject, TestPerm>::new(Duration::from_secs(60));
-        let subj = TestSubject("user1".to_string());
-        let perm = TestPerm("read");
+        let cache = TtlPermissionCache::new(Duration::from_secs(300));
+        let subject = TestSubject {
+            id: "user1".to_string(),
+        };
+        let perm = TestPerm {
+            name: "read".to_string(),
+        };
 
-        assert!(cache.get(&subj, &perm).is_none());
-        cache.set(&subj, &perm, true);
-        assert_eq!(cache.get(&subj, &perm), Some(true));
+        assert_eq!(cache.get(&subject, &perm), None);
+
+        cache.set(&subject, &perm, true);
+        assert_eq!(cache.get(&subject, &perm), Some(true));
     }
 
     #[test]
     fn test_cache_ttl_expiry() {
-        let cache = TtlPermissionCache::<TestSubject, TestPerm>::new(Duration::from_millis(1));
-        let subj = TestSubject("user1".to_string());
-        let perm = TestPerm("read");
+        let cache = TtlPermissionCache::new(Duration::from_millis(10));
+        let subject = TestSubject {
+            id: "user1".to_string(),
+        };
+        let perm = TestPerm {
+            name: "read".to_string(),
+        };
 
-        cache.set(&subj, &perm, true);
-        std::thread::sleep(Duration::from_millis(5));
-        assert!(cache.get(&subj, &perm).is_none());
+        cache.set(&subject, &perm, true);
+        assert_eq!(cache.get(&subject, &perm), Some(true));
+
+        std::thread::sleep(Duration::from_millis(20));
+        assert_eq!(cache.get(&subject, &perm), None);
     }
 
     #[test]
     fn test_cache_invalidate_subject() {
-        let cache = TtlPermissionCache::<TestSubject, TestPerm>::new(Duration::from_secs(60));
-        let u1 = TestSubject("user1".to_string());
-        let u2 = TestSubject("user2".to_string());
-        let perm = TestPerm("read");
+        let cache = TtlPermissionCache::new(Duration::from_secs(300));
+        let subject1 = TestSubject {
+            id: "user1".to_string(),
+        };
+        let subject2 = TestSubject {
+            id: "user2".to_string(),
+        };
+        let perm = TestPerm {
+            name: "read".to_string(),
+        };
 
-        cache.set(&u1, &perm, true);
-        cache.set(&u2, &perm, false);
-        cache.invalidate_subject(&u1);
-        assert!(cache.get(&u1, &perm).is_none());
-        assert_eq!(cache.get(&u2, &perm), Some(false));
+        cache.set(&subject1, &perm, true);
+        cache.set(&subject2, &perm, false);
+
+        cache.invalidate_subject(&subject1);
+        assert_eq!(cache.get(&subject1, &perm), None);
+        assert_eq!(cache.get(&subject2, &perm), Some(false));
     }
 
     #[test]
     fn test_cache_invalidate_all() {
-        let cache = TtlPermissionCache::<TestSubject, TestPerm>::new(Duration::from_secs(60));
-        let subj = TestSubject("user1".to_string());
-        let perm = TestPerm("read");
+        let cache = TtlPermissionCache::new(Duration::from_secs(300));
+        let subject = TestSubject {
+            id: "user1".to_string(),
+        };
+        let perm1 = TestPerm {
+            name: "read".to_string(),
+        };
+        let perm2 = TestPerm {
+            name: "write".to_string(),
+        };
 
-        cache.set(&subj, &perm, true);
+        cache.set(&subject, &perm1, true);
+        cache.set(&subject, &perm2, false);
         cache.invalidate_all();
-        assert!(cache.get(&subj, &perm).is_none());
+        assert_eq!(cache.get(&subject, &perm1), None);
+        assert_eq!(cache.get(&subject, &perm2), None);
+    }
+
+    #[test]
+    fn test_cache_overwrite() {
+        let cache = TtlPermissionCache::new(Duration::from_secs(300));
+        let subject = TestSubject {
+            id: "user1".to_string(),
+        };
+        let perm = TestPerm {
+            name: "read".to_string(),
+        };
+
+        cache.set(&subject, &perm, true);
+        assert_eq!(cache.get(&subject, &perm), Some(true));
+
+        cache.set(&subject, &perm, false);
+        assert_eq!(cache.get(&subject, &perm), Some(false));
+    }
+
+    #[test]
+    fn test_cache_multiple_permissions() {
+        let cache = TtlPermissionCache::new(Duration::from_secs(300));
+        let subject = TestSubject {
+            id: "user1".to_string(),
+        };
+        let read_perm = TestPerm {
+            name: "read".to_string(),
+        };
+        let write_perm = TestPerm {
+            name: "write".to_string(),
+        };
+
+        cache.set(&subject, &read_perm, true);
+        cache.set(&subject, &write_perm, false);
+
+        assert_eq!(cache.get(&subject, &read_perm), Some(true));
+        assert_eq!(cache.get(&subject, &write_perm), Some(false));
     }
 }

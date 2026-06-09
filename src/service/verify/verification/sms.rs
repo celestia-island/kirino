@@ -1,6 +1,3 @@
-#![allow(missing_docs)]
-#![allow(clippy::missing_errors_doc)]
-
 use anyhow::Result;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -8,6 +5,8 @@ use std::time::Duration;
 use tokio::sync::RwLock;
 
 use rand::Rng;
+
+use crate::utils::constant_time_eq;
 
 pub struct SmsVerifier {
     sender: String,
@@ -47,16 +46,7 @@ impl SmsVerifier {
         let mut codes = self.codes.write().await;
         if let Some(pending) = codes.remove(phone) {
             if std::time::Instant::now() < pending.expires_at {
-                let a = pending.code.as_bytes();
-                let b = code.as_bytes();
-                if a.len() != b.len() {
-                    return Ok(false);
-                }
-                let mut diff = 0u8;
-                for (x, y) in a.iter().zip(b.iter()) {
-                    diff |= x ^ y;
-                }
-                return Ok(diff == 0);
+                return Ok(constant_time_eq(pending.code.as_bytes(), code.as_bytes()));
             }
         }
         Ok(false)
@@ -93,5 +83,29 @@ mod tests {
     async fn test_unknown_phone() {
         let v = SmsVerifier::new("+1234567890".to_string());
         assert!(!v.verify_code("+0000000000", "123456").await.unwrap());
+    }
+
+    #[test]
+    fn test_generate_code_length() {
+        let code = SmsVerifier::generate_code(6);
+        assert_eq!(code.len(), 6);
+        assert!(code.chars().all(|c| c.is_ascii_digit()));
+    }
+
+    #[tokio::test]
+    async fn test_code_single_use() {
+        let v = SmsVerifier::new("+1234567890".to_string());
+        v.send_code("+1111111111", "123456").await.unwrap();
+        assert!(v.verify_code("+1111111111", "123456").await.unwrap());
+        assert!(!v.verify_code("+1111111111", "123456").await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn test_multiple_phones() {
+        let v = SmsVerifier::new("+1234567890".to_string());
+        v.send_code("+111", "111111").await.unwrap();
+        v.send_code("+222", "222222").await.unwrap();
+        assert!(v.verify_code("+111", "111111").await.unwrap());
+        assert!(v.verify_code("+222", "222222").await.unwrap());
     }
 }

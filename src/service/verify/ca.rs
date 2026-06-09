@@ -1,7 +1,6 @@
-#![allow(missing_docs)]
-#![allow(clippy::missing_errors_doc)]
-
 use anyhow::{anyhow, Result};
+
+use crate::utils::base64;
 
 pub struct CertificateAuthorityVerifier;
 
@@ -29,7 +28,7 @@ impl CertificateAuthorityVerifier {
             .trim_end_matches("-----END CERTIFICATE-----")
             .trim();
 
-        let decoded = base64_decode(b64_body)?;
+        let decoded = base64::decode(b64_body);
         if decoded.len() < 32 {
             return Err(anyhow!("certificate data too short"));
         }
@@ -66,43 +65,9 @@ fn extract_issuer(data: &[u8]) -> String {
         .to_string()
 }
 
-fn base64_decode(input: &str) -> Result<Vec<u8>> {
-    let lookup: [u8; 256] = {
-        let mut table = [0xFFu8; 256];
-        for (i, c) in "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
-            .as_bytes()
-            .iter()
-            .enumerate()
-        {
-            table[*c as usize] = i as u8;
-        }
-        table
-    };
-    let bytes = input.as_bytes();
-    let mut result = Vec::with_capacity(bytes.len() * 3 / 4);
-    let mut accum: u32 = 0;
-    let mut bits: u32 = 0;
-    for &b in bytes {
-        if b == b'=' || b == b'\n' || b == b'\r' || b == b' ' {
-            continue;
-        }
-        let val = lookup[b as usize];
-        if val == 0xFF {
-            continue;
-        }
-        accum = (accum << 6) | val as u32;
-        bits += 6;
-        if bits >= 8 {
-            bits -= 8;
-            result.push((accum >> bits) as u8);
-        }
-    }
-    Ok(result)
-}
-
 impl Default for CertificateAuthorityVerifier {
     fn default() -> Self {
-        Self
+        Self::new()
     }
 }
 
@@ -135,6 +100,22 @@ mod tests {
         let pem = format!("-----BEGIN CERTIFICATE-----\n{body}\n-----END CERTIFICATE-----");
         let info = v.verify_certificate(&pem).unwrap();
         assert!(info.is_valid);
+    }
+
+    #[test]
+    fn test_too_short_cert() {
+        let v = CertificateAuthorityVerifier::new();
+        let body = standard_base64_encode(&[0x30; 16]);
+        let pem = format!("-----BEGIN CERTIFICATE-----\n{body}\n-----END CERTIFICATE-----");
+        assert!(v.verify_certificate(&pem).is_err());
+    }
+
+    #[test]
+    fn test_missing_end_marker() {
+        let v = CertificateAuthorityVerifier::new();
+        let body = standard_base64_encode(&[0x30; 64]);
+        let pem = format!("-----BEGIN CERTIFICATE-----\n{body}");
+        assert!(v.verify_certificate(&pem).is_err());
     }
 
     fn standard_base64_encode(data: &[u8]) -> String {

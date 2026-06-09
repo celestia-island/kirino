@@ -1,7 +1,6 @@
-#![allow(missing_docs)]
-#![allow(clippy::missing_errors_doc)]
-
 use anyhow::{anyhow, Result};
+
+use crate::utils::base64;
 
 pub struct SsoVerifier {
     provider: String,
@@ -31,15 +30,7 @@ impl SsoVerifier {
         let parts: Vec<&str> = token.split('.').collect();
         let payload_b64 = parts.get(1).ok_or_else(|| anyhow!("malformed JWT"))?;
 
-        let padded = {
-            let mut s = payload_b64.replace('-', "+").replace('_', "/");
-            let pad = (4 - s.len() % 4) % 4;
-            for _ in 0..pad {
-                s.push('=');
-            }
-            s
-        };
-        let decoded = standard_base64_decode(&padded)?;
+        let decoded = base64::decode_url_safe(payload_b64);
         let payload_str =
             String::from_utf8(decoded).map_err(|_| anyhow!("invalid UTF-8 in SSO payload"))?;
         let payload: serde_json::Value =
@@ -57,40 +48,6 @@ impl SsoVerifier {
             provider: self.provider.clone(),
         })
     }
-}
-
-fn standard_base64_decode(input: &str) -> Result<Vec<u8>> {
-    let lookup: [u8; 256] = {
-        let mut table = [0xFFu8; 256];
-        for (i, c) in "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
-            .as_bytes()
-            .iter()
-            .enumerate()
-        {
-            table[*c as usize] = i as u8;
-        }
-        table
-    };
-    let bytes = input.as_bytes();
-    let mut result = Vec::with_capacity(bytes.len() * 3 / 4);
-    let mut accum: u32 = 0;
-    let mut bits: u32 = 0;
-    for &b in bytes {
-        if b == b'=' {
-            break;
-        }
-        let val = lookup[b as usize];
-        if val == 0xFF {
-            continue;
-        }
-        accum = (accum << 6) | val as u32;
-        bits += 6;
-        if bits >= 8 {
-            bits -= 8;
-            result.push((accum >> bits) as u8);
-        }
-    }
-    Ok(result)
 }
 
 pub struct SsoClaims {
@@ -113,5 +70,32 @@ mod tests {
     fn test_opaque_token_not_supported() {
         let v = SsoVerifier::new("test".to_string());
         assert!(v.verify("opaque-token").is_err());
+    }
+
+    fn make_jwt_payload(sub: &str, email: Option<&str>) -> String {
+        let mut json = format!(r#"{{"sub":"{sub}""#);
+        if let Some(e) = email {
+            json.push_str(&format!(r#","email":"{e}""#));
+        }
+        json.push('}');
+        let b64 = crate::utils::base64::decode_url_free_encode(json.as_bytes());
+        format!("header.{b64}.signature")
+    }
+
+    #[test]
+    fn test_jwt_sso_extracts_claims() {
+        let v = SsoVerifier::new("test".to_string());
+        let token = make_jwt_payload("user-1", Some("user@example.com"));
+        let claims = v.verify(&token).unwrap();
+        assert_eq!(claims.user_id, "user-1");
+        assert_eq!(claims.email, Some("user@example.com".to_string()));
+    }
+
+    #[test]
+    fn test_jwt_sso_missing_sub() {
+        let payload = crate::utils::base64::decode_url_free_encode(b"{\"email\":\"a@b.com\"}");
+        let token = format!("header.{payload}.sig");
+        let v = SsoVerifier::new("test".to_string());
+        assert!(v.verify(&token).is_err());
     }
 }

@@ -1,7 +1,6 @@
-#![allow(missing_docs)]
-#![allow(clippy::missing_errors_doc)]
-
 use anyhow::{anyhow, Result};
+
+use crate::utils::base64;
 
 pub struct OAuthVerifier {
     provider: String,
@@ -29,11 +28,9 @@ impl OAuthVerifier {
     }
 
     fn verify_jwt_token(&self, token: &str) -> Result<OAuthClaims> {
-        use base64_or_hex_decode;
-
         let parts: Vec<&str> = token.split('.').collect();
         let payload_b64 = parts.get(1).ok_or_else(|| anyhow!("malformed JWT"))?;
-        let payload_bytes = base64_or_hex_decode(payload_b64)?;
+        let payload_bytes = base64::decode_url_safe(payload_b64);
         let payload_str =
             String::from_utf8(payload_bytes).map_err(|_| anyhow!("invalid UTF-8 in payload"))?;
         let payload: serde_json::Value =
@@ -74,63 +71,11 @@ impl OAuthVerifier {
     }
 }
 
+#[derive(Debug)]
 pub struct OAuthClaims {
     pub sub: String,
     pub email: Option<String>,
     pub name: Option<String>,
-}
-
-fn base64_or_hex_decode(input: &str) -> Result<Vec<u8>> {
-    let padded = {
-        let mut s = input.replace('-', "+").replace('_', "/");
-        let pad = (4 - s.len() % 4) % 4;
-        for _ in 0..pad {
-            s.push('=');
-        }
-        s
-    };
-    use std::io::Read;
-    let mut decoder = base64_decode_stream(&padded);
-    let mut result = Vec::new();
-    decoder
-        .read_to_end(&mut result)
-        .map_err(|e| anyhow!("base64 decode failed: {e}"))?;
-    Ok(result)
-}
-
-fn base64_decode_stream(input: &str) -> impl std::io::Read {
-    let lookup: [u8; 256] = {
-        let mut table = [0xFFu8; 256];
-        for (i, c) in "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
-            .as_bytes()
-            .iter()
-            .enumerate()
-        {
-            table[*c as usize] = i as u8;
-        }
-        table
-    };
-
-    let bytes = input.as_bytes();
-    let mut decoded = Vec::with_capacity(bytes.len() * 3 / 4);
-    let mut accum: u32 = 0;
-    let mut bits: u32 = 0;
-    for &b in bytes {
-        if b == b'=' {
-            break;
-        }
-        let val = lookup[b as usize];
-        if val == 0xFF {
-            continue;
-        }
-        accum = (accum << 6) | val as u32;
-        bits += 6;
-        if bits >= 8 {
-            bits -= 8;
-            decoded.push((accum >> bits) as u8);
-        }
-    }
-    std::io::Cursor::new(decoded)
 }
 
 #[cfg(test)]
@@ -146,6 +91,14 @@ mod tests {
     }
 
     #[test]
+    fn test_authorization_url_github() {
+        let v = OAuthVerifier::new("github".to_string(), "gh-client".to_string());
+        let url = v.authorization_url("/callback", "xyz");
+        assert!(url.contains("github.com"));
+        assert!(url.contains("gh-client"));
+    }
+
+    #[test]
     fn test_authorization_url_generic() {
         let v = OAuthVerifier::new("sso.example.com".to_string(), "cid".to_string());
         let url = v.authorization_url("/callback", "xyz");
@@ -156,5 +109,50 @@ mod tests {
     fn test_verify_empty_token() {
         let v = OAuthVerifier::new("test".to_string(), "cid".to_string());
         assert!(v.verify_token("").is_err());
+    }
+
+    #[test]
+    fn test_verify_opaque_token() {
+        let v = OAuthVerifier::new("test".to_string(), "cid".to_string());
+        let result = v.verify_token("opaque-token-value");
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("opaque"));
+    }
+
+    #[test]
+    fn test_verify_jwt_extracts_claims() {
+        let v = OAuthVerifier::new("test".to_string(), "cid".to_string());
+        let payload = r#"{"sub":"user-1","email":"user@example.com","name":"User One"}"#;
+        let payload_b64 = base64::encode(payload.as_bytes());
+        let token = format!("header.{payload_b64}.signature");
+        let claims = v.verify_token(&token).unwrap();
+        assert_eq!(claims.sub, "user-1");
+        assert_eq!(claims.email, Some("user@example.com".to_string()));
+        assert_eq!(claims.name, Some("User One".to_string()));
+    }
+
+    #[test]
+    fn test_verify_jwt_missing_sub() {
+        let v = OAuthVerifier::new("test".to_string(), "cid".to_string());
+        let payload = r#"{"email":"user@example.com"}"#;
+        let payload_b64 = base64::encode(payload.as_bytes());
+        let token = format!("header.{payload_b64}.signature");
+        assert!(v.verify_token(&token).is_err());
+    }
+
+    #[test]
+    fn test_verify_jwt_invalid_utf8() {
+        let v = OAuthVerifier::new("test".to_string(), "cid".to_string());
+        let payload_b64 = base64::encode(&[0xFF, 0xFE, 0xFD]);
+        let token = format!("header.{payload_b64}.signature");
+        assert!(v.verify_token(&token).is_err());
+    }
+
+    #[test]
+    fn test_verify_jwt_invalid_json() {
+        let v = OAuthVerifier::new("test".to_string(), "cid".to_string());
+        let payload_b64 = base64::encode(b"not json");
+        let token = format!("header.{payload_b64}.signature");
+        assert!(v.verify_token(&token).is_err());
     }
 }

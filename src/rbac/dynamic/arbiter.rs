@@ -348,7 +348,8 @@ impl AuthorizationArbiter {
         };
 
         let mut trust = TrustScore::new(target_trust);
-        trust.confidence = 0.5;
+        trust.confidence = 0.8;
+        trust.evidence_count = 10;
         let _ = self.trust_store.set(delegator_id, trust).await;
 
         let mut detectors = self.detectors.write().await;

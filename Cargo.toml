@@ -41,7 +41,6 @@ uuid = { version = "^1", features = ["serde", "v7"] }
 
 serde = { version = "^1", features = ["derive"] }
 serde_json = "^1"
-strum = { version = "^0.26", features = ["derive"] }
 yuuka = "^0.5"
 
 argon2 = { version = "^0.5", optional = true }
@@ -49,4 +48,5 @@ hmac = "^0.12"
 jsonwebtoken = { version = "9", optional = true }
 rand = "^0.8"
 sha1 = "^0.10"
+sha2 = "^0.10"
 tracing = { version = "^0.1", features = ["log"] }

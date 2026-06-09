@@ -1,9 +1,8 @@
-#![allow(missing_docs)]
-#![allow(clippy::missing_errors_doc)]
-
 use anyhow::Result;
 use hmac::{Hmac, Mac};
 use sha1::Sha1;
+
+use crate::utils::constant_time_eq;
 
 type HmacSha1 = Hmac<Sha1>;
 
@@ -20,6 +19,15 @@ impl TotpVerifier {
             secret,
             digits: 6,
             period_secs: 30,
+        }
+    }
+
+    #[must_use]
+    pub fn with_options(secret: Vec<u8>, digits: u32, period_secs: u32) -> Self {
+        Self {
+            secret,
+            digits,
+            period_secs,
         }
     }
 
@@ -77,17 +85,6 @@ fn format_code(code: u32, digits: u32) -> String {
     format!("{:0>width$}", code, width = digits as usize)
 }
 
-fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
-    if a.len() != b.len() {
-        return false;
-    }
-    let mut diff = 0u8;
-    for (x, y) in a.iter().zip(b.iter()) {
-        diff |= x ^ y;
-    }
-    diff == 0
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -105,7 +102,26 @@ mod tests {
     fn test_totp_wrong_code() {
         let secret = b"test-secret-12345".to_vec();
         let totp = TotpVerifier::new(secret);
-        assert!(!totp.verify("000000").unwrap() || totp.verify("000000").unwrap());
+        let code = totp.generate().unwrap();
+        let wrong = if code == "000000" { "999999" } else { "000000" };
+        assert!(!totp.verify(wrong).unwrap());
+    }
+
+    #[test]
+    fn test_totp_accepts_previous_step() {
+        let secret = b"test-secret-prev-step".to_vec();
+        let totp = TotpVerifier::new(secret);
+        let current = totp.generate().unwrap();
+
+        let time_step = chrono::Utc::now().timestamp() as u64 / 30;
+        let prev_code = {
+            let code = hotp_code(&totp.secret, time_step.saturating_sub(1), 6).unwrap();
+            format_code(code, 6)
+        };
+
+        if current != prev_code {
+            assert!(totp.verify(&prev_code).unwrap());
+        }
     }
 
     #[test]
@@ -121,6 +137,40 @@ mod tests {
     fn test_hotp_wrong_code() {
         let secret = b"test-secret-hotp".to_vec();
         let hotp = HotpVerifier::new(secret, 0);
-        assert!(!hotp.verify("000000").unwrap());
+        let code = hotp_code(&hotp.secret, hotp.counter, 6).unwrap();
+        let formatted = format_code(code, 6);
+        let wrong = if formatted == "000000" {
+            "999999"
+        } else {
+            "000000"
+        };
+        assert!(!hotp.verify(wrong).unwrap());
+    }
+
+    #[test]
+    fn test_hotp_different_counters() {
+        let secret = b"test-secret-counters".to_vec();
+        let hotp0 = HotpVerifier::new(secret.clone(), 0);
+        let hotp1 = HotpVerifier::new(secret, 1);
+
+        let code0 = hotp_code(&hotp0.secret, 0, 6).unwrap();
+        let code1 = hotp_code(&hotp1.secret, 1, 6).unwrap();
+        assert_ne!(format_code(code0, 6), format_code(code1, 6));
+    }
+
+    #[test]
+    fn test_totp_custom_options() {
+        let totp = TotpVerifier::with_options(b"secret".to_vec(), 8, 60);
+        let code = totp.generate().unwrap();
+        assert_eq!(code.len(), 8);
+        assert!(totp.verify(&code).unwrap());
+    }
+
+    #[test]
+    fn test_hotp_deterministic() {
+        let secret = b"deterministic-secret".to_vec();
+        let code_a = hotp_code(&secret, 42, 6).unwrap();
+        let code_b = hotp_code(&secret, 42, 6).unwrap();
+        assert_eq!(code_a, code_b);
     }
 }

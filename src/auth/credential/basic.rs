@@ -126,6 +126,30 @@ mod tests {
         assert!(mgr.verify("garbage.token.here").is_err());
     }
 
+    #[test]
+    fn test_tampered_token() {
+        let mgr = JwtManager::new("test-secret-that-is-at-least-32-bytes-long", 24);
+        let token = mgr.issue("user-1", "alice", vec!["admin".into()]).unwrap();
+        let tampered = format!("{}.TAMPERED.{}", &token[..20], &token[token.len() - 20..]);
+        assert!(mgr.verify(&tampered).is_err());
+    }
+
+    #[test]
+    fn test_secret_too_short_panics() {
+        let result = std::panic::catch_unwind(|| {
+            let _ = JwtManager::new("short", 24);
+        });
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_expiration_hours_minimum_one() {
+        let mgr = JwtManager::new("test-secret-that-is-at-least-32-bytes-long", 0);
+        let token = mgr.issue("u1", "user", vec![]).unwrap();
+        let claims = mgr.verify(&token).unwrap();
+        assert!(claims.exp > claims.iat);
+    }
+
     #[tokio::test]
     async fn test_revoke_all_for_user() {
         let mgr = JwtManager::new("test-secret-that-is-at-least-32-bytes-long", 24);
@@ -160,6 +184,18 @@ mod tests {
         assert!(mgr.verify_with_revocation(&token_b).await.is_ok());
     }
 
+    #[tokio::test]
+    async fn test_cleanup_revocation() {
+        let mgr = JwtManager::new("test-secret-that-is-at-least-32-bytes-long", 24);
+        mgr.revoke_all_for_user("user-1").await;
+        mgr.revoke_all_for_user("user-2").await;
+
+        mgr.cleanup_revocation(0).await;
+
+        let token = mgr.issue("user-1", "alice", vec![]).unwrap();
+        assert!(mgr.verify_with_revocation(&token).await.is_ok());
+    }
+
     #[test]
     fn test_issue_with_permissions_and_session() {
         let mgr = JwtManager::new("test-secret-that-is-at-least-32-bytes-long", 24);
@@ -184,5 +220,17 @@ mod tests {
         let claims = mgr.verify(&token).unwrap();
         assert!(claims.permissions.is_empty());
         assert!(claims.session_id.is_none());
+    }
+
+    #[test]
+    fn test_claims_serializable() {
+        let mgr = JwtManager::new("test-secret-that-is-at-least-32-bytes-long", 24);
+        let token = mgr
+            .issue_with_options("u1", "user", vec!["role".into()], vec!["perm".into()], None)
+            .unwrap();
+        let claims = mgr.verify(&token).unwrap();
+        let json = serde_json::to_string(&claims).unwrap();
+        assert!(json.contains("\"sub\":\"user\""));
+        assert!(json.contains("\"permissions\":[\"perm\"]"));
     }
 }

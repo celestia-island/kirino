@@ -122,7 +122,14 @@ impl TrustScoreStore for InMemoryTrustScoreStore {
     }
 
     async fn sweep_stale(&self, max_age: Duration) -> anyhow::Result<Vec<String>> {
-        let cutoff = Utc::now() - chrono::Duration::from_std(max_age).unwrap_or_default();
+        let chrono_max_age = chrono::Duration::from_std(max_age).unwrap_or_else(|_| {
+            tracing::warn!(
+                target: "kirino::dynamic::trust",
+                "max_age too large for chrono::Duration, capping to 1 year"
+            );
+            chrono::Duration::days(365)
+        });
+        let cutoff = Utc::now() - chrono_max_age;
         let mut scores = self.scores.write().await;
         let stale: Vec<String> = scores
             .iter()
@@ -331,6 +338,41 @@ mod tests {
         assert_eq!(swept, vec!["old-agent"]);
         assert!(store.get("old-agent").await.unwrap().is_none());
         assert!(store.get("recent-agent").await.unwrap().is_some());
+    }
+
+    #[tokio::test]
+    async fn test_sweep_stale_none_expired() {
+        let store = InMemoryTrustScoreStore::new();
+        let score = TrustScore::new(0.8);
+        store.set("fresh-agent", score).await.unwrap();
+
+        let swept = store
+            .sweep_stale(Duration::from_secs(24 * 3600))
+            .await
+            .unwrap();
+        assert!(swept.is_empty());
+        assert!(store.get("fresh-agent").await.unwrap().is_some());
+    }
+
+    #[tokio::test]
+    async fn test_sweep_stale_all_expired() {
+        let store = InMemoryTrustScoreStore::new();
+        let mut s1 = TrustScore::new(0.5);
+        s1.last_updated = Utc::now() - chrono::Duration::hours(72);
+        store.set("a1", s1).await.unwrap();
+
+        let mut s2 = TrustScore::new(0.3);
+        s2.last_updated = Utc::now() - chrono::Duration::hours(96);
+        store.set("a2", s2).await.unwrap();
+
+        let swept = store
+            .sweep_stale(Duration::from_secs(24 * 3600))
+            .await
+            .unwrap();
+        let mut swept = swept;
+        swept.sort();
+        assert_eq!(swept, vec!["a1", "a2"]);
+        assert!(store.list_ids().await.unwrap().is_empty());
     }
 
     #[tokio::test]
