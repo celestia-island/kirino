@@ -79,6 +79,10 @@ impl AnomalyDetector {
 
         self.recompute_profile();
 
+        if self.is_baseline_ready() && self.baseline.is_none() {
+            self.build_baseline_from_history();
+        }
+
         if !self.is_baseline_ready() {
             return AnomalyScore {
                 value: 0.0,
@@ -312,6 +316,32 @@ mod tests {
             .copied()
             .unwrap_or(0.0);
         assert!(ro_stdev > 0.0);
+    }
+
+    #[test]
+    fn test_baseline_auto_builds_after_min_samples() {
+        let mut det = AnomalyDetector::new(100);
+        assert!(det.baseline.is_none());
+
+        for _ in 0..BASELINE_MIN_SAMPLES {
+            det.observe(&make_request(ActionCategory::ReadOnly));
+        }
+
+        assert!(det.baseline.is_some());
+        assert!(det.is_baseline_ready());
+    }
+
+    #[test]
+    fn test_anomaly_detection_works_after_baseline_ready() {
+        let mut det = AnomalyDetector::new(100);
+
+        for _ in 0..BASELINE_MIN_SAMPLES {
+            det.observe(&make_request(ActionCategory::ReadOnly));
+        }
+
+        let score = det.observe(&make_request(ActionCategory::ProcessExec));
+        assert!(score.value > 0.0, "anomaly value should be >0 after baseline ready, got {}", score.value);
+        assert_ne!(score.reason, "insufficient-samples");
     }
 
     #[test]
