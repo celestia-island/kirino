@@ -95,23 +95,23 @@ where
         self.cache.clone()
     }
 
-    pub fn invalidate_subject_cache(&self, subject: &S) {
-        self.cache.invalidate_subject(subject);
+    pub async fn invalidate_subject_cache(&self, subject: &S) {
+        self.cache.invalidate_subject(subject).await;
     }
 
-    pub fn invalidate_all_cache(&self) {
-        self.cache.invalidate_all();
+    pub async fn invalidate_all_cache(&self) {
+        self.cache.invalidate_all().await;
     }
 
     pub async fn check(&self, subject: &S, permission: &P) -> bool {
-        if let Some(granted) = self.cache.get(subject, permission) {
+        if let Some(granted) = self.cache.get(subject, permission).await {
             return granted;
         }
 
         match self.assignment_store.denied_permissions(subject).await {
             Ok(denied) => {
                 if denied.contains(permission) {
-                    self.cache.set(subject, permission, false);
+                    self.cache.set(subject, permission, false).await;
                     return false;
                 }
             }
@@ -121,7 +121,7 @@ where
                     error = %e,
                     "failed to query denied permissions — denying access"
                 );
-                self.cache.set(subject, permission, false);
+                self.cache.set(subject, permission, false).await;
                 return false;
             }
         }
@@ -129,7 +129,7 @@ where
         match self.assignment_store.extra_permissions(subject).await {
             Ok(extra) => {
                 if extra.contains(permission) {
-                    self.cache.set(subject, permission, true);
+                    self.cache.set(subject, permission, true).await;
                     return true;
                 }
             }
@@ -147,7 +147,7 @@ where
                 for role_name in &role_names {
                     if let Some(role) = self.role_registry.get_role(role_name) {
                         if role.permissions().contains(permission) {
-                            self.cache.set(subject, permission, true);
+                            self.cache.set(subject, permission, true).await;
                             return true;
                         }
                     }
@@ -162,7 +162,7 @@ where
             }
         }
 
-        self.cache.set(subject, permission, false);
+        self.cache.set(subject, permission, false).await;
         false
     }
 
@@ -215,14 +215,14 @@ where
     A: AssignmentStore<S, P>,
 {
     pub async fn check_hierarchical(&self, subject: &S, permission: &P) -> bool {
-        if let Some(granted) = self.cache.get(subject, permission) {
+        if let Some(granted) = self.cache.get(subject, permission).await {
             return granted;
         }
 
         match self.assignment_store.denied_permissions(subject).await {
             Ok(denied) => {
                 if denied.contains(permission) {
-                    self.cache.set(subject, permission, false);
+                    self.cache.set(subject, permission, false).await;
                     return false;
                 }
             }
@@ -232,14 +232,14 @@ where
                     error = %e,
                     "failed to query denied permissions — denying access"
                 );
-                self.cache.set(subject, permission, false);
+                self.cache.set(subject, permission, false).await;
                 return false;
             }
         }
 
         if let Ok(extra) = self.assignment_store.extra_permissions(subject).await {
             if extra.contains(permission) {
-                self.cache.set(subject, permission, true);
+                self.cache.set(subject, permission, true).await;
                 return true;
             }
         }
@@ -248,13 +248,13 @@ where
             for role_name in &role_names {
                 let inherited = resolve_role_chain(role_name, &*self.role_registry);
                 if inherited.contains(permission) {
-                    self.cache.set(subject, permission, true);
+                    self.cache.set(subject, permission, true).await;
                     return true;
                 }
             }
         }
 
-        self.cache.set(subject, permission, false);
+        self.cache.set(subject, permission, false).await;
         false
     }
 
@@ -617,7 +617,7 @@ mod tests {
 
         assert!(engine.check(&user, &TestPerm::Admin).await);
 
-        engine.invalidate_subject_cache(&user);
+        engine.invalidate_subject_cache(&user).await;
         engine
             .assignment_store()
             .revoke_role(&user, "admin")
@@ -646,7 +646,7 @@ mod tests {
         assert!(engine.check(&user1, &TestPerm::Read).await);
         assert!(engine.check(&user2, &TestPerm::Read).await);
 
-        engine.invalidate_all_cache();
+        engine.invalidate_all_cache().await;
         engine
             .assignment_store()
             .revoke_role(&user1, "viewer")
