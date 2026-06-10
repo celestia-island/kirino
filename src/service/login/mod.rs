@@ -503,7 +503,6 @@ where
         self.jwt
             .verify_with_revocation(token)
             .await
-            .map_err(Into::into)
     }
 
     #[must_use]

@@ -346,7 +346,6 @@ where
 mod tests {
     use super::*;
     use anyhow::anyhow;
-    use crate::error::KirinoError;
     use crate::rbac::store::memory::InMemoryAssignmentStore;
     use crate::rbac::store::registry::{SimpleRole, StaticPermissionRegistry, StaticRoleRegistry};
     use crate::test_utils::{TestPerm, TestSubject};
