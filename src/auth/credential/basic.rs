@@ -110,7 +110,7 @@ impl JwtManager {
         let claims = self.verify(token)?;
         let revocation = self.revocation.read().await;
         if let Some(&not_before) = revocation.get(&claims.user_id) {
-            if claims.iat <= not_before {
+            if claims.iat < not_before {
                 return Err(anyhow!("token has been revoked"));
             }
         }
@@ -193,7 +193,6 @@ mod tests {
         mgr.revoke_all_for_user("user-1").await;
         assert!(mgr.verify_with_revocation(&old_token).await.is_err());
 
-        tokio::time::sleep(std::time::Duration::from_secs(2)).await;
         let new_token = mgr.issue("user-1", "alice", vec!["admin".into()]).unwrap();
         assert!(mgr.verify_with_revocation(&new_token).await.is_ok());
     }

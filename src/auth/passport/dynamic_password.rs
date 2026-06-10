@@ -80,7 +80,11 @@ impl HotpVerifier {
         }
     }
 
+    /// Maximum retry attempts for CAS contention to prevent livelock.
+    const MAX_VERIFY_RETRIES: u32 = 3;
+
     pub fn verify(&self, code: &str) -> Result<bool> {
+        let mut retries = 0;
         loop {
             let current = self.counter.load(Ordering::Acquire);
             let expected = hotp_code(&self.secret, current, 6)?;
@@ -93,7 +97,13 @@ impl HotpVerifier {
                     Ordering::Acquire,
                 ) {
                     Ok(_) => return Ok(true),
-                    Err(_) => continue,
+                    Err(_) => {
+                        retries += 1;
+                        if retries >= Self::MAX_VERIFY_RETRIES {
+                            return Ok(false);
+                        }
+                        continue;
+                    }
                 }
             } else {
                 return Ok(false);
