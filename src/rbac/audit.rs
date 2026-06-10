@@ -394,7 +394,7 @@ impl AuditPolicyEngine for InMemoryAuditPolicyEngine {
                             since: Some(since),
                             ..Default::default()
                         };
-                        let query_len = sink.query(&filter).await.len();
+                        let query_len = sink.count(&filter).await as usize;
                         query_len >= (*min_count as usize)
                     } else {
                         false

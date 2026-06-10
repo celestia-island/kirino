@@ -17,6 +17,9 @@ impl<S: ConstraintStore> ConstraintValidator<S> {
     /// Returns an error if adding the new role would violate an SSD policy.
     pub async fn validate_ssd(&self, current_roles: &[String], new_role: &str) -> Result<()> {
         let policies = self.store.list_ssd_policies().await?;
+        if current_roles.contains(&new_role.to_string()) {
+            return Ok(());
+        }
         let mut test_roles = current_roles.to_vec();
         test_roles.push(new_role.to_string());
 
@@ -36,6 +39,9 @@ impl<S: ConstraintStore> ConstraintValidator<S> {
     /// Returns an error if activating the new role would violate a DSD policy.
     pub async fn validate_dsd(&self, active_roles: &[String], new_role: &str) -> Result<()> {
         let policies = self.store.list_dsd_policies().await?;
+        if active_roles.contains(&new_role.to_string()) {
+            return Ok(());
+        }
         let mut test_roles = active_roles.to_vec();
         test_roles.push(new_role.to_string());
 

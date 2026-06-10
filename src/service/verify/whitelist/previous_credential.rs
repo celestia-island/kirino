@@ -25,11 +25,9 @@ impl PreviousCredentialVerifier {
 
     pub async fn verify(&self, user_id: &str, credential_hash: &str) -> Result<bool> {
         let store = self.store.read().await;
-        if let Some(stored) = store.get(user_id) {
-            let result = constant_time_eq(stored.as_bytes(), credential_hash.as_bytes());
-            return Ok(result);
-        }
-        Ok(false)
+        let stored = store.get(user_id).map(|s| s.as_bytes()).unwrap_or(b"");
+        let result = constant_time_eq(stored, credential_hash.as_bytes());
+        Ok(result && !stored.is_empty())
     }
 
     pub async fn unregister(&self, user_id: &str) {

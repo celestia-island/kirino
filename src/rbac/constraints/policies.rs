@@ -20,7 +20,7 @@ macro_rules! define_sod_policy {
                 Self {
                     name: name.into(),
                     roles,
-                    cardinality,
+                    cardinality: cardinality.max(1),
                 }
             }
 
@@ -47,7 +47,7 @@ impl CardinalityConstraint {
     pub fn new(role_name: impl Into<String>, max_subjects: usize) -> Self {
         Self {
             role_name: role_name.into(),
-            max_subjects,
+            max_subjects: max_subjects.max(1),
         }
     }
 
@@ -92,6 +92,11 @@ impl TemporalConstraint {
         valid_from: chrono::DateTime<chrono::Utc>,
         valid_until: chrono::DateTime<chrono::Utc>,
     ) -> Self {
+        let (valid_from, valid_until) = if valid_from < valid_until {
+            (valid_from, valid_until)
+        } else {
+            (valid_until, valid_from)
+        };
         Self {
             role_name: role_name.into(),
             valid_from,

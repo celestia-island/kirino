@@ -107,13 +107,13 @@ where
             cache.retain(|_, entry| now < entry.expires_at);
             if cache.len() > self.max_entries {
                 let excess = cache.len() - self.max_entries;
-                // Use a binary heap to find the `excess` oldest entries
-                // without sorting the entire cache. Push Reverse(expires_at)
-                // so that pop() removes the newest entry, keeping the oldest.
-                let mut heap: BinaryHeap<(std::cmp::Reverse<Instant>, (String, String))> =
+                // Use a binary heap to find the `excess` entries with the
+                // soonest expiry (oldest). Without Reverse, pop() removes
+                // the max (newest), leaving the oldest in the heap for eviction.
+                let mut heap: BinaryHeap<(Instant, (String, String))> =
                     BinaryHeap::with_capacity(excess + 1);
                 for (key, entry) in cache.iter() {
-                    heap.push((std::cmp::Reverse(entry.expires_at), key.clone()));
+                    heap.push((entry.expires_at, key.clone()));
                     if heap.len() > excess {
                         heap.pop();
                     }

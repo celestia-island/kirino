@@ -109,9 +109,11 @@ impl AuthorizationArbiter {
         TrustDecayWorker::spawn_resilient(store, interval)
     }
 
-    pub async fn set_policy(&self, policy: DynamicPolicy) {
+    pub async fn set_policy(&self, policy: DynamicPolicy) -> anyhow::Result<()> {
+        policy.validate()?;
         let mut guard = self.policy.write().await;
         *guard = policy;
+        Ok(())
     }
 
     pub async fn set_domain_scope(&self, scope: DomainScope) {
@@ -654,7 +656,7 @@ mod tests {
                 reason: "lockdown".to_string(),
             },
         )]);
-        arbiter.set_policy(strict_policy).await;
+        arbiter.set_policy(strict_policy).await.unwrap();
 
         let v2 = arbiter.authorize(&req).await;
         assert!(!v2.allowed);
