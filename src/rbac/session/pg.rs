@@ -115,6 +115,7 @@ where
             id: Uuid::now_v7(),
             subject: subject.clone(),
             active_roles: validated_roles.clone(),
+            context: None,
             created_at: now,
             expires_at: now + ttl,
         };
@@ -198,6 +199,7 @@ where
                 id: r.id,
                 subject: S::from_subject_id(&r.subject_id),
                 active_roles: r.active_roles.into_iter().collect(),
+                context: r.context,
                 created_at: r.created_at,
                 expires_at: r.expires_at,
             })),

@@ -57,6 +57,10 @@ pub trait PersistentSessionStore: Send + Sync {
     async fn cleanup_expired(&self) -> anyhow::Result<usize>;
 }
 
+/// SPI for persisting role assignments to an external store (e.g. PostgreSQL, Redis).
+///
+/// The crate provides in-memory implementations only; implement this trait
+/// to connect a production database backend.
 #[async_trait]
 pub trait PersistentAssignmentStore: Send + Sync {
     async fn load_assignments(&self) -> anyhow::Result<Vec<AssignmentRow>>;
@@ -74,6 +78,7 @@ pub trait PersistentAssignmentStore: Send + Sync {
     ) -> anyhow::Result<()>;
 }
 
+/// SPI for persisting role definitions to an external store.
 #[async_trait]
 pub trait PersistentRoleStore: Send + Sync {
     async fn load_roles(&self) -> anyhow::Result<Vec<RoleRow>>;
@@ -81,6 +86,7 @@ pub trait PersistentRoleStore: Send + Sync {
     async fn delete_role(&self, role_name: &str) -> anyhow::Result<bool>;
 }
 
+/// SPI for persisting RBAC constraints (SSD/DSD/cardinality/prerequisite/temporal) to an external store.
 #[async_trait]
 pub trait PersistentConstraintStore: Send + Sync {
     async fn load_constraints(&self) -> anyhow::Result<Vec<ConstraintRow>>;
@@ -88,6 +94,7 @@ pub trait PersistentConstraintStore: Send + Sync {
     async fn delete_constraint(&self, constraint_type: &str, id: i64) -> anyhow::Result<bool>;
 }
 
+/// SPI for persisting audit log entries to an external store.
 #[async_trait]
 pub trait PersistentAuditStore: Send + Sync {
     async fn append_entry(&self, row: &AuditRow) -> anyhow::Result<()>;
@@ -105,6 +112,7 @@ pub trait PersistentAuditStore: Send + Sync {
     ) -> anyhow::Result<u64>;
 }
 
+/// SPI for persisting dynamic-authorization trust scores to an external store.
 #[cfg(feature = "rbac-dynamic")]
 #[async_trait]
 pub trait PersistentTrustStore: Send + Sync {

@@ -22,6 +22,7 @@ pub struct Session<S: Subject> {
     pub id: Uuid,
     pub subject: S,
     pub active_roles: HashSet<String>,
+    pub context: Option<serde_json::Value>,
     pub created_at: DateTime<Utc>,
     pub expires_at: DateTime<Utc>,
 }
@@ -144,6 +145,7 @@ where
             id: Uuid::now_v7(),
             subject: subject.clone(),
             active_roles,
+            context: None,
             created_at: Utc::now(),
             expires_at: Utc::now() + ttl,
         };
