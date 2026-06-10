@@ -1,7 +1,10 @@
 use anyhow::Result;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use std::{collections::HashMap, sync::Arc};
+use std::{
+    collections::{HashMap, VecDeque},
+    sync::Arc,
+};
 use tokio::sync::RwLock;
 
 type AlertHook = Box<dyn Fn(AuditAlert) + Send + Sync>;
@@ -216,7 +219,7 @@ pub struct SubjectStats {
 const DEFAULT_MAX_AUDIT_ENTRIES: usize = 10000;
 
 pub struct InMemoryAuditSink {
-    entries: RwLock<Vec<AuditEntry>>,
+    entries: RwLock<VecDeque<AuditEntry>>,
     next_id: std::sync::atomic::AtomicU64,
     max_entries: usize,
 }
@@ -225,7 +228,7 @@ impl InMemoryAuditSink {
     #[must_use]
     pub fn new() -> Self {
         Self {
-            entries: RwLock::new(Vec::new()),
+            entries: RwLock::new(VecDeque::new()),
             next_id: std::sync::atomic::AtomicU64::new(1),
             max_entries: DEFAULT_MAX_AUDIT_ENTRIES,
         }
@@ -234,7 +237,7 @@ impl InMemoryAuditSink {
     #[must_use]
     pub fn with_max_entries(max_entries: usize) -> Self {
         Self {
-            entries: RwLock::new(Vec::new()),
+            entries: RwLock::new(VecDeque::new()),
             next_id: std::sync::atomic::AtomicU64::new(1),
             max_entries,
         }
@@ -290,10 +293,9 @@ impl AuditSink for InMemoryAuditSink {
             .next_id
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         entry.id = id;
-        entries.push(entry);
-        if entries.len() > self.max_entries {
-            let excess = entries.len() - self.max_entries;
-            entries.drain(0..excess);
+        entries.push_back(entry);
+        while entries.len() > self.max_entries {
+            entries.pop_front();
         }
     }
 
@@ -353,17 +355,25 @@ impl Default for InMemoryAuditPolicyEngine {
 #[async_trait::async_trait]
 impl AuditPolicyEngine for InMemoryAuditPolicyEngine {
     async fn evaluate(&self, entry: &AuditEntry) -> Vec<AuditAlert> {
-        let rules = self.rules.read().await;
-        let mut last_triggered = self.last_triggered.write().await;
+        let rules_snapshot = {
+            let rules = self.rules.read().await;
+            rules.clone()
+        };
+
+        let mut last_triggered_snapshot = {
+            let last_triggered = self.last_triggered.read().await;
+            last_triggered.clone()
+        };
+
         let now = Utc::now();
         let mut alerts = Vec::new();
 
-        for rule in rules.iter() {
+        for rule in &rules_snapshot {
             if !rule.enabled {
                 continue;
             }
 
-            if let Some(&last_time) = last_triggered.get(&rule.id) {
+            if let Some(&last_time) = last_triggered_snapshot.get(&rule.id) {
                 let elapsed_secs = (now - last_time).num_seconds();
                 if elapsed_secs < 0 || (elapsed_secs as u64) < rule.cooldown_secs {
                     continue;
@@ -394,7 +404,7 @@ impl AuditPolicyEngine for InMemoryAuditPolicyEngine {
             };
 
             if matched {
-                last_triggered.insert(rule.id.clone(), now);
+                last_triggered_snapshot.insert(rule.id.clone(), now);
                 alerts.push(AuditAlert {
                     rule_id: rule.id.clone(),
                     rule_name: rule.name.clone(),
@@ -402,6 +412,13 @@ impl AuditPolicyEngine for InMemoryAuditPolicyEngine {
                     triggering_entry: Box::new(entry.clone()),
                     created_at: now,
                 });
+            }
+        }
+
+        {
+            let mut last_triggered = self.last_triggered.write().await;
+            for (id, time) in &last_triggered_snapshot {
+                last_triggered.insert(id.clone(), *time);
             }
         }
 

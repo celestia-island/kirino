@@ -81,14 +81,23 @@ impl HotpVerifier {
     }
 
     pub fn verify(&self, code: &str) -> Result<bool> {
-        let current = self.counter.load(Ordering::Acquire);
-        let expected = hotp_code(&self.secret, current, 6)?;
-        let formatted = format_code(expected, 6);
-        if constant_time_eq(formatted.as_bytes(), code.as_bytes()) {
-            self.counter.fetch_add(1, Ordering::AcqRel);
-            Ok(true)
-        } else {
-            Ok(false)
+        loop {
+            let current = self.counter.load(Ordering::Acquire);
+            let expected = hotp_code(&self.secret, current, 6)?;
+            let formatted = format_code(expected, 6);
+            if constant_time_eq(formatted.as_bytes(), code.as_bytes()) {
+                match self.counter.compare_exchange(
+                    current,
+                    current + 1,
+                    Ordering::AcqRel,
+                    Ordering::Acquire,
+                ) {
+                    Ok(_) => return Ok(true),
+                    Err(_) => continue,
+                }
+            } else {
+                return Ok(false);
+            }
         }
     }
 }
