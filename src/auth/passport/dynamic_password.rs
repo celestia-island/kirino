@@ -11,12 +11,15 @@ type HmacSha1 = Hmac<Sha1>;
 /// Time-based One-Time Password (TOTP) verifier as defined in RFC 6238.
 ///
 /// Uses HMAC-SHA1 with configurable digit count and time period.
-/// Accepts the current and previous time step to tolerate clock skew.
+/// Accepts the current, previous (+1), and next (-1) time step to tolerate clock skew.
 pub struct TotpVerifier {
     secret: Vec<u8>,
     digits: u32,
     period_secs: u32,
 }
+
+/// Maximum number of digits for TOTP/HOTP codes (9) to prevent u32 overflow
+const MAX_DIGITS: u32 = 9;
 
 impl TotpVerifier {
     #[must_use]
@@ -32,7 +35,7 @@ impl TotpVerifier {
     pub fn with_options(secret: Vec<u8>, digits: u32, period_secs: u32) -> Self {
         Self {
             secret,
-            digits: digits.max(1),
+            digits: digits.clamp(1, MAX_DIGITS),
             period_secs: period_secs.max(1),
         }
     }
@@ -41,8 +44,10 @@ impl TotpVerifier {
         let time_step = chrono::Utc::now().timestamp() as u64 / u64::from(self.period_secs);
         let generated = self.generate_at(time_step)?;
         let generated_prev = self.generate_at(time_step.saturating_sub(1))?;
+        let generated_next = self.generate_at(time_step.saturating_add(1))?;
         Ok(constant_time_eq(generated.as_bytes(), code.as_bytes())
-            || constant_time_eq(generated_prev.as_bytes(), code.as_bytes()))
+            || constant_time_eq(generated_prev.as_bytes(), code.as_bytes())
+            || constant_time_eq(generated_next.as_bytes(), code.as_bytes()))
     }
 
     pub fn generate(&self) -> Result<String> {
@@ -76,11 +81,11 @@ impl HotpVerifier {
     }
 
     pub fn verify(&self, code: &str) -> Result<bool> {
-        let current = self.counter.load(Ordering::SeqCst);
+        let current = self.counter.load(Ordering::Acquire);
         let expected = hotp_code(&self.secret, current, 6)?;
         let formatted = format_code(expected, 6);
         if constant_time_eq(formatted.as_bytes(), code.as_bytes()) {
-            self.counter.fetch_add(1, Ordering::SeqCst);
+            self.counter.fetch_add(1, Ordering::AcqRel);
             Ok(true)
         } else {
             Ok(false)
@@ -89,6 +94,7 @@ impl HotpVerifier {
 }
 
 fn hotp_code(secret: &[u8], counter: u64, digits: u32) -> Result<u32> {
+    let digits = digits.clamp(1, MAX_DIGITS);
     let mut mac = HmacSha1::new_from_slice(secret).map_err(|e| anyhow!("HMAC init failed: {e}"))?;
     mac.update(&counter.to_be_bytes());
     let result = mac.finalize().into_bytes();
@@ -197,6 +203,26 @@ mod tests {
         let code = totp.generate().unwrap();
         assert_eq!(code.len(), 8);
         assert!(totp.verify(&code).unwrap());
+    }
+
+    #[test]
+    fn test_totp_digits_clamped_to_max() {
+        let totp = TotpVerifier::with_options(b"secret".to_vec(), 100, 30);
+        let code = totp.generate().unwrap();
+        assert!(code.len() <= MAX_DIGITS as usize);
+        assert!(totp.verify(&code).unwrap());
+    }
+
+    #[test]
+    fn test_totp_verify_next_step() {
+        let secret = b"test-secret-next-step".to_vec();
+        let totp = TotpVerifier::new(secret);
+        let time_step = chrono::Utc::now().timestamp() as u64 / 30;
+        let next_code = {
+            let code = hotp_code(&totp.secret, time_step.saturating_add(1), 6).unwrap();
+            format_code(code, 6)
+        };
+        assert!(totp.verify(&next_code).unwrap());
     }
 
     #[test]

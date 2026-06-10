@@ -10,10 +10,15 @@ use crate::utils::base64;
 /// valid base64-encoded JSON payload containing a `"sub"` field will be accepted.
 /// **Do not use in production.** Replace with a verifier that validates the
 /// signature against the `IdP`'s public key (e.g. via the `jsonwebtoken` crate).
+#[deprecated(
+    since = "0.5.1",
+    note = "This implementation does NOT verify JWT signatures. Use a proper SSO verifier with jwks_uri signature validation instead."
+)]
 pub struct SsoVerifier {
     provider: String,
 }
 
+#[allow(deprecated)]
 impl SsoVerifier {
     #[must_use]
     pub const fn new(provider: String) -> Self {
@@ -64,6 +69,7 @@ pub struct SsoClaims {
 }
 
 #[cfg(test)]
+#[allow(deprecated)]
 mod tests {
     use super::*;
 

@@ -31,6 +31,7 @@ pub mod base64 {
                 bits -= 8;
                 #[allow(clippy::cast_possible_truncation)]
                 result.push((accum >> bits) as u8);
+                accum &= (1_u32 << bits).wrapping_sub(1);
             }
         }
         Ok(result)
@@ -186,6 +187,24 @@ mod tests {
     #[test]
     fn test_base64_decode_invalid_char_rejected() {
         assert!(base64::decode("aGVs!bG8=").is_err());
+    }
+
+    #[test]
+    fn test_base64_decode_roundtrip() {
+        for len in 1..=64 {
+            let data: Vec<u8> = (0..len).map(|i| (i * 7 + 13) as u8).collect();
+            let encoded = base64::encode(&data);
+            let decoded = base64::decode(&encoded).unwrap();
+            assert_eq!(decoded, data, "roundtrip failed for len={len}");
+        }
+    }
+
+    #[test]
+    fn test_base64_decode_long_input() {
+        let data = b"the quick brown fox jumps over the lazy dog 1234567890!@#$%^&*()";
+        let encoded = base64::encode(data);
+        let decoded = base64::decode(&encoded).unwrap();
+        assert_eq!(decoded, data);
     }
 
     #[test]

@@ -76,8 +76,10 @@ impl JwtManager {
             session_id,
             iat: now.timestamp(),
             exp: (now
-                + chrono::Duration::try_hours(self.expiration_hours)
-                    .unwrap_or_else(|| chrono::Duration::hours(MAX_JWT_EXPIRATION_HOURS)))
+                + chrono::Duration::try_hours(self.expiration_hours).unwrap_or_else(|| {
+                    chrono::Duration::try_hours(MAX_JWT_EXPIRATION_HOURS)
+                        .expect("MAX_JWT_EXPIRATION_HOURS should not overflow")
+                }))
             .timestamp(),
         };
         encode(&Header::default(), &claims, &self.encoding_key)

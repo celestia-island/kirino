@@ -6,10 +6,15 @@ use anyhow::{anyhow, Result};
 /// against any external CAPTCHA service. It only checks token format (length >= 10).
 /// For production use, you MUST implement server-side verification by calling the
 /// CAPTCHA provider's API (e.g., Google reCAPTCHA, hCaptcha, Cloudflare Turnstile).
+#[deprecated(
+    since = "0.5.1",
+    note = "This implementation does NOT perform server-side CAPTCHA verification. Use a proper CAPTCHA provider integration instead."
+)]
 pub struct ThirdPartyIframeVerifier {
     provider: String,
 }
 
+#[allow(deprecated)]
 impl ThirdPartyIframeVerifier {
     #[must_use]
     pub const fn new(provider: String) -> Self {
@@ -54,6 +59,7 @@ impl ThirdPartyIframeVerifier {
 }
 
 #[cfg(test)]
+#[allow(deprecated)]
 mod tests {
     use super::*;
 

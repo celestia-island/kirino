@@ -12,8 +12,13 @@ use crate::utils::base64;
 /// bytes and will contain nonsensical data for real certificates.
 /// **Do not use in production.** Replace with a proper X.509 verification
 /// library (e.g. `x509-parser` + `rustls`/`openssl`).
+#[deprecated(
+    since = "0.5.1",
+    note = "This implementation does NOT verify certificate chains or signatures. Use a proper X.509 library instead."
+)]
 pub struct CertificateAuthorityVerifier;
 
+#[allow(deprecated)]
 impl CertificateAuthorityVerifier {
     #[must_use]
     pub const fn new() -> Self {
@@ -75,6 +80,7 @@ fn extract_issuer(data: &[u8]) -> String {
         .to_string()
 }
 
+#[allow(deprecated)]
 impl Default for CertificateAuthorityVerifier {
     fn default() -> Self {
         Self::new()
@@ -88,6 +94,7 @@ pub struct CertificateInfo {
 }
 
 #[cfg(test)]
+#[allow(deprecated)]
 mod tests {
     use super::*;
 

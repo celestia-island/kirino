@@ -8,11 +8,16 @@ use tokio::sync::RwLock;
 /// signature verification. It only checks structural validity of inputs and that
 /// a registration challenge exists for the given credential. For production use,
 /// replace this with a proper WebAuthn library (e.g. `webauthn-rs`).
+#[deprecated(
+    since = "0.5.1",
+    note = "This implementation does NOT perform cryptographic signature verification. Use a proper WebAuthn library like `webauthn-rs` instead."
+)]
 pub struct WebAuthnVerifier {
     challenges: Arc<RwLock<HashMap<String, Vec<u8>>>>,
     rp_id: String,
 }
 
+#[allow(deprecated)]
 impl WebAuthnVerifier {
     #[must_use]
     pub fn new() -> Self {
@@ -101,6 +106,7 @@ impl WebAuthnVerifier {
     }
 }
 
+#[allow(deprecated)]
 impl Default for WebAuthnVerifier {
     fn default() -> Self {
         Self::new()
@@ -113,6 +119,7 @@ pub struct RegistrationChallenge {
 }
 
 #[cfg(test)]
+#[allow(deprecated)]
 mod tests {
     use super::*;
 

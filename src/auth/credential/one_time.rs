@@ -46,7 +46,7 @@ impl OneTimeCredential {
 
     #[must_use]
     pub fn is_used(&self) -> bool {
-        self.used.load(Ordering::SeqCst)
+        self.used.load(Ordering::Acquire)
     }
 
     fn generate_token(len: usize) -> String {
@@ -68,7 +68,7 @@ impl super::Credential for OneTimeCredential {
         }
         Ok(self
             .used
-            .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
             .is_ok())
     }
 }
