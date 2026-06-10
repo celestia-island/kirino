@@ -151,6 +151,7 @@ where
         Ok(None)
     }
 
+    #[must_use]
     pub async fn check(&self, subject: &S, permission: &P) -> bool {
         match self.check_cached_deny_extra(subject, permission).await {
             Ok(Some(result)) => return result,
@@ -182,6 +183,7 @@ where
         false
     }
 
+    #[must_use]
     pub async fn check_batch(&self, subject: &S, permissions: &HashSet<P>) -> HashMap<P, bool> {
         let futs: Vec<_> = permissions
             .iter()
@@ -195,6 +197,7 @@ where
             .collect()
     }
 
+    #[must_use]
     pub async fn effective_permissions(&self, subject: &S) -> HashSet<P> {
         let mut perms = HashSet::new();
 
@@ -234,6 +237,7 @@ where
     P: Permission,
     A: AssignmentStore<S, P>,
 {
+    #[must_use]
     pub async fn check_hierarchical(&self, subject: &S, permission: &P) -> bool {
         match self.check_cached_deny_extra(subject, permission).await {
             Ok(Some(result)) => return result,
@@ -264,6 +268,7 @@ where
         false
     }
 
+    #[must_use]
     pub async fn effective_permissions_hierarchical(&self, subject: &S) -> HashSet<P> {
         let mut perms = HashSet::new();
 

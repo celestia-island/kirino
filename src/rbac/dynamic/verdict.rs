@@ -1,6 +1,6 @@
+use std::fmt;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use std::fmt;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub enum AutonomyLevel {
@@ -36,6 +36,21 @@ pub enum Strategy {
     Throttle { max_rate_per_min: u32 },
     RequireConfirmation,
     Block { reason: String },
+}
+
+impl fmt::Display for Strategy {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Strategy::Allow { auto_approve } => {
+                write!(f, "Allow(auto_approve={auto_approve})")
+            }
+            Strategy::Throttle { max_rate_per_min } => {
+                write!(f, "Throttle(max={max_rate_per_min}/min)")
+            }
+            Strategy::RequireConfirmation => write!(f, "RequireConfirmation"),
+            Strategy::Block { reason } => write!(f, "Block({reason})"),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

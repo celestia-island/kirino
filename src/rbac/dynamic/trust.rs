@@ -198,6 +198,7 @@ impl TrustDecayWorker {
     /// # Errors
     ///
     /// Returns an error if listing, getting, or setting trust scores fails.
+    #[must_use]
     pub async fn run_once(&self) -> KirinoResult<usize> {
         let ids = self.store.list_ids().await?;
         let mut decayed = 0;
@@ -232,6 +233,7 @@ impl TrustDecayWorker {
         }
     }
 
+    #[must_use]
     #[must_use]
     pub fn spawn(self) -> tokio::task::JoinHandle<()> {
         tokio::spawn(async move { self.run().await })

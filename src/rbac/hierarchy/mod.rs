@@ -47,6 +47,7 @@ impl<P: Permission> HierarchicalRole<P> for HierarchyNode<P> {
     }
 }
 
+#[must_use]
 pub fn resolve_role_chain<P>(
     role_name: &str,
     registry: &dyn crate::rbac::traits::RoleRegistry<P>,
@@ -107,6 +108,7 @@ where
     false
 }
 
+#[must_use]
 pub fn detect_cycle<P>(role_name: &str, registry: &dyn crate::rbac::traits::RoleRegistry<P>) -> bool
 where
     P: Permission,

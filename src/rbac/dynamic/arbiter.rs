@@ -92,6 +92,7 @@ impl AuthorizationArbiter {
         *guard = Some(scope);
     }
 
+    #[must_use]
     pub async fn authorize(&self, request: &ActionRequest) -> AuthorizationVerdict {
         let frozen = self.frozen.read().await;
         if frozen.contains(&request.delegator.id) {
@@ -170,6 +171,7 @@ impl AuthorizationArbiter {
         verdict
     }
 
+    #[must_use]
     pub async fn risk_score(&self, request: &ActionRequest) -> RiskScore {
         let policy = self.policy.read().await;
 
@@ -336,6 +338,7 @@ impl AuthorizationArbiter {
         );
     }
 
+    #[must_use]
     pub async fn status_summary(&self, delegator_id: &str) -> serde_json::Value {
         let trust = self
             .trust_store
@@ -384,7 +387,7 @@ impl AuthorizationArbiter {
                         anomaly: verdict.sub_scores.anomaly,
                     },
                     evidence: verdict.evidence.clone(),
-                    mitigation: verdict.mitigation.as_ref().map(|s| format!("{s:?}")),
+                    mitigation: verdict.mitigation.as_ref().map(|s| s.to_string()),
                 }),
             };
             audit.log(entry).await;

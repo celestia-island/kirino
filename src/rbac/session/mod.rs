@@ -26,6 +26,7 @@ pub struct Session<S: Subject> {
 }
 
 impl<S: Subject> Session<S> {
+    #[must_use]
     pub fn is_expired(&self) -> bool {
         Utc::now() > self.expires_at
     }
@@ -82,6 +83,7 @@ where
         self.assignment_store.clone()
     }
 
+    #[must_use]
     pub async fn cleanup_expired(&self) -> usize {
         let mut sessions = self.sessions.write().await;
         let before = sessions.len();

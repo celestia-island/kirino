@@ -165,10 +165,10 @@ mod tests {
     use crate::test_utils::TestSubject;
     use std::collections::HashSet;
 
-    // 不能使用共享的 TestPerm 枚举，因为本模块测试需要表达任意权限名，
-    // 例如 TestPerm("deploy")、TestPerm("system_write") 等动态字符串，
-    // 而共享的 TestPerm 是固定枚举变体（Read/Write/Delete/Admin）。
-    // 本模块验证的是存储层的通用 CRUD 行为，不应绑定到特定权限名。
+    // We cannot use the shared TestPerm enum here because these tests
+    // need to express arbitrary permission names like "deploy" or "system_write",
+    // whereas the shared TestPerm is a fixed enum (Read/Write/Delete/Admin).
+    // This module tests generic CRUD behavior of the storage layer.
     #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
     struct TestPerm(&'static str);
 

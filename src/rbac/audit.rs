@@ -566,6 +566,7 @@ impl AuditLogger {
         hooks.push(Box::new(hook));
     }
 
+    #[must_use]
     pub async fn log(&self, entry: AuditEntry) -> Vec<AuditAlert> {
         let mut alerts = Vec::new();
 
@@ -586,6 +587,7 @@ impl AuditLogger {
         alerts
     }
 
+    #[must_use]
     pub async fn query(&self, filter: &AuditFilter) -> Vec<AuditEntry> {
         self.sink.query(filter).await
     }
@@ -594,6 +596,7 @@ impl AuditLogger {
         self.sink.count(filter).await
     }
 
+    #[must_use]
     pub async fn analyze_recent(&self, filter: &AuditFilter) -> Option<AuditAnalysisResult> {
         let analyzer = self.analyzer.as_ref()?;
         let entries = self.sink.query(filter).await;

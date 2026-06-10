@@ -65,6 +65,7 @@ impl AnomalyDetector {
         self.total_observed
     }
 
+    #[must_use]
     pub fn observe(&mut self, request: &ActionRequest) -> AnomalyScore {
         self.total_observed += 1;
 

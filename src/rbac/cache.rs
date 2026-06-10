@@ -1,7 +1,6 @@
 use std::{
     collections::HashMap,
     marker::PhantomData,
-    sync::atomic::{AtomicUsize, Ordering},
     time::{Duration, Instant},
 };
 use tokio::sync::RwLock;
@@ -27,16 +26,14 @@ struct CacheEntry {
     expires_at: Instant,
 }
 
-const CACHE_EVICTION_INTERVAL: usize = 128;
-
 pub struct TtlPermissionCache<S, P>
 where
     S: Subject,
     P: Permission,
 {
     cache: RwLock<HashMap<(String, String), CacheEntry>>,
-    ops_since_evict: AtomicUsize,
     max_entries: usize,
+
     ttl: Duration,
     _phantom: PhantomData<(S, P)>,
 }
@@ -50,7 +47,6 @@ where
     pub fn new(ttl: Duration) -> Self {
         Self {
             cache: RwLock::new(HashMap::new()),
-            ops_since_evict: AtomicUsize::new(0),
             max_entries: 10_000,
             ttl,
             _phantom: PhantomData,
@@ -91,18 +87,14 @@ where
             permission.name().to_string(),
         );
         let mut cache = self.cache.write().await;
-        let prev = cache.insert(
+        cache.insert(
             key,
             CacheEntry {
                 granted,
                 expires_at: Instant::now() + self.ttl,
             },
         );
-        let ops = self
-            .ops_since_evict
-            .fetch_add(1, Ordering::Relaxed)
-            .wrapping_add(if prev.is_some() { 0 } else { 1 });
-        if ops % CACHE_EVICTION_INTERVAL == 0 || cache.len() > self.max_entries {
+        if cache.len() > self.max_entries {
             let now = Instant::now();
             cache.retain(|_, entry| now < entry.expires_at);
         }
