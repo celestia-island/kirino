@@ -3,7 +3,7 @@ use hmac::{Hmac, Mac};
 
 use super::Credential;
 use crate::{
-    error::{KirinoError, KirinoResult},
+    error::KirinoError,
     utils::constant_time_eq,
 };
 
@@ -20,11 +20,12 @@ pub struct ServiceCredential {
 }
 
 impl ServiceCredential {
-    pub fn from_shared_key(key: &[u8], token: &str) -> KirinoResult<Self> {
+    pub fn from_shared_key(key: &[u8], token: &str) -> Result<Self> {
         if key.is_empty() {
             return Err(KirinoError::Validation(
                 "ServiceCredential key must not be empty".to_string(),
-            ));
+            )
+            .into());
         }
         let hash = hmac_sha256_hex(key, token.as_bytes())?;
         Ok(Self {
@@ -33,11 +34,12 @@ impl ServiceCredential {
         })
     }
 
-    pub fn from_hash(token_hash: String, key: Vec<u8>) -> KirinoResult<Self> {
+    pub fn from_hash(token_hash: String, key: Vec<u8>) -> Result<Self> {
         if key.is_empty() {
             return Err(KirinoError::Validation(
                 "ServiceCredential key must not be empty".to_string(),
-            ));
+            )
+            .into());
         }
         Ok(Self { token_hash, key })
     }
@@ -45,8 +47,7 @@ impl ServiceCredential {
 
 impl Credential for ServiceCredential {
     fn verify(&self, token: &str) -> Result<bool> {
-        let computed =
-            hmac_sha256_hex(&self.key, token.as_bytes()).map_err(|e| anyhow::anyhow!("{}", e))?;
+        let computed = hmac_sha256_hex(&self.key, token.as_bytes())?;
         Ok(constant_time_eq(
             self.token_hash.as_bytes(),
             computed.as_bytes(),
@@ -54,7 +55,7 @@ impl Credential for ServiceCredential {
     }
 }
 
-fn hmac_sha256_hex(key: &[u8], data: &[u8]) -> KirinoResult<String> {
+fn hmac_sha256_hex(key: &[u8], data: &[u8]) -> Result<String> {
     use std::fmt::Write;
     let mut mac = HmacSha256::new_from_slice(key)
         .map_err(|_| KirinoError::Validation("HMAC key must not be empty".to_string()))?;

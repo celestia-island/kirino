@@ -5,8 +5,9 @@ use uuid::Uuid;
 
 use async_trait::async_trait;
 
+use anyhow::Result;
 use crate::{
-    error::{KirinoError, KirinoResult},
+    error::KirinoError,
     models::identity::Identity,
 };
 
@@ -21,15 +22,15 @@ fn identity_id(identity: &Identity) -> Uuid {
 
 #[async_trait]
 pub trait IdentityProvider: Send + Sync {
-    async fn create(&self, record: IdentityRecord) -> KirinoResult<()>;
+    async fn create(&self, record: IdentityRecord) -> Result<()>;
     #[must_use]
-    async fn get(&self, id: Uuid) -> KirinoResult<Option<IdentityRecord>>;
+    async fn get(&self, id: Uuid) -> Result<Option<IdentityRecord>>;
     #[must_use]
-    async fn find_by_username(&self, username: &str) -> KirinoResult<Option<IdentityRecord>>;
+    async fn find_by_username(&self, username: &str) -> Result<Option<IdentityRecord>>;
     #[must_use]
-    async fn delete(&self, id: Uuid) -> KirinoResult<bool>;
+    async fn delete(&self, id: Uuid) -> Result<bool>;
     #[must_use]
-    async fn list(&self) -> KirinoResult<Vec<IdentityRecord>>;
+    async fn list(&self) -> Result<Vec<IdentityRecord>>;
 }
 
 #[derive(Debug, Clone)]
@@ -63,12 +64,13 @@ impl Default for InMemoryIdentityProvider {
 
 #[async_trait]
 impl IdentityProvider for InMemoryIdentityProvider {
-    async fn create(&self, record: IdentityRecord) -> KirinoResult<()> {
+    async fn create(&self, record: IdentityRecord) -> Result<()> {
         let mut records = self.records.write().await;
         if records.iter().any(|r| r.username == record.username) {
             return Err(KirinoError::Validation(
                 "username already exists".to_string(),
-            ));
+            )
+            .into());
         }
         if records
             .iter()
@@ -76,13 +78,14 @@ impl IdentityProvider for InMemoryIdentityProvider {
         {
             return Err(KirinoError::Validation(
                 "identity already exists".to_string(),
-            ));
+            )
+            .into());
         }
         records.push(record);
         Ok(())
     }
 
-    async fn get(&self, id: Uuid) -> KirinoResult<Option<IdentityRecord>> {
+    async fn get(&self, id: Uuid) -> Result<Option<IdentityRecord>> {
         let records = self.records.read().await;
         Ok(records
             .iter()
@@ -90,19 +93,19 @@ impl IdentityProvider for InMemoryIdentityProvider {
             .cloned())
     }
 
-    async fn find_by_username(&self, username: &str) -> KirinoResult<Option<IdentityRecord>> {
+    async fn find_by_username(&self, username: &str) -> Result<Option<IdentityRecord>> {
         let records = self.records.read().await;
         Ok(records.iter().find(|r| r.username == username).cloned())
     }
 
-    async fn delete(&self, id: Uuid) -> KirinoResult<bool> {
+    async fn delete(&self, id: Uuid) -> Result<bool> {
         let mut records = self.records.write().await;
         let before = records.len();
         records.retain(|r| identity_id(&r.identity) != id);
         Ok(records.len() < before)
     }
 
-    async fn list(&self) -> KirinoResult<Vec<IdentityRecord>> {
+    async fn list(&self) -> Result<Vec<IdentityRecord>> {
         let records = self.records.read().await;
         Ok(records.clone())
     }
@@ -198,6 +201,6 @@ mod tests {
         let provider = InMemoryIdentityProvider::new();
         provider.create(make_record("alice")).await.unwrap();
         let err = provider.create(make_record("alice")).await.unwrap_err();
-        assert!(matches!(err, KirinoError::Validation(_)));
+        assert!(err.downcast_ref::<KirinoError>().is_some_and(|e| matches!(e, KirinoError::Validation(_))));
     }
 }

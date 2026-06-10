@@ -3,8 +3,9 @@ use uuid::Uuid;
 
 use async_trait::async_trait;
 
+use anyhow::Result;
 use crate::{
-    error::{KirinoError, KirinoResult},
+    error::KirinoError,
     service::login::{UserDatabase, UserRecord},
 };
 
@@ -27,28 +28,29 @@ impl InMemoryUserDatabase {
 
 #[async_trait]
 impl UserDatabase for InMemoryUserDatabase {
-    async fn create_user(&self, user: &UserRecord) -> KirinoResult<()> {
+    async fn create_user(&self, user: &UserRecord) -> Result<()> {
         let mut users = self.users.write().await;
         if users.contains_key(&user.username) {
             return Err(KirinoError::Validation(
                 "username already exists".to_string(),
-            ));
+            )
+            .into());
         }
         users.insert(user.username.clone(), user.clone());
         Ok(())
     }
 
-    async fn find_by_username(&self, username: &str) -> KirinoResult<Option<UserRecord>> {
+    async fn find_by_username(&self, username: &str) -> Result<Option<UserRecord>> {
         let users = self.users.read().await;
         Ok(users.get(username).cloned())
     }
 
-    async fn find_by_id(&self, id: &Uuid) -> KirinoResult<Option<UserRecord>> {
+    async fn find_by_id(&self, id: &Uuid) -> Result<Option<UserRecord>> {
         let users = self.users.read().await;
         Ok(users.values().find(|u| &u.id == id).cloned())
     }
 
-    async fn update_password(&self, id: &Uuid, new_hash: &str) -> KirinoResult<()> {
+    async fn update_password(&self, id: &Uuid, new_hash: &str) -> Result<()> {
         let mut users = self.users.write().await;
         let user = users
             .values_mut()
@@ -59,7 +61,7 @@ impl UserDatabase for InMemoryUserDatabase {
         Ok(())
     }
 
-    async fn delete_user(&self, id: &Uuid) -> KirinoResult<bool> {
+    async fn delete_user(&self, id: &Uuid) -> Result<bool> {
         let mut users = self.users.write().await;
         let username = users
             .values()
@@ -71,12 +73,12 @@ impl UserDatabase for InMemoryUserDatabase {
         }
     }
 
-    async fn list_users(&self) -> KirinoResult<Vec<UserRecord>> {
+    async fn list_users(&self) -> Result<Vec<UserRecord>> {
         let users = self.users.read().await;
         Ok(users.values().cloned().collect())
     }
 
-    async fn count_users(&self) -> KirinoResult<u64> {
+    async fn count_users(&self) -> Result<u64> {
         let users = self.users.read().await;
         Ok(users.len() as u64)
     }
@@ -178,7 +180,7 @@ mod tests {
             ..make_user("alice")
         };
         let err = db.create_user(&u2).await.unwrap_err();
-        assert!(matches!(err, KirinoError::Validation(_)));
+        assert!(err.downcast_ref::<KirinoError>().is_some_and(|e| matches!(e, KirinoError::Validation(_))));
     }
 
     #[tokio::test]
