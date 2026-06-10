@@ -188,23 +188,21 @@ where
 
     #[must_use]
     pub async fn check_batch(&self, subject: &S, permissions: &HashSet<P>) -> HashMap<P, bool> {
-        use futures::stream::{FuturesOrdered, StreamExt};
+        use futures::stream::{self, StreamExt};
 
         let engine = self.clone();
-        let semaphore = Arc::new(tokio::sync::Semaphore::new(64));
-        let mut tasks = FuturesOrdered::new();
-        for perm in permissions.iter() {
-            let permit = semaphore.clone().acquire_owned().await;
-            let subject = subject.clone();
-            let perm = perm.clone();
-            let engine = engine.clone();
-            tasks.push_back(async move {
-                let _permit = permit;
-                engine.check(&subject, &perm).await
-            });
-        }
-        let outcomes: Vec<_> = tasks.collect().await;
-        permissions.iter().cloned().zip(outcomes).collect()
+        let subject = subject.clone();
+        let perms: Vec<P> = permissions.iter().cloned().collect();
+        let outcomes: Vec<bool> = stream::iter(perms.clone())
+            .map(move |perm| {
+                let engine = engine.clone();
+                let subject = subject.clone();
+                async move { engine.check(&subject, &perm).await }
+            })
+            .buffered(64)
+            .collect()
+            .await;
+        perms.into_iter().zip(outcomes).collect()
     }
 
     #[must_use]

@@ -20,6 +20,8 @@ use crate::rbac::{
 
 const MAX_ANOMALY_DETECTORS: usize = 10_000;
 
+const DEFAULT_ANOMALY_SCORE_WHEN_AT_CAPACITY: f64 = 0.15;
+
 #[derive(Clone)]
 pub struct AuthorizationArbiter {
     trust_store: Shared<dyn TrustScoreStore>,
@@ -271,7 +273,7 @@ impl AuthorizationArbiter {
             };
             match detector {
                 Some(d) => d.observe(request).value,
-                None => 0.0,
+                None => DEFAULT_ANOMALY_SCORE_WHEN_AT_CAPACITY,
             }
         };
 

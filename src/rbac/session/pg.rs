@@ -105,6 +105,11 @@ where
             .filter(|r| assigned_roles.contains(r))
             .collect();
 
+        #[cfg(feature = "rbac-constraints")]
+        if let Some(ref cs) = self.constraint_store {
+            self.validate_dsd_with_store(&validated_roles, cs).await?;
+        }
+
         let now = Utc::now();
         let session = Session {
             id: Uuid::now_v7(),
@@ -176,6 +181,11 @@ where
 
         let mut roles: HashSet<String> = row.active_roles.into_iter().collect();
         roles.remove(role_name);
+
+        #[cfg(feature = "rbac-constraints")]
+        if let Some(ref cs) = self.constraint_store {
+            self.validate_dsd_with_store(&roles, cs).await?;
+        }
 
         let roles_vec: Vec<String> = roles.into_iter().collect();
         self.store.update_roles(session_id, &roles_vec).await
