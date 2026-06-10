@@ -91,6 +91,11 @@ pub struct CertificateInfo {
 mod tests {
     use super::*;
 
+    fn make_pem(data: &[u8]) -> String {
+        let body = crate::utils::base64::encode(data);
+        format!("-----BEGIN CERTIFICATE-----\n{body}\n-----END CERTIFICATE-----")
+    }
+
     #[test]
     fn test_empty_cert() {
         let v = CertificateAuthorityVerifier::new();
@@ -106,8 +111,7 @@ mod tests {
     #[test]
     fn test_minimal_pem() {
         let v = CertificateAuthorityVerifier::new();
-        let body = standard_base64_encode(&[0x30; 64]);
-        let pem = format!("-----BEGIN CERTIFICATE-----\n{body}\n-----END CERTIFICATE-----");
+        let pem = make_pem(&[0x30; 64]);
         let info = v.verify_certificate(&pem).unwrap();
         assert!(info.is_valid);
     }
@@ -115,40 +119,15 @@ mod tests {
     #[test]
     fn test_too_short_cert() {
         let v = CertificateAuthorityVerifier::new();
-        let body = standard_base64_encode(&[0x30; 16]);
-        let pem = format!("-----BEGIN CERTIFICATE-----\n{body}\n-----END CERTIFICATE-----");
+        let pem = make_pem(&[0x30; 16]);
         assert!(v.verify_certificate(&pem).is_err());
     }
 
     #[test]
     fn test_missing_end_marker() {
         let v = CertificateAuthorityVerifier::new();
-        let body = standard_base64_encode(&[0x30; 64]);
+        let body = crate::utils::base64::encode(&[0x30; 64]);
         let pem = format!("-----BEGIN CERTIFICATE-----\n{body}");
         assert!(v.verify_certificate(&pem).is_err());
-    }
-
-    fn standard_base64_encode(data: &[u8]) -> String {
-        const CHARS: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-        let mut result = String::new();
-        for chunk in data.chunks(3) {
-            let b0 = chunk[0] as u32;
-            let b1 = if chunk.len() > 1 { chunk[1] as u32 } else { 0 };
-            let b2 = if chunk.len() > 2 { chunk[2] as u32 } else { 0 };
-            let triple = (b0 << 16) | (b1 << 8) | b2;
-            result.push(CHARS[((triple >> 18) & 0x3F) as usize] as char);
-            result.push(CHARS[((triple >> 12) & 0x3F) as usize] as char);
-            if chunk.len() > 1 {
-                result.push(CHARS[((triple >> 6) & 0x3F) as usize] as char);
-            } else {
-                result.push('=');
-            }
-            if chunk.len() > 2 {
-                result.push(CHARS[(triple & 0x3F) as usize] as char);
-            } else {
-                result.push('=');
-            }
-        }
-        result
     }
 }
