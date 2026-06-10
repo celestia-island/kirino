@@ -390,7 +390,7 @@ impl AuthorizationArbiter {
                     mitigation: verdict.mitigation.as_ref().map(|s| s.to_string()),
                 }),
             };
-            audit.log(entry).await;
+            let _ = audit.log(entry).await;
         }
     }
 }

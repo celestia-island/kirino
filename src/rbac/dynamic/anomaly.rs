@@ -275,7 +275,7 @@ mod tests {
         det.total_observed = 200;
 
         for _ in 0..20 {
-            det.observe(&make_request(ActionCategory::ProcessExec));
+            let _ = det.observe(&make_request(ActionCategory::ProcessExec));
         }
 
         let dev = det.pattern_deviation();
@@ -287,7 +287,7 @@ mod tests {
         let mut det = AnomalyDetector::new(5);
         det.total_observed = 200;
         for _ in 0..10 {
-            det.observe(&make_request(ActionCategory::ReadOnly));
+            let _ = det.observe(&make_request(ActionCategory::ReadOnly));
         }
         assert_eq!(det.recent_actions.len(), 5);
     }
@@ -300,9 +300,9 @@ mod tests {
         // at 100 uses a representative baseline from the dedicated history buffer.
         for i in 0..BASELINE_MIN_SAMPLES {
             if i < 75 {
-                det.observe(&make_request(ActionCategory::ReadOnly));
+                let _ = det.observe(&make_request(ActionCategory::ReadOnly));
             } else {
-                det.observe(&make_request(ActionCategory::FileWrite));
+                let _ = det.observe(&make_request(ActionCategory::FileWrite));
             }
         }
 
@@ -343,7 +343,7 @@ mod tests {
         assert!(det.baseline.is_none());
 
         for _ in 0..BASELINE_MIN_SAMPLES {
-            det.observe(&make_request(ActionCategory::ReadOnly));
+            let _ = det.observe(&make_request(ActionCategory::ReadOnly));
         }
 
         assert!(det.baseline.is_some());
@@ -355,7 +355,7 @@ mod tests {
         let mut det = AnomalyDetector::new(100);
 
         for _ in 0..BASELINE_MIN_SAMPLES {
-            det.observe(&make_request(ActionCategory::ReadOnly));
+            let _ = det.observe(&make_request(ActionCategory::ReadOnly));
         }
 
         let score = det.observe(&make_request(ActionCategory::ProcessExec));
@@ -371,7 +371,7 @@ mod tests {
     fn test_build_baseline_insufficient_samples() {
         let mut det = AnomalyDetector::new(20);
         for _ in 0..50 {
-            det.observe(&make_request(ActionCategory::ReadOnly));
+            let _ = det.observe(&make_request(ActionCategory::ReadOnly));
         }
         assert!(!det.is_baseline_ready());
         det.build_baseline_from_history();

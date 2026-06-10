@@ -103,8 +103,8 @@ mod tests {
         let sim = v.compute_similarity(&a, &b);
         assert!((sim).abs() < 0.01);
 
-        let a = vec![0b10101010];
-        let b = vec![0b10101010];
+        let a = vec![0b1010_1010];
+        let b = vec![0b1010_1010];
         let sim = v.compute_similarity(&a, &b);
         assert!((sim - 1.0).abs() < 0.01);
     }

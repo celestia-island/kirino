@@ -860,9 +860,9 @@ mod tests {
             .with_policy_engine(InMemoryAuditPolicyEngine::new())
             .with_analyzer(DefaultAuditAnalyzer::new());
 
-        logger.log(make_entry("u1", "read", true, 0.1)).await;
-        logger.log(make_entry("u1", "write", false, 0.8)).await;
-        logger.log(make_entry("u2", "delete", false, 0.9)).await;
+        let _ = logger.log(make_entry("u1", "read", true, 0.1)).await;
+        let _ = logger.log(make_entry("u1", "write", false, 0.8)).await;
+        let _ = logger.log(make_entry("u2", "delete", false, 0.9)).await;
 
         let all = logger.query(&AuditFilter::default()).await;
         assert_eq!(all.len(), 3);
@@ -904,8 +904,8 @@ mod tests {
             })
             .await;
 
-        logger.log(make_entry("u1", "read", true, 0.1)).await;
-        logger.log(make_entry("u1", "write", false, 0.8)).await;
+        let _ = logger.log(make_entry("u1", "read", true, 0.1)).await;
+        let _ = logger.log(make_entry("u1", "write", false, 0.8)).await;
 
         assert_eq!(counter.load(Ordering::SeqCst), 1);
     }
