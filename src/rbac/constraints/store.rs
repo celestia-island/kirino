@@ -67,7 +67,14 @@ impl ConstraintStore for InMemoryConstraintStore {
     }
 
     async fn add_ssd_policy(&self, policy: SsdPolicy) -> Result<()> {
-        self.ssd_policies.write().await.push(policy);
+        let mut policies = self.ssd_policies.write().await;
+        if policies.iter().any(|p| p.name == policy.name) {
+            return Err(anyhow::anyhow!(
+                "SSD policy with name '{}' already exists",
+                policy.name
+            ));
+        }
+        policies.push(policy);
         Ok(())
     }
 
@@ -83,7 +90,14 @@ impl ConstraintStore for InMemoryConstraintStore {
     }
 
     async fn add_dsd_policy(&self, policy: DsdPolicy) -> Result<()> {
-        self.dsd_policies.write().await.push(policy);
+        let mut policies = self.dsd_policies.write().await;
+        if policies.iter().any(|p| p.name == policy.name) {
+            return Err(anyhow::anyhow!(
+                "DSD policy with name '{}' already exists",
+                policy.name
+            ));
+        }
+        policies.push(policy);
         Ok(())
     }
 
@@ -267,37 +281,37 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_duplicate_ssd_policy_names() {
+    async fn test_duplicate_ssd_policy_names_rejected() {
         let store = InMemoryConstraintStore::new();
         store
             .add_ssd_policy(SsdPolicy::new("dup", ["a".into()].into(), 1))
             .await
             .unwrap();
-        store
+        assert!(store
             .add_ssd_policy(SsdPolicy::new("dup", ["b".into()].into(), 1))
             .await
-            .unwrap();
+            .is_err());
 
         let policies = store.list_ssd_policies().await.unwrap();
-        assert_eq!(policies.len(), 2);
+        assert_eq!(policies.len(), 1);
 
         assert!(store.remove_ssd_policy("dup").await.unwrap());
         assert!(store.list_ssd_policies().await.unwrap().is_empty());
     }
 
     #[tokio::test]
-    async fn test_duplicate_dsd_policy_names() {
+    async fn test_duplicate_dsd_policy_names_rejected() {
         let store = InMemoryConstraintStore::new();
         store
             .add_dsd_policy(DsdPolicy::new("dup", ["a".into()].into(), 1))
             .await
             .unwrap();
-        store
+        assert!(store
             .add_dsd_policy(DsdPolicy::new("dup", ["b".into()].into(), 1))
             .await
-            .unwrap();
+            .is_err());
 
-        assert_eq!(store.list_dsd_policies().await.unwrap().len(), 2);
+        assert_eq!(store.list_dsd_policies().await.unwrap().len(), 1);
         assert!(store.remove_dsd_policy("dup").await.unwrap());
         assert!(store.list_dsd_policies().await.unwrap().is_empty());
     }

@@ -17,6 +17,7 @@ use anyhow::Result;
 #[derive(Clone, Default)]
 pub struct InMemoryUserDatabase {
     users: std::sync::Arc<tokio::sync::RwLock<HashMap<String, UserRecord>>>,
+    id_to_username: std::sync::Arc<tokio::sync::RwLock<HashMap<uuid::Uuid, String>>>,
 }
 
 impl InMemoryUserDatabase {
@@ -33,7 +34,11 @@ impl UserDatabase for InMemoryUserDatabase {
         if users.contains_key(&user.username) {
             return Err(KirinoError::Validation("username already exists".to_string()).into());
         }
-        users.insert(user.username.clone(), user.clone());
+        let id = user.id;
+        let username = user.username.clone();
+        users.insert(username.clone(), user.clone());
+        drop(users);
+        self.id_to_username.write().await.insert(id, username);
         Ok(())
     }
 
@@ -43,15 +48,25 @@ impl UserDatabase for InMemoryUserDatabase {
     }
 
     async fn find_by_id(&self, id: &Uuid) -> Result<Option<UserRecord>> {
-        let users = self.users.read().await;
-        Ok(users.values().find(|u| &u.id == id).cloned())
+        let idx = self.id_to_username.read().await;
+        if let Some(username) = idx.get(id) {
+            let users = self.users.read().await;
+            Ok(users.get(username).cloned())
+        } else {
+            Ok(None)
+        }
     }
 
     async fn update_password(&self, id: &Uuid, new_hash: &str) -> Result<()> {
+        let idx = self.id_to_username.read().await;
+        let username = idx
+            .get(id)
+            .cloned()
+            .ok_or_else(|| KirinoError::NotFound("user not found".to_string()))?;
+        drop(idx);
         let mut users = self.users.write().await;
         let user = users
-            .values_mut()
-            .find(|u| &u.id == id)
+            .get_mut(&username)
             .ok_or_else(|| KirinoError::NotFound("user not found".to_string()))?;
         user.password_hash = new_hash.to_string();
         user.updated_at = chrono::Utc::now();
@@ -59,13 +74,14 @@ impl UserDatabase for InMemoryUserDatabase {
     }
 
     async fn delete_user(&self, id: &Uuid) -> Result<bool> {
-        let mut users = self.users.write().await;
-        let username = users
-            .values()
-            .find(|u| &u.id == id)
-            .map(|u| u.username.clone());
+        let mut idx = self.id_to_username.write().await;
+        let username = idx.remove(id);
+        drop(idx);
         match username {
-            Some(name) => Ok(users.remove(&name).is_some()),
+            Some(name) => {
+                let mut users = self.users.write().await;
+                Ok(users.remove(&name).is_some())
+            }
             None => Ok(false),
         }
     }

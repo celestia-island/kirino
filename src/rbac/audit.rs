@@ -218,7 +218,7 @@ const DEFAULT_MAX_AUDIT_ENTRIES: usize = 10000;
 
 pub struct InMemoryAuditSink {
     entries: RwLock<Vec<AuditEntry>>,
-    next_id: RwLock<u64>,
+    next_id: std::sync::atomic::AtomicU64,
     max_entries: usize,
 }
 
@@ -227,7 +227,7 @@ impl InMemoryAuditSink {
     pub fn new() -> Self {
         Self {
             entries: RwLock::new(Vec::new()),
-            next_id: RwLock::new(1),
+            next_id: std::sync::atomic::AtomicU64::new(1),
             max_entries: DEFAULT_MAX_AUDIT_ENTRIES,
         }
     }
@@ -236,7 +236,7 @@ impl InMemoryAuditSink {
     pub fn with_max_entries(max_entries: usize) -> Self {
         Self {
             entries: RwLock::new(Vec::new()),
-            next_id: RwLock::new(1),
+            next_id: std::sync::atomic::AtomicU64::new(1),
             max_entries,
         }
     }
@@ -286,9 +286,10 @@ fn matches_filter(entry: &AuditEntry, filter: &AuditFilter) -> bool {
 #[async_trait::async_trait]
 impl AuditSink for InMemoryAuditSink {
     async fn append(&self, mut entry: AuditEntry) {
-        let mut next_id = self.next_id.write().await;
-        entry.id = *next_id;
-        *next_id += 1;
+        let id = self
+            .next_id
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        entry.id = id;
         let mut entries = self.entries.write().await;
         entries.push(entry);
         if entries.len() > self.max_entries {
@@ -543,8 +544,9 @@ impl AuditLogger {
 
     #[must_use]
     pub async fn log(&self, entry: AuditEntry) -> Vec<AuditAlert> {
-        let mut alerts = Vec::new();
+        self.sink.append(entry.clone()).await;
 
+        let mut alerts = Vec::new();
         if let Some(ref engine) = self.policy_engine {
             let fired = engine.evaluate(&entry).await;
             if !fired.is_empty() {
@@ -558,7 +560,6 @@ impl AuditLogger {
             }
         }
 
-        self.sink.append(entry).await;
         alerts
     }
 

@@ -81,7 +81,7 @@ impl AnomalyDetector {
         self.recent_actions.push_back(record.clone());
 
         // Collect all observations until baseline is built
-        if self.baseline.is_none() {
+        if self.baseline.is_none() && self.history.len() < BASELINE_MIN_SAMPLES {
             self.history.push_back(record);
         }
 

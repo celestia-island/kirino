@@ -3,6 +3,10 @@ use std::collections::HashSet;
 
 use super::metrics::ActionCategory;
 
+const DOMAIN_RESOURCE_MISMATCH_WEIGHT: f64 = 0.3;
+const ADJACENT_DOMAIN_WEIGHT: f64 = 0.15;
+const OUT_OF_DOMAIN_WEIGHT: f64 = 0.6;
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TaskDomain {
     pub domain_name: String,
@@ -77,7 +81,7 @@ impl DomainScope {
 
         if in_domain && !resource_ok {
             return DomainMatch::DomainResourceMismatch {
-                excess_weight: 0.3,
+                excess_weight: DOMAIN_RESOURCE_MISMATCH_WEIGHT,
             };
         }
 
@@ -88,11 +92,13 @@ impl DomainScope {
 
         if in_adjacent {
             return DomainMatch::Adjacent {
-                excess_weight: 0.15,
+                excess_weight: ADJACENT_DOMAIN_WEIGHT,
             };
         }
 
-        DomainMatch::OutOfDomain { excess_weight: 0.6 }
+        DomainMatch::OutOfDomain {
+            excess_weight: OUT_OF_DOMAIN_WEIGHT,
+        }
     }
 }
 
