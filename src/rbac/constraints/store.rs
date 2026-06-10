@@ -7,14 +7,17 @@ use crate::error::KirinoResult;
 
 #[async_trait]
 pub trait ConstraintStore: Send + Sync {
+    #[must_use]
     async fn list_ssd_policies(&self) -> KirinoResult<Vec<SsdPolicy>>;
     async fn add_ssd_policy(&self, policy: SsdPolicy) -> KirinoResult<()>;
     async fn remove_ssd_policy(&self, name: &str) -> KirinoResult<bool>;
 
+    #[must_use]
     async fn list_dsd_policies(&self) -> KirinoResult<Vec<DsdPolicy>>;
     async fn add_dsd_policy(&self, policy: DsdPolicy) -> KirinoResult<()>;
     async fn remove_dsd_policy(&self, name: &str) -> KirinoResult<bool>;
 
+    #[must_use]
     async fn list_cardinality_constraints(&self) -> KirinoResult<Vec<CardinalityConstraint>>;
     async fn add_cardinality_constraint(
         &self,
@@ -22,6 +25,7 @@ pub trait ConstraintStore: Send + Sync {
     ) -> KirinoResult<()>;
     async fn remove_cardinality_constraint(&self, role_name: &str) -> KirinoResult<bool>;
 
+    #[must_use]
     async fn list_prerequisite_constraints(&self) -> KirinoResult<Vec<PrerequisiteConstraint>>;
     async fn add_prerequisite_constraint(
         &self,
@@ -29,6 +33,7 @@ pub trait ConstraintStore: Send + Sync {
     ) -> KirinoResult<()>;
     async fn remove_prerequisite_constraint(&self, role_name: &str) -> KirinoResult<bool>;
 
+    #[must_use]
     async fn list_temporal_constraints(&self) -> KirinoResult<Vec<TemporalConstraint>>;
     async fn add_temporal_constraint(&self, constraint: TemporalConstraint) -> KirinoResult<()>;
     async fn remove_temporal_constraint(&self, role_name: &str) -> KirinoResult<bool>;

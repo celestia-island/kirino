@@ -15,6 +15,7 @@ where
     S: Subject,
     P: Permission,
 {
+    #[must_use]
     async fn get(&self, subject: &S, permission: &P) -> Option<bool>;
     async fn set(&self, subject: &S, permission: &P, granted: bool);
     async fn invalidate_subject(&self, subject: &S);

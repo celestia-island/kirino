@@ -11,5 +11,5 @@ pub trait Credential {
     /// # Errors
     ///
     /// Returns an error if verification fails due to an internal error.
-    fn verify(&self, token: &str) -> Result<bool>;
+        fn verify(&self, token: &str) -> Result<bool>;
 }

@@ -88,6 +88,7 @@ impl InMemoryOneTimeStore {
         }
     }
 
+    #[must_use]
     pub async fn cleanup_expired(&self) -> usize {
         let mut tokens = self.tokens.write().await;
         let before = tokens.len();
@@ -104,7 +105,9 @@ impl Default for InMemoryOneTimeStore {
 
 #[async_trait]
 pub trait OneTimeStore: Send + Sync {
+    #[must_use]
     async fn claim(&self, token: &str) -> Result<bool>;
+    #[must_use]
     async fn issue(&self, ttl_secs: u64) -> Result<String>;
 }
 

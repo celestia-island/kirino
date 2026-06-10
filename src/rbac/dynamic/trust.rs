@@ -78,10 +78,13 @@ impl TrustScore {
 
 #[async_trait]
 pub trait TrustScoreStore: Send + Sync {
+    #[must_use]
     async fn get(&self, delegator_id: &str) -> KirinoResult<Option<TrustScore>>;
     async fn set(&self, delegator_id: &str, score: TrustScore) -> KirinoResult<()>;
     async fn delete(&self, delegator_id: &str) -> KirinoResult<()>;
+    #[must_use]
     async fn sweep_stale(&self, max_age: Duration) -> KirinoResult<Vec<String>>;
+    #[must_use]
     async fn list_ids(&self) -> KirinoResult<Vec<String>>;
 }
 
@@ -198,7 +201,7 @@ impl TrustDecayWorker {
     /// # Errors
     ///
     /// Returns an error if listing, getting, or setting trust scores fails.
-    pub async fn run_once(&self) -> KirinoResult<usize> {
+        pub async fn run_once(&self) -> KirinoResult<usize> {
         let ids = self.store.list_ids().await?;
         let mut decayed = 0;
         for id in &ids {

@@ -32,15 +32,20 @@ pub trait Role<P: Permission>: Clone + Send + Sync + 'static {
 }
 
 pub trait PermissionRegistry<P: Permission>: Send + Sync {
+    #[must_use]
     fn all_permissions(&self) -> HashSet<P>;
+    #[must_use]
     fn get_permission(&self, name: &str) -> Option<P>;
 }
 
 pub trait RoleRegistry<P: Permission>: Send + Sync {
+    #[must_use]
     fn get_role_permissions(&self, role_name: &str) -> Option<HashSet<P>>;
+    #[must_use]
     fn role_parents(&self, _role_name: &str) -> Vec<String> {
         Vec::new()
     }
+    #[must_use]
     fn list_role_names(&self) -> Vec<String>;
 }
 
@@ -52,10 +57,14 @@ where
 {
     async fn assign_role(&self, subject: &S, role_name: &str) -> KirinoResult<()>;
     async fn revoke_role(&self, subject: &S, role_name: &str) -> KirinoResult<()>;
+    #[must_use]
     async fn roles_of(&self, subject: &S) -> KirinoResult<Vec<String>>;
+    #[must_use]
     async fn subjects_with_role(&self, role_name: &str) -> KirinoResult<Vec<String>>;
+    #[must_use]
     async fn extra_permissions(&self, subject: &S) -> KirinoResult<HashSet<P>>;
     async fn set_extra_permissions(&self, subject: &S, perms: HashSet<P>) -> KirinoResult<()>;
+    #[must_use]
     async fn denied_permissions(&self, subject: &S) -> KirinoResult<HashSet<P>>;
     async fn set_denied_permissions(&self, subject: &S, perms: HashSet<P>) -> KirinoResult<()>;
 }
@@ -63,7 +72,10 @@ where
 #[async_trait]
 pub trait RoleStore<P: Permission>: Send + Sync {
     async fn create_role(&self, role_name: &str, permissions: HashSet<P>) -> KirinoResult<()>;
+    #[must_use]
     async fn delete_role(&self, role_name: &str) -> KirinoResult<bool>;
+    #[must_use]
     async fn get_role_permissions(&self, role_name: &str) -> KirinoResult<Option<HashSet<P>>>;
+    #[must_use]
     async fn list_roles(&self) -> KirinoResult<Vec<String>>;
 }

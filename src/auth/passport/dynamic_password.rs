@@ -32,7 +32,7 @@ impl TotpVerifier {
         }
     }
 
-    pub fn verify(&self, code: &str) -> Result<bool> {
+        pub fn verify(&self, code: &str) -> Result<bool> {
         let time_step = chrono::Utc::now().timestamp() as u64 / self.period_secs as u64;
         let generated = self.generate_at(time_step)?;
         let generated_prev = self.generate_at(time_step.saturating_sub(1))?;
@@ -40,7 +40,7 @@ impl TotpVerifier {
             || constant_time_eq(generated_prev.as_bytes(), code.as_bytes()))
     }
 
-    pub fn generate(&self) -> Result<String> {
+        pub fn generate(&self) -> Result<String> {
         let time_step = chrono::Utc::now().timestamp() as u64 / self.period_secs as u64;
         self.generate_at(time_step)
     }
@@ -62,7 +62,7 @@ impl HotpVerifier {
         Self { secret, counter }
     }
 
-    pub fn verify(&self, code: &str) -> Result<bool> {
+        pub fn verify(&self, code: &str) -> Result<bool> {
         let expected = hotp_code(&self.secret, self.counter, 6)?;
         let formatted = format_code(expected, 6);
         Ok(constant_time_eq(formatted.as_bytes(), code.as_bytes()))

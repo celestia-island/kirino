@@ -27,7 +27,7 @@ impl BiologicalVerifier {
         self.threshold
     }
 
-    pub fn verify(&self, sample: &[u8], template: &[u8]) -> Result<bool> {
+        pub fn verify(&self, sample: &[u8], template: &[u8]) -> Result<bool> {
         if sample.is_empty() || template.is_empty() {
             return Ok(false);
         }

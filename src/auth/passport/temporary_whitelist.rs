@@ -25,7 +25,7 @@ impl WhitelistVerifier {
         }
     }
 
-    pub async fn is_whitelisted(&self, source: &ClientSource) -> Result<bool> {
+        pub async fn is_whitelisted(&self, source: &ClientSource) -> Result<bool> {
         let now = Instant::now();
         let entries = self.entries.read().await;
         for entry in entries.iter() {
@@ -54,6 +54,7 @@ impl WhitelistVerifier {
         entries.retain(|e| &e.source != source);
     }
 
+    #[must_use]
     pub async fn cleanup_expired(&self) -> usize {
         let before = {
             let entries = self.entries.read().await;

@@ -355,14 +355,17 @@ where
     }
 
     #[cfg(feature = "rbac-dynamic")]
+    #[must_use]
     pub fn arbiter(&self) -> Option<Shared<AuthorizationArbiter>> {
         self.arbiter.clone()
     }
 
+    #[must_use]
     pub fn jwt_manager(&self) -> &JwtManager {
         &self.jwt
     }
 
+    #[must_use]
     pub fn engine(&self) -> Shared<RbacEngine<StringSubject, P, A>> {
         self.engine.clone()
     }
@@ -437,7 +440,7 @@ where
     const DUMMY_HASH: &str =
         "$argon2id$v=19$m=19456,t=2,p=1$dummy salts are not used$dummyhashvaluethatisnotused";
 
-    pub async fn login(&self, username: &str, password: &str) -> KirinoResult<LoginResult> {
+        pub async fn login(&self, username: &str, password: &str) -> KirinoResult<LoginResult> {
         let username = username.trim();
         self.rate_limiter.check_and_record_failure(username).await?;
 
@@ -501,12 +504,14 @@ where
             .map_err(Into::into)
     }
 
+    #[must_use]
     pub async fn check_permission(&self, user_id: &str, permission: &P) -> bool {
         let subject = StringSubject::new(user_id);
         self.engine.check(&subject, permission).await
     }
 
     #[cfg(feature = "rbac-dynamic")]
+    #[must_use]
     pub async fn check_static_and_dynamic(
         &self,
         user_id: &str,
@@ -550,12 +555,12 @@ where
         self.db.update_password(&uid, &new_hash).await
     }
 
-    pub async fn list_users(&self) -> KirinoResult<Vec<UserInfo>> {
+        pub async fn list_users(&self) -> KirinoResult<Vec<UserInfo>> {
         let users = self.db.list_users().await?;
         Ok(users.iter().map(UserRecord::to_public).collect())
     }
 
-    pub async fn delete_user(&self, user_id: &str) -> KirinoResult<bool> {
+        pub async fn delete_user(&self, user_id: &str) -> KirinoResult<bool> {
         let uid = Uuid::parse_str(user_id)
             .map_err(|_| KirinoError::Validation("invalid user_id".to_string()))?;
         self.jwt.revoke_all_for_user(user_id).await;
@@ -684,11 +689,16 @@ pub fn build_default_engine() -> Shared<DefaultEngine> {
 #[async_trait::async_trait]
 pub trait UserDatabase: Send + Sync + Clone + 'static {
     async fn create_user(&self, user: &UserRecord) -> KirinoResult<()>;
+    #[must_use]
     async fn find_by_username(&self, username: &str) -> KirinoResult<Option<UserRecord>>;
+    #[must_use]
     async fn find_by_id(&self, id: &Uuid) -> KirinoResult<Option<UserRecord>>;
     async fn update_password(&self, id: &Uuid, new_hash: &str) -> KirinoResult<()>;
+    #[must_use]
     async fn delete_user(&self, id: &Uuid) -> KirinoResult<bool>;
+    #[must_use]
     async fn list_users(&self) -> KirinoResult<Vec<UserRecord>>;
+    #[must_use]
     async fn count_users(&self) -> KirinoResult<u64>;
 }
 

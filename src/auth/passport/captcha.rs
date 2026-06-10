@@ -59,7 +59,7 @@ impl CaptchaVerifier {
         self
     }
 
-    pub async fn verify(&self, challenge_id: &str, user_response: &str) -> Result<bool> {
+        pub async fn verify(&self, challenge_id: &str, user_response: &str) -> Result<bool> {
         let mut challenges = self.challenges.write().await;
         let entry = challenges
             .get_mut(challenge_id)
@@ -91,7 +91,7 @@ impl CaptchaVerifier {
         Ok(correct)
     }
 
-    pub async fn generate_challenge(&self) -> Result<CaptchaChallenge> {
+        pub async fn generate_challenge(&self) -> Result<CaptchaChallenge> {
         self.cleanup_expired().await;
 
         let mut rng = rand::thread_rng();
@@ -117,6 +117,7 @@ impl CaptchaVerifier {
         })
     }
 
+    #[must_use]
     pub async fn active_challenge_count(&self) -> usize {
         self.challenges.read().await.len()
     }

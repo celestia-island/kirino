@@ -34,6 +34,7 @@ impl<S: Subject> Session<S> {
 
 #[async_trait::async_trait]
 pub trait SessionManager<S: Subject>: Send + Sync {
+    #[must_use]
     async fn create_session(
         &self,
         subject: &S,
@@ -42,6 +43,7 @@ pub trait SessionManager<S: Subject>: Send + Sync {
     ) -> KirinoResult<Session<S>>;
     async fn activate_role(&self, session_id: Uuid, role_name: &str) -> KirinoResult<()>;
     async fn deactivate_role(&self, session_id: Uuid, role_name: &str) -> KirinoResult<()>;
+    #[must_use]
     async fn get_session(&self, session_id: Uuid) -> KirinoResult<Option<Session<S>>>;
     async fn destroy_session(&self, session_id: Uuid) -> KirinoResult<()>;
 }
@@ -79,6 +81,7 @@ where
         self
     }
 
+    #[must_use]
     pub fn assignment_store(&self) -> Shared<dyn AssignmentStore<S, P>> {
         self.assignment_store.clone()
     }

@@ -27,20 +27,21 @@ impl KeyPairVerifier {
         Self { secret_key: key }
     }
 
+    #[must_use]
     pub fn with_secret_key(secret_key: Vec<u8>) -> Self {
         Self { secret_key }
     }
 
-    pub fn sign(&self, message: &[u8]) -> Result<Vec<u8>> {
+        pub fn sign(&self, message: &[u8]) -> Result<Vec<u8>> {
         hmac_compute(&self.secret_key, message)
     }
 
-    pub fn verify_signature(&self, message: &[u8], signature: &[u8]) -> Result<bool> {
+        pub fn verify_signature(&self, message: &[u8], signature: &[u8]) -> Result<bool> {
         let expected = hmac_compute(&self.secret_key, message)?;
         Ok(constant_time_eq(&expected, signature))
     }
 
-    pub fn generate_keypair(&self) -> Result<(Vec<u8>, Vec<u8>)> {
+        pub fn generate_keypair(&self) -> Result<(Vec<u8>, Vec<u8>)> {
         let mut rng = rand::thread_rng();
         let mut private_key = vec![0u8; 32];
         rng.fill(&mut private_key[..]);

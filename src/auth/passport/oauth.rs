@@ -30,7 +30,7 @@ impl OAuthVerifier {
         }
     }
 
-    pub fn verify_token(&self, access_token: &str) -> Result<OAuthClaims> {
+        pub fn verify_token(&self, access_token: &str) -> Result<OAuthClaims> {
         if access_token.is_empty() {
             return Err(anyhow!("empty access token"));
         }
@@ -67,6 +67,7 @@ impl OAuthVerifier {
         ))
     }
 
+    #[must_use]
     pub fn authorization_url(&self, redirect_uri: &str, state: &str) -> String {
         let encoded_redirect = crate::utils::url_encode(redirect_uri);
         let encoded_state = crate::utils::url_encode(state);

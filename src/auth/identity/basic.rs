@@ -22,9 +22,13 @@ fn identity_id(identity: &Identity) -> Uuid {
 #[async_trait]
 pub trait IdentityProvider: Send + Sync {
     async fn create(&self, record: IdentityRecord) -> KirinoResult<()>;
+    #[must_use]
     async fn get(&self, id: Uuid) -> KirinoResult<Option<IdentityRecord>>;
+    #[must_use]
     async fn find_by_username(&self, username: &str) -> KirinoResult<Option<IdentityRecord>>;
+    #[must_use]
     async fn delete(&self, id: Uuid) -> KirinoResult<bool>;
+    #[must_use]
     async fn list(&self) -> KirinoResult<Vec<IdentityRecord>>;
 }
 
