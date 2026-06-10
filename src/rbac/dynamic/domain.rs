@@ -35,9 +35,32 @@ impl TaskDomain {
         if self.allowed_resource_prefixes.is_empty() {
             return true;
         }
+        let normalized = Self::normalize_path(path);
         self.allowed_resource_prefixes
             .iter()
-            .any(|prefix| path.starts_with(prefix))
+            .any(|prefix| normalized.starts_with(prefix))
+    }
+
+    fn normalize_path(path: &str) -> String {
+        let mut components = Vec::new();
+        for part in path.split('/') {
+            match part {
+                "" | "." => {}
+                ".." => {
+                    components.pop();
+                }
+                _ => components.push(part),
+            }
+        }
+        if components.is_empty() {
+            return "/".to_string();
+        }
+        let mut result = String::with_capacity(path.len());
+        for comp in &components {
+            result.push('/');
+            result.push_str(comp);
+        }
+        result
     }
 }
 

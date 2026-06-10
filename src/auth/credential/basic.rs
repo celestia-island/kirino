@@ -31,6 +31,8 @@ pub struct JwtManager {
 
 const MIN_JWT_SECRET_LENGTH: usize = 32;
 const MAX_JWT_EXPIRATION_HOURS: i64 = 87600;
+const REVOCATION_MAX_ENTRIES: usize = 50_000;
+const REVOCATION_AUTO_CLEANUP_WINDOW_SECS: i64 = 86400 * 7;
 
 impl JwtManager {
     pub fn new(secret: &str, expiration_hours: i64) -> Result<Self> {
@@ -119,6 +121,14 @@ impl JwtManager {
                 }
             }
         }
+        if let Some(ref sid) = claims.session_id {
+            let key = format!("session:{sid}");
+            if let Some(&not_before) = revocation.get(&key) {
+                if claims.iat <= not_before {
+                    return Err(anyhow!("token has been revoked"));
+                }
+            }
+        }
         Ok(claims)
     }
 
@@ -129,11 +139,23 @@ impl JwtManager {
     }
 
     pub async fn revoke_all_for_user(&self, user_id: &str) {
-        // Store not_before as now + 1 to ensure tokens issued at the same
-        // second as revocation are also covered by the check iat <= not_before.
         let not_before = Utc::now().timestamp() + 1;
         let mut revocation = self.revocation.write().await;
         revocation.insert(user_id.to_string(), not_before);
+        if revocation.len() > REVOCATION_MAX_ENTRIES {
+            let cutoff = not_before - REVOCATION_AUTO_CLEANUP_WINDOW_SECS;
+            revocation.retain(|_, &mut nb| nb >= cutoff);
+        }
+    }
+
+    pub async fn revoke_session(&self, session_id: &str) {
+        let not_before = Utc::now().timestamp();
+        let mut revocation = self.revocation.write().await;
+        revocation.insert(format!("session:{session_id}"), not_before);
+        if revocation.len() > REVOCATION_MAX_ENTRIES {
+            let cutoff = not_before - REVOCATION_AUTO_CLEANUP_WINDOW_SECS;
+            revocation.retain(|_, &mut nb| nb >= cutoff);
+        }
     }
 
     pub async fn cleanup_revocation(&self, max_token_lifetime_secs: i64) {

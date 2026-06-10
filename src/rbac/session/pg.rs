@@ -131,7 +131,13 @@ where
             return Ok(());
         }
 
-        let subject = S::from_subject_id(&row.subject_id);
+        let subject = S::try_from_subject_id(&row.subject_id).map_err(|e| {
+            anyhow::anyhow!(
+                "invalid subject_id '{}' in session {}: {e}",
+                row.subject_id,
+                session_id
+            )
+        })?;
         let assigned = self.assignment_store.roles_of(&subject).await?;
         let role_str = role_name.to_string();
         if !assigned.contains(&role_str) {
@@ -173,14 +179,23 @@ where
     async fn get_session(&self, session_id: Uuid) -> Result<Option<Session<S>>> {
         let row = self.store.load_session(session_id).await?;
         match row {
-            Some(r) => Ok(Some(Session {
-                id: r.id,
-                subject: S::from_subject_id(&r.subject_id),
-                active_roles: r.active_roles.into_iter().collect(),
-                context: r.context,
-                created_at: r.created_at,
-                expires_at: r.expires_at,
-            })),
+            Some(r) => {
+                let subject = S::try_from_subject_id(&r.subject_id).map_err(|e| {
+                    anyhow::anyhow!(
+                        "invalid subject_id '{}' in session {}: {e}",
+                        r.subject_id,
+                        r.id
+                    )
+                })?;
+                Ok(Some(Session {
+                    id: r.id,
+                    subject,
+                    active_roles: r.active_roles.into_iter().collect(),
+                    context: r.context,
+                    created_at: r.created_at,
+                    expires_at: r.expires_at,
+                }))
+            }
             None => Ok(None),
         }
     }

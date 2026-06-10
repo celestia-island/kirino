@@ -253,6 +253,7 @@ impl Permission for KirinoPermission {
     }
 }
 
+#[derive(Clone)]
 pub struct UserRecord {
     pub id: Uuid,
     pub username: String,
@@ -262,21 +263,6 @@ pub struct UserRecord {
     pub identity: Identity,
     pub created_at: chrono::DateTime<Utc>,
     pub updated_at: chrono::DateTime<Utc>,
-}
-
-impl Clone for UserRecord {
-    fn clone(&self) -> Self {
-        Self {
-            id: self.id,
-            username: self.username.clone(),
-            password_hash: self.password_hash.clone(),
-            display_name: self.display_name.clone(),
-            is_active: self.is_active,
-            identity: self.identity.clone(),
-            created_at: self.created_at,
-            updated_at: self.updated_at,
-        }
-    }
 }
 
 impl std::fmt::Debug for UserRecord {
@@ -466,10 +452,10 @@ where
         };
 
         let is_first = self.auto_admin_first_user
-            && self.db.count_users().await? == 0
             && !self
                 .has_first_user
-                .swap(true, std::sync::atomic::Ordering::SeqCst);
+                .swap(true, std::sync::atomic::Ordering::SeqCst)
+            && self.db.count_users().await? == 0;
 
         self.db.create_user(&user).await?;
 
@@ -491,10 +477,7 @@ where
     const DUMMY_HASH: &str =
         "$argon2id$v=19$m=19456,t=2,p=1$AAAAAAAAAAAAAAAAAAAAAA$AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
 
-    pub async fn login(&self, username: &str, password: &str) -> Result<LoginResult> {
-        let username = username.trim();
-        self.rate_limiter.check_and_record_failure(username).await?;
-
+    async fn authenticate_user(&self, username: &str, password: &str) -> Result<UserRecord> {
         let Some(user) = self.db.find_by_username(username).await? else {
             if let Err(e) = verify_password(password, Self::DUMMY_HASH) {
                 tracing::error!(target: "kirino::service::login",
@@ -515,9 +498,14 @@ where
         }
 
         self.rate_limiter.reset(username).await;
+        Ok(user)
+    }
 
-        let user_id = user.id.to_string();
-        let subject = StringSubject::new(&user_id);
+    async fn fetch_user_roles_and_perms(
+        &self,
+        user_id: &str,
+    ) -> Result<(Vec<String>, Vec<String>)> {
+        let subject = StringSubject::new(user_id);
         let roles = self
             .engine
             .assignment_store()
@@ -528,20 +516,34 @@ where
                 KirinoError::AuthorizationDenied("store unavailable".into())
             })?;
 
+        let perm_names: Vec<String> = self
+            .engine
+            .effective_permissions(&subject)
+            .await
+            .map_err(|e| {
+                tracing::warn!("failed to fetch effective permissions: {e}");
+                KirinoError::AuthorizationDenied("store unavailable".into())
+            })?
+            .into_iter()
+            .map(|p| p.name().to_string())
+            .collect();
+
+        Ok((roles, perm_names))
+    }
+
+    pub async fn login(&self, username: &str, password: &str) -> Result<LoginResult> {
+        let username = username.trim();
+        self.rate_limiter.check_and_record_failure(username).await?;
+
+        let user = self.authenticate_user(username, password).await?;
+        let user_id = user.id.to_string();
+        let (roles, perm_names) = self.fetch_user_roles_and_perms(&user_id).await?;
+
         let token = self.jwt.issue_with_options(
             &user_id,
             &user.username,
             roles.clone(),
-            self.engine
-                .effective_permissions(&subject)
-                .await
-                .map_err(|e| {
-                    tracing::warn!("failed to fetch effective permissions: {e}");
-                    KirinoError::AuthorizationDenied("store unavailable".into())
-                })?
-                .into_iter()
-                .map(|p| p.name().to_string())
-                .collect(),
+            perm_names,
             None,
         )?;
 
@@ -641,50 +643,13 @@ where
             .await?;
 
         let user = self
-            .db
-            .find_by_username(username_trimmed)
-            .await?
-            .ok_or_else(|| {
-                let _ = verify_password(password, Self::DUMMY_HASH);
-                KirinoError::AuthenticationFailed
-            })?;
-
-        if !user.is_active {
-            let _ = verify_password(password, &user.password_hash);
-            return Err(KirinoError::AuthenticationFailed.into());
-        }
-
-        if !verify_password(password, &user.password_hash)? {
-            return Err(KirinoError::AuthenticationFailed.into());
-        }
-
-        self.rate_limiter.reset(username_trimmed).await;
-
+            .authenticate_user(username_trimmed, password)
+            .await?;
         let user_id = user.id.to_string();
-        let subject = StringSubject::new(&user_id);
-        let roles = self
-            .engine
-            .assignment_store()
-            .roles_of(&subject)
-            .await
-            .map_err(|e| {
-                tracing::warn!("failed to fetch roles for user {user_id}: {e}");
-                KirinoError::AuthorizationDenied("store unavailable".into())
-            })?;
-
-        let perm_names: Vec<String> = self
-            .engine
-            .effective_permissions(&subject)
-            .await
-            .map_err(|e| {
-                tracing::warn!("failed to fetch effective permissions: {e}");
-                KirinoError::AuthorizationDenied("store unavailable".into())
-            })?
-            .into_iter()
-            .map(|p| p.name().to_string())
-            .collect();
+        let (roles, perm_names) = self.fetch_user_roles_and_perms(&user_id).await?;
 
         let active_roles: HashSet<String> = roles.iter().cloned().collect();
+        let subject = StringSubject::new(&user_id);
         let session = session_mgr
             .create_session(&subject, active_roles, session_ttl)
             .await?;
@@ -710,11 +675,11 @@ where
         ))
     }
 
-    pub async fn logout<SM>(&self, user_id: &str, session_id: Uuid, session_mgr: &SM) -> Result<()>
+    pub async fn logout<SM>(&self, _user_id: &str, session_id: Uuid, session_mgr: &SM) -> Result<()>
     where
         SM: crate::rbac::session::SessionManager<StringSubject>,
     {
-        self.jwt.revoke_all_for_user(user_id).await;
+        self.jwt.revoke_session(&session_id.to_string()).await;
         session_mgr.destroy_session(session_id).await
     }
 }

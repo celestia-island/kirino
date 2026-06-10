@@ -98,11 +98,17 @@ impl Subject for IdentitySubject {
 
     fn from_subject_id(id: &str) -> Self {
         Self::try_from_subject_id(id).unwrap_or_else(|e| {
-            panic!(
-                "IdentitySubject::from_subject_id: invalid subject UUID '{}': {} \
-                 — use try_from_subject_id to handle this error gracefully",
+            tracing::error!(
+                target: "kirino::rbac::identity_subject",
+                "from_subject_id called with invalid UUID '{}': {} — \
+                 use try_from_subject_id to handle this error gracefully. \
+                 Falling back to anonymous identity.",
                 id, e
-            )
+            );
+            Self::new(Identity::Anonymous {
+                id: uuid::Uuid::nil(),
+                created_at: chrono::Utc::now(),
+            })
         })
     }
 

@@ -145,6 +145,13 @@ impl<P: Permission> Default for InMemoryRoleStore<P> {
 impl<P: Permission> RoleStore<P> for InMemoryRoleStore<P> {
     async fn create_role(&self, role_name: &str, permissions: HashSet<P>) -> Result<()> {
         let mut roles = self.roles.write().await;
+        if roles.contains_key(role_name) {
+            tracing::warn!(
+                target: "kirino::rbac::store::memory",
+                "overwriting existing role '{}'",
+                role_name
+            );
+        }
         roles.insert(role_name.to_string(), permissions);
         Ok(())
     }

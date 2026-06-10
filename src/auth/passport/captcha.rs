@@ -136,8 +136,7 @@ impl CaptchaVerifier {
         self.challenges.read().await.len()
     }
 
-    #[allow(dead_code)]
-    async fn cleanup_expired(&self) {
+    pub async fn cleanup_expired(&self) {
         let mut challenges = self.challenges.write().await;
         let now = Instant::now();
         challenges.retain(|_, entry| now.duration_since(entry.created_at) <= self.ttl);

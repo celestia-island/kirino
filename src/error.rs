@@ -1,6 +1,6 @@
 use thiserror::Error;
 
-#[derive(Debug, Error)]
+#[derive(Debug, Clone, Error)]
 pub enum KirinoError {
     #[error("not found: {0}")]
     NotFound(String),

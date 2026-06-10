@@ -5,6 +5,7 @@ use uuid::Uuid;
 
 use crate::rbac::store::persistence::{PersistentSessionStore, SessionRow};
 
+#[derive(Debug, Clone)]
 pub struct PgSessionStore {
     conn: DatabaseConnection,
 }
@@ -26,7 +27,7 @@ impl PersistentSessionStore for PgSessionStore {
             .transpose()?;
         let stmt = Statement::from_sql_and_values(
             self.conn.get_database_backend(),
-            "INSERT INTO rbac_sessions (id, subject_id, active_roles, context, expires_at, created_at, updated_at) VALUES ($1, $2, $3::jsonb, $4, $5, $6, NOW())",
+            "INSERT INTO rbac_sessions (id, subject_id, active_roles, context, expires_at, created_at, updated_at) VALUES ($1, $2, $3::jsonb, $4::jsonb, $5, $6, NOW())",
             [
                 row.id.to_string().into(),
                 row.subject_id.as_str().into(),
@@ -53,10 +54,19 @@ impl PersistentSessionStore for PgSessionStore {
                     anyhow::anyhow!("corrupted active_roles JSON for session {}: {e}", id)
                 })?
             };
-            let context: Option<serde_json::Value> = row
-                .try_get::<String>("rbac_sessions", "context")
-                .ok()
-                .and_then(|s| serde_json::from_str(&s).ok());
+            let context: Option<serde_json::Value> = match row
+                .try_get::<Option<String>>("rbac_sessions", "context")
+            {
+                Ok(Some(s)) => Some(serde_json::from_str(&s).map_err(|e| {
+                    anyhow::anyhow!("corrupted context JSON for session {}: {e}", id)
+                })?),
+                Ok(None) => None,
+                Err(e) => {
+                    tracing::warn!(target: "kirino::database::pg_session",
+                        "failed to read context for session {}: {e}", id);
+                    None
+                }
+            };
             let expires_at_str = row.try_get::<String>("rbac_sessions", "expires_at")?;
             let expires_at =
                 chrono::DateTime::parse_from_rfc3339(&expires_at_str)?.with_timezone(&chrono::Utc);
@@ -94,7 +104,10 @@ impl PersistentSessionStore for PgSessionStore {
             "UPDATE rbac_sessions SET active_roles = $1::jsonb, updated_at = NOW() WHERE id = $2",
             [roles_json.into(), id.to_string().into()],
         );
-        self.conn.execute(stmt).await?;
+        let result = self.conn.execute(stmt).await?;
+        if result.rows_affected() == 0 {
+            return Err(anyhow::anyhow!("session {} not found", id));
+        }
         Ok(())
     }
 

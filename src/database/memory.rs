@@ -23,7 +23,7 @@ pub struct InMemoryUserDatabase {
 #[derive(Default)]
 struct InMemoryUserDatabaseInner {
     users: HashMap<String, UserRecord>,
-    id_to_username: HashMap<uuid::Uuid, String>,
+    id_to_username: HashMap<Uuid, String>,
 }
 
 impl InMemoryUserDatabase {
@@ -84,7 +84,17 @@ impl UserDatabase for InMemoryUserDatabase {
         let mut inner = self.inner.write().await;
         let username = inner.id_to_username.remove(id);
         match username {
-            Some(name) => Ok(inner.users.remove(&name).is_some()),
+            Some(name) => {
+                let removed = inner.users.remove(&name).is_some();
+                if !removed {
+                    tracing::warn!(
+                        target: "kirino::database::memory",
+                        "inconsistent state: id mapped to '{}' but user not found in store",
+                        name
+                    );
+                }
+                Ok(removed)
+            }
             None => Ok(false),
         }
     }

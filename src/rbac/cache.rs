@@ -95,6 +95,11 @@ where
             permission.name().to_string(),
         );
         let mut cache = self.cache.write().await;
+        if let Some(existing) = cache.get(&key) {
+            if Instant::now() >= existing.expires_at {
+                cache.remove(&key);
+            }
+        }
         cache.insert(
             key,
             CacheEntry {
@@ -107,9 +112,6 @@ where
             cache.retain(|_, entry| now < entry.expires_at);
             if cache.len() > self.max_entries {
                 let excess = cache.len() - self.max_entries;
-                // Use a binary heap to find the `excess` entries with the
-                // soonest expiry (oldest). Without Reverse, pop() removes
-                // the max (newest), leaving the oldest in the heap for eviction.
                 let mut heap: BinaryHeap<(Instant, (String, String))> =
                     BinaryHeap::with_capacity(excess + 1);
                 for (key, entry) in cache.iter() {

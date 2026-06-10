@@ -59,13 +59,13 @@ pub mod base64 {
                 .count();
             let data_chars = total_content_bytes - pad_count;
             let expected_pad = (4 - data_chars % 4) % 4;
-            if expected_pad == 0 && pad_count > 0 {
-                return Err(anyhow!("invalid base64 padding: unexpected padding"));
-            }
             if pad_count != expected_pad {
-                return Err(anyhow!(
-                    "invalid base64 padding: expected {expected_pad} pad characters, got {pad_count}"
-                ));
+                let msg = if expected_pad == 0 {
+                    "invalid base64 padding: unexpected padding".to_string()
+                } else {
+                    format!("invalid base64 padding: expected {expected_pad} pad characters, got {pad_count}")
+                };
+                return Err(anyhow!(msg));
             }
         }
 
@@ -151,13 +151,16 @@ pub fn url_encode(input: &str) -> String {
 
 /// Constant-time byte comparison.
 ///
-/// Compares the contents of `a` and `b` in constant time, regardless of
-/// whether the lengths match. This prevents timing side-channel attacks
-/// that could leak the length of the secret.
+/// Compares the contents of `a` and `b` in constant time by iterating over
+/// the longer of the two slices. This prevents timing side-channel attacks
+/// that could leak the length of the shorter input.
 #[must_use]
 pub fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
     let mut diff = u64::from(a.len() != b.len());
-    for (x, y) in a.iter().zip(b.iter()) {
+    let max_len = std::cmp::max(a.len(), b.len());
+    for i in 0..max_len {
+        let x = a.get(i).copied().unwrap_or(0);
+        let y = b.get(i).copied().unwrap_or(0);
         diff |= u64::from(x ^ y);
     }
     diff == 0
