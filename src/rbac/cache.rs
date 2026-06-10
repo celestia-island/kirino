@@ -1,5 +1,5 @@
 use std::{
-    collections::HashMap,
+    collections::{BinaryHeap, HashMap},
     marker::PhantomData,
     time::{Duration, Instant},
 };
@@ -107,13 +107,18 @@ where
             cache.retain(|_, entry| now < entry.expires_at);
             if cache.len() > self.max_entries {
                 let excess = cache.len() - self.max_entries;
-                let mut entries: Vec<((String, String), Instant)> = cache
-                    .iter()
-                    .map(|(k, v)| (k.clone(), v.expires_at))
-                    .collect();
-                entries.sort_by_key(|(_, t)| *t);
-                entries.truncate(excess);
-                for (key, _) in entries {
+                // Use a binary heap to find the `excess` oldest entries
+                // without sorting the entire cache. Push Reverse(expires_at)
+                // so that pop() removes the newest entry, keeping the oldest.
+                let mut heap: BinaryHeap<(std::cmp::Reverse<Instant>, (String, String))> =
+                    BinaryHeap::with_capacity(excess + 1);
+                for (key, entry) in cache.iter() {
+                    heap.push((std::cmp::Reverse(entry.expires_at), key.clone()));
+                    if heap.len() > excess {
+                        heap.pop();
+                    }
+                }
+                for (_, key) in heap {
                     cache.remove(&key);
                 }
             }

@@ -1,9 +1,10 @@
+use anyhow::Result;
+
 use async_trait::async_trait;
 
 use super::policies::{
     CardinalityConstraint, DsdPolicy, PrerequisiteConstraint, SsdPolicy, TemporalConstraint,
 };
-use anyhow::Result;
 
 #[async_trait]
 pub trait ConstraintStore: Send + Sync {

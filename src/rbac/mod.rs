@@ -13,7 +13,6 @@ pub mod shared;
 pub mod store;
 pub mod subject;
 pub mod traits;
-
 pub mod prelude {
 
     #[cfg(feature = "rbac-constraints")]

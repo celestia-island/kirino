@@ -1,3 +1,4 @@
+use anyhow::Result;
 use futures::future::join_all;
 use std::{
     collections::{HashMap, HashSet},
@@ -13,7 +14,6 @@ use crate::rbac::{
     shared::Shared,
     traits::{AssignmentStore, Permission, PermissionRegistry, RoleRegistry, Subject},
 };
-use anyhow::Result;
 
 pub struct RbacEngine<S, P, A>
 where

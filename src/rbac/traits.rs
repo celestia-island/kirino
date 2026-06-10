@@ -1,8 +1,7 @@
+use anyhow::Result;
 use std::collections::HashSet;
 
 use async_trait::async_trait;
-
-use anyhow::Result;
 
 pub trait Permission: Eq + std::hash::Hash + Clone + Send + Sync + 'static {
     fn name(&self) -> &str;

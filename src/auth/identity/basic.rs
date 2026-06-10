@@ -1,3 +1,4 @@
+use anyhow::Result;
 use chrono::{DateTime, Utc};
 use std::sync::Arc;
 use tokio::sync::RwLock;
@@ -6,7 +7,6 @@ use uuid::Uuid;
 use async_trait::async_trait;
 
 use crate::{error::KirinoError, models::identity::Identity};
-use anyhow::Result;
 
 fn identity_id(identity: &Identity) -> Uuid {
     match identity {
@@ -30,7 +30,6 @@ pub trait IdentityProvider: Send + Sync {
     async fn list(&self) -> Result<Vec<IdentityRecord>>;
 }
 
-#[derive(Debug, Clone)]
 pub struct IdentityRecord {
     pub identity: Identity,
     pub username: String,
@@ -38,6 +37,32 @@ pub struct IdentityRecord {
     pub is_active: bool,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
+}
+
+impl Clone for IdentityRecord {
+    fn clone(&self) -> Self {
+        Self {
+            identity: self.identity.clone(),
+            username: self.username.clone(),
+            password_hash: self.password_hash.clone(),
+            is_active: self.is_active,
+            created_at: self.created_at,
+            updated_at: self.updated_at,
+        }
+    }
+}
+
+impl std::fmt::Debug for IdentityRecord {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("IdentityRecord")
+            .field("identity", &self.identity)
+            .field("username", &self.username)
+            .field("password_hash", &"[redacted]")
+            .field("is_active", &self.is_active)
+            .field("created_at", &self.created_at)
+            .field("updated_at", &self.updated_at)
+            .finish()
+    }
 }
 
 pub struct InMemoryIdentityProvider {

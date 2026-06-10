@@ -41,12 +41,12 @@ build:
 # Check compilation
 check:
     @echo "Checking compilation..."
-    cargo check --all-targets
+    cargo check --all-targets --all-features
 
 # Run Clippy linter
 clippy:
     @echo "Running Clippy..."
-    cargo clippy --all-targets -- -D warnings
+    cargo clippy --all-targets --all-features -- -D warnings
 
 # Format all code
 fmt:
@@ -70,7 +70,7 @@ enforce-groups:
 # Run unit tests
 test:
     @echo "Running unit tests..."
-    cargo test --lib
+    cargo test --lib --all-features
 
 # ============================================================================
 # CI

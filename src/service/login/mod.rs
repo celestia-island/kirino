@@ -1,3 +1,4 @@
+use anyhow::Result;
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use std::{
@@ -8,14 +9,14 @@ use std::{
 use tokio::sync::RwLock;
 use uuid::Uuid;
 
-use anyhow::Result;
-
 #[cfg(feature = "auth-jwt")]
 use crate::auth::credential::basic::JwtManager;
 #[cfg(feature = "auth-password")]
 use crate::auth::passport::static_password::{hash_password, verify_password};
 #[cfg(feature = "rbac-dynamic")]
 use crate::rbac::dynamic::arbiter::AuthorizationArbiter;
+#[cfg(all(feature = "auth-password", feature = "auth-jwt"))]
+use crate::rbac::traits::AssignmentStore;
 use crate::{
     error::KirinoError,
     models::identity::Identity,
@@ -30,9 +31,6 @@ use crate::{
         traits::Permission,
     },
 };
-
-#[cfg(all(feature = "auth-password", feature = "auth-jwt"))]
-use crate::rbac::traits::AssignmentStore;
 
 #[derive(Debug, Clone)]
 struct RateLimitEntry {
@@ -248,7 +246,6 @@ impl Permission for KirinoPermission {
     }
 }
 
-#[derive(Debug, Clone)]
 pub struct UserRecord {
     pub id: Uuid,
     pub username: String,
@@ -258,6 +255,36 @@ pub struct UserRecord {
     pub identity: Identity,
     pub created_at: chrono::DateTime<Utc>,
     pub updated_at: chrono::DateTime<Utc>,
+}
+
+impl Clone for UserRecord {
+    fn clone(&self) -> Self {
+        Self {
+            id: self.id,
+            username: self.username.clone(),
+            password_hash: self.password_hash.clone(),
+            display_name: self.display_name.clone(),
+            is_active: self.is_active,
+            identity: self.identity.clone(),
+            created_at: self.created_at,
+            updated_at: self.updated_at,
+        }
+    }
+}
+
+impl std::fmt::Debug for UserRecord {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("UserRecord")
+            .field("id", &self.id)
+            .field("username", &self.username)
+            .field("password_hash", &"[redacted]")
+            .field("display_name", &self.display_name)
+            .field("is_active", &self.is_active)
+            .field("identity", &self.identity)
+            .field("created_at", &self.created_at)
+            .field("updated_at", &self.updated_at)
+            .finish()
+    }
 }
 
 impl UserRecord {

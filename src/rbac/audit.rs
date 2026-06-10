@@ -1,9 +1,8 @@
+use anyhow::Result;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, sync::Arc};
 use tokio::sync::RwLock;
-
-use anyhow::Result;
 
 type AlertHook = Box<dyn Fn(AuditAlert) + Send + Sync>;
 

@@ -1,4 +1,5 @@
 use anyhow::Result;
+
 use hmac::{Hmac, Mac};
 
 use super::Credential;

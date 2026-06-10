@@ -1,9 +1,8 @@
-use anyhow::bail;
+use anyhow::{bail, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
 use super::verdict::{AutonomyLevel, Strategy};
-use anyhow::Result;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DynamicPolicy {

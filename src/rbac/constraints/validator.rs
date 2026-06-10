@@ -1,12 +1,14 @@
+use anyhow::Result;
+
 use super::store::ConstraintStore;
 use crate::error::KirinoError;
-use anyhow::Result;
 
 pub struct ConstraintValidator<S: ConstraintStore> {
     store: S,
 }
 
 impl<S: ConstraintStore> ConstraintValidator<S> {
+    #[must_use]
     pub fn new(store: S) -> Self {
         Self { store }
     }

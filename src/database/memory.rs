@@ -1,3 +1,4 @@
+use anyhow::Result;
 use std::collections::HashMap;
 use uuid::Uuid;
 
@@ -7,7 +8,6 @@ use crate::{
     error::KirinoError,
     service::login::{UserDatabase, UserRecord},
 };
-use anyhow::Result;
 
 /// In-memory implementation of [`UserDatabase`].
 ///

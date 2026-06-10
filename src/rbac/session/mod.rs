@@ -1,3 +1,4 @@
+use anyhow::Result;
 use chrono::{DateTime, Duration, Utc};
 use serde::{Deserialize, Serialize};
 use std::{
@@ -15,7 +16,6 @@ use crate::{
         traits::{AssignmentStore, Permission, Subject},
     },
 };
-use anyhow::Result;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Session<S: Subject> {
