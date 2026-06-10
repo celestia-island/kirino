@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, sync::Arc};
 use tokio::sync::RwLock;
 
-use crate::error::KirinoResult;
+use anyhow::Result;
 
 type AlertHook = Box<dyn Fn(AuditAlert) + Send + Sync>;
 
@@ -184,7 +184,7 @@ pub trait AuditPolicyEngine: Send + Sync {
     async fn evaluate(&self, entry: &AuditEntry) -> Vec<AuditAlert>;
     async fn add_rule(&self, rule: AuditRule);
     #[must_use]
-    async fn remove_rule(&self, rule_id: &str) -> KirinoResult<bool>;
+    async fn remove_rule(&self, rule_id: &str) -> Result<bool>;
     #[must_use]
     async fn list_rules(&self) -> Vec<AuditRule>;
 }
@@ -413,7 +413,7 @@ impl AuditPolicyEngine for InMemoryAuditPolicyEngine {
         rules.push(rule);
     }
 
-    async fn remove_rule(&self, rule_id: &str) -> KirinoResult<bool> {
+    async fn remove_rule(&self, rule_id: &str) -> Result<bool> {
         let mut rules = self.rules.write().await;
         let before = rules.len();
         rules.retain(|r| r.id != rule_id);

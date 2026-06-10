@@ -5,7 +5,7 @@ use tokio::sync::RwLock;
 
 use async_trait::async_trait;
 
-use crate::error::KirinoResult;
+use anyhow::Result;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TrustScore {
@@ -79,13 +79,13 @@ impl TrustScore {
 #[async_trait]
 pub trait TrustScoreStore: Send + Sync {
     #[must_use]
-    async fn get(&self, delegator_id: &str) -> KirinoResult<Option<TrustScore>>;
-    async fn set(&self, delegator_id: &str, score: TrustScore) -> KirinoResult<()>;
-    async fn delete(&self, delegator_id: &str) -> KirinoResult<()>;
+    async fn get(&self, delegator_id: &str) -> Result<Option<TrustScore>>;
+    async fn set(&self, delegator_id: &str, score: TrustScore) -> Result<()>;
+    async fn delete(&self, delegator_id: &str) -> Result<()>;
     #[must_use]
-    async fn sweep_stale(&self, max_age: Duration) -> KirinoResult<Vec<String>>;
+    async fn sweep_stale(&self, max_age: Duration) -> Result<Vec<String>>;
     #[must_use]
-    async fn list_ids(&self) -> KirinoResult<Vec<String>>;
+    async fn list_ids(&self) -> Result<Vec<String>>;
 }
 
 pub struct InMemoryTrustScoreStore {
@@ -109,24 +109,24 @@ impl Default for InMemoryTrustScoreStore {
 
 #[async_trait]
 impl TrustScoreStore for InMemoryTrustScoreStore {
-    async fn get(&self, delegator_id: &str) -> KirinoResult<Option<TrustScore>> {
+    async fn get(&self, delegator_id: &str) -> Result<Option<TrustScore>> {
         let scores = self.scores.read().await;
         Ok(scores.get(delegator_id).cloned())
     }
 
-    async fn set(&self, delegator_id: &str, score: TrustScore) -> KirinoResult<()> {
+    async fn set(&self, delegator_id: &str, score: TrustScore) -> Result<()> {
         let mut scores = self.scores.write().await;
         scores.insert(delegator_id.to_string(), score);
         Ok(())
     }
 
-    async fn delete(&self, delegator_id: &str) -> KirinoResult<()> {
+    async fn delete(&self, delegator_id: &str) -> Result<()> {
         let mut scores = self.scores.write().await;
         scores.remove(delegator_id);
         Ok(())
     }
 
-    async fn sweep_stale(&self, max_age: Duration) -> KirinoResult<Vec<String>> {
+    async fn sweep_stale(&self, max_age: Duration) -> Result<Vec<String>> {
         let chrono_max_age = chrono::Duration::from_std(max_age).unwrap_or_else(|_| {
             tracing::warn!(
                 target: "kirino::dynamic::trust",
@@ -147,7 +147,7 @@ impl TrustScoreStore for InMemoryTrustScoreStore {
         Ok(stale)
     }
 
-    async fn list_ids(&self) -> KirinoResult<Vec<String>> {
+    async fn list_ids(&self) -> Result<Vec<String>> {
         let scores = self.scores.read().await;
         Ok(scores.keys().cloned().collect())
     }
@@ -201,7 +201,7 @@ impl TrustDecayWorker {
     /// # Errors
     ///
     /// Returns an error if listing, getting, or setting trust scores fails.
-    pub async fn run_once(&self) -> KirinoResult<usize> {
+    pub async fn run_once(&self) -> Result<usize> {
         let ids = self.store.list_ids().await?;
         let mut decayed = 0;
         for id in &ids {
