@@ -75,6 +75,12 @@ impl DomainScope {
             return DomainMatch::InDomain;
         }
 
+        if in_domain && !resource_ok {
+            return DomainMatch::DomainResourceMismatch {
+                excess_weight: 0.3,
+            };
+        }
+
         let in_adjacent = self
             .adjacent_domains
             .iter()
@@ -94,6 +100,7 @@ impl DomainScope {
 pub enum DomainMatch {
     InDomain,
     Adjacent { excess_weight: f64 },
+    DomainResourceMismatch { excess_weight: f64 },
     OutOfDomain { excess_weight: f64 },
 }
 
@@ -102,9 +109,9 @@ impl DomainMatch {
     pub fn excess_weight(&self) -> f64 {
         match self {
             Self::InDomain => 0.0,
-            Self::Adjacent { excess_weight } | Self::OutOfDomain { excess_weight } => {
-                *excess_weight
-            }
+            Self::Adjacent { excess_weight }
+            | Self::DomainResourceMismatch { excess_weight }
+            | Self::OutOfDomain { excess_weight } => *excess_weight,
         }
     }
 }
