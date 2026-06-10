@@ -122,10 +122,13 @@ impl TrustScoreStore for InMemoryTrustScoreStore {
     }
 
     async fn sweep_stale(&self, max_age: Duration) -> Result<Vec<String>> {
-        let chrono_max_age = chrono::Duration::from_std(max_age).unwrap_or_else(|_| {
+        if max_age.is_zero() {
+            return Ok(Vec::new());
+        }
+        let chrono_max_age = chrono::Duration::from_std(max_age).unwrap_or_else(|e| {
             tracing::warn!(
                 target: "kirino::dynamic::trust",
-                "max_age too large for chrono::Duration, capping to 1 year"
+                "max_age {max_age:?} out of range for chrono::Duration ({e}), capping to 1 year"
             );
             chrono::Duration::days(365)
         });
@@ -241,8 +244,8 @@ impl TrustDecayWorker {
         store: Arc<dyn TrustScoreStore>,
         interval: Duration,
     ) -> TrustDecayHandle {
+        let worker = Self::new(store, interval, interval);
         TrustDecayHandle(tokio::spawn(async move {
-            let worker = Self::new(store.clone(), interval, interval);
             let mut interval_tick = tokio::time::interval(interval);
             loop {
                 interval_tick.tick().await;

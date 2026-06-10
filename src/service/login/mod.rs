@@ -347,6 +347,7 @@ where
     first_user_role: String,
     default_role: String,
     auto_admin_first_user: bool,
+    has_first_user: std::sync::atomic::AtomicBool,
 }
 
 #[cfg(all(feature = "auth-password", feature = "auth-jwt"))]
@@ -375,6 +376,7 @@ where
             first_user_role: first_user_role.to_string(),
             default_role: default_role.to_string(),
             auto_admin_first_user: false,
+            has_first_user: std::sync::atomic::AtomicBool::new(false),
         })
     }
 
@@ -465,7 +467,8 @@ where
 
         self.db.create_user(&user).await?;
 
-        let is_first = self.auto_admin_first_user && self.db.count_users().await? <= 1;
+        let is_first = self.auto_admin_first_user
+            && !self.has_first_user.swap(true, std::sync::atomic::Ordering::SeqCst);
         let role_name = if is_first {
             &self.first_user_role
         } else {

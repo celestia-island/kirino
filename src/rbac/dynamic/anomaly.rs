@@ -180,7 +180,7 @@ impl AnomalyDetector {
         let mut category_stdevs: HashMap<ActionCategory, f64> = HashMap::new();
         for (&cat, &count) in &counts {
             let p = count / n;
-            let sample_var = if count > 1.0 {
+            let sample_var = if n > 1.0 {
                 // Correct Bernoulli sample variance: p(1-p) * n / (n-1)
                 p * (1.0 - p) * n / (n - 1.0)
             } else {
