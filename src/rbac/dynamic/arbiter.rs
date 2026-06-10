@@ -187,6 +187,7 @@ impl AuthorizationArbiter {
             .trust_store
             .get(&request.delegator.id)
             .await
+            .map_err(|e| tracing::warn!("trust store get failed (risk_score): {e}"))
             .ok()
             .flatten()
             .unwrap_or_default();
@@ -251,6 +252,7 @@ impl AuthorizationArbiter {
             .trust_store
             .get(&request.delegator.id)
             .await
+            .map_err(|e| tracing::warn!("trust store get failed (feedback): {e}"))
             .ok()
             .flatten()
             .unwrap_or_default();
@@ -344,6 +346,7 @@ impl AuthorizationArbiter {
             .trust_store
             .get(delegator_id)
             .await
+            .map_err(|e| tracing::warn!("trust store get failed (status_summary): {e}"))
             .ok()
             .flatten()
             .unwrap_or_default();

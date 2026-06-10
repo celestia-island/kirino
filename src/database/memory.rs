@@ -3,11 +3,11 @@ use uuid::Uuid;
 
 use async_trait::async_trait;
 
-use anyhow::Result;
 use crate::{
     error::KirinoError,
     service::login::{UserDatabase, UserRecord},
 };
+use anyhow::Result;
 
 /// In-memory implementation of [`UserDatabase`].
 ///
@@ -31,10 +31,7 @@ impl UserDatabase for InMemoryUserDatabase {
     async fn create_user(&self, user: &UserRecord) -> Result<()> {
         let mut users = self.users.write().await;
         if users.contains_key(&user.username) {
-            return Err(KirinoError::Validation(
-                "username already exists".to_string(),
-            )
-            .into());
+            return Err(KirinoError::Validation("username already exists".to_string()).into());
         }
         users.insert(user.username.clone(), user.clone());
         Ok(())
@@ -180,7 +177,9 @@ mod tests {
             ..make_user("alice")
         };
         let err = db.create_user(&u2).await.unwrap_err();
-        assert!(err.downcast_ref::<KirinoError>().is_some_and(|e| matches!(e, KirinoError::Validation(_))));
+        assert!(err
+            .downcast_ref::<KirinoError>()
+            .is_some_and(|e| matches!(e, KirinoError::Validation(_))));
     }
 
     #[tokio::test]

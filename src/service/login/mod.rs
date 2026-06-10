@@ -57,12 +57,14 @@ pub fn validate_username(username: &str) -> Result<String> {
     if trimmed.is_empty() || trimmed.len() < MIN_USERNAME_LEN {
         return Err(KirinoError::Validation(format!(
             "username must be at least {MIN_USERNAME_LEN} characters"
-        )).into());
+        ))
+        .into());
     }
     if trimmed.len() > MAX_USERNAME_LEN {
         return Err(KirinoError::Validation(format!(
             "username must be at most {MAX_USERNAME_LEN} characters"
-        )).into());
+        ))
+        .into());
     }
     if !trimmed
         .chars()
@@ -71,7 +73,8 @@ pub fn validate_username(username: &str) -> Result<String> {
         return Err(KirinoError::Validation(
             "username may only contain alphanumeric characters, underscores, hyphens, and dots"
                 .to_string(),
-        ).into());
+        )
+        .into());
     }
     Ok(trimmed.to_string())
 }
@@ -80,12 +83,14 @@ pub fn validate_password(password: &str) -> Result<()> {
     if password.len() < MIN_PASSWORD_LEN {
         return Err(KirinoError::Validation(format!(
             "password must be at least {MIN_PASSWORD_LEN} characters"
-        )).into());
+        ))
+        .into());
     }
     if password.len() > MAX_PASSWORD_LEN {
         return Err(KirinoError::Validation(format!(
             "password must be at most {MAX_PASSWORD_LEN} characters"
-        )).into());
+        ))
+        .into());
     }
 
     let has_uppercase = password.chars().any(|c| c.is_uppercase());
@@ -102,7 +107,8 @@ pub fn validate_password(password: &str) -> Result<()> {
         return Err(KirinoError::Validation(
             "password must contain at least 3 of: uppercase, lowercase, digit, special character"
                 .to_string(),
-        ).into());
+        )
+        .into());
     }
 
     Ok(())
@@ -146,7 +152,8 @@ impl LoginRateLimiter {
                 return Err(KirinoError::Validation(format!(
                     "too many login attempts, try again in {} seconds",
                     remaining.as_secs()
-                )).into());
+                ))
+                .into());
             }
             entry.attempts = 0;
             entry.window_start = now;
@@ -400,9 +407,7 @@ where
         display_name: Option<&str>,
     ) -> Result<UserInfo> {
         if self.db.find_by_username(username).await?.is_some() {
-            return Err(KirinoError::Validation(
-                "username already exists".to_string(),
-            ).into());
+            return Err(KirinoError::Validation("username already exists".to_string()).into());
         }
 
         let password_hash = hash_password(password)?;
@@ -471,7 +476,10 @@ where
             .assignment_store()
             .roles_of(&subject)
             .await
-            .unwrap_or_default();
+            .map_err(|e| {
+                tracing::warn!("failed to fetch roles for user {user_id}: {e}");
+                KirinoError::AuthorizationDenied("store unavailable".into())
+            })?;
 
         let token = self.jwt.issue_with_options(
             &user_id,
@@ -500,9 +508,7 @@ where
         &self,
         token: &str,
     ) -> Result<crate::auth::credential::basic::Claims> {
-        self.jwt
-            .verify_with_revocation(token)
-            .await
+        self.jwt.verify_with_revocation(token).await
     }
 
     #[must_use]
@@ -614,12 +620,7 @@ where
         ))
     }
 
-    pub async fn logout<SM>(
-        &self,
-        user_id: &str,
-        session_id: Uuid,
-        session_mgr: &SM,
-    ) -> Result<()>
+    pub async fn logout<SM>(&self, user_id: &str, session_id: Uuid, session_mgr: &SM) -> Result<()>
     where
         SM: crate::rbac::session::SessionManager<StringSubject>,
     {

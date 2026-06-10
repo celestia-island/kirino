@@ -23,7 +23,8 @@ impl<S: ConstraintStore> ConstraintValidator<S> {
                 return Err(KirinoError::ConstraintViolation(format!(
                     "SSD policy '{}' violated: adding '{}' would exceed cardinality {}",
                     policy.name, new_role, policy.cardinality,
-                )).into());
+                ))
+                .into());
             }
         }
         Ok(())
@@ -41,7 +42,8 @@ impl<S: ConstraintStore> ConstraintValidator<S> {
                 return Err(KirinoError::ConstraintViolation(format!(
                     "DSD policy '{}' violated: activating '{}' exceeds cardinality {}",
                     policy.name, new_role, policy.cardinality,
-                )).into());
+                ))
+                .into());
             }
         }
         Ok(())
@@ -56,7 +58,8 @@ impl<S: ConstraintStore> ConstraintValidator<S> {
                 return Err(KirinoError::ConstraintViolation(format!(
                     "Temporal constraint: role '{}' is not available at the current time",
                     role_name,
-                )).into());
+                ))
+                .into());
             }
         }
         Ok(())
@@ -75,7 +78,8 @@ impl<S: ConstraintStore> ConstraintValidator<S> {
                 return Err(KirinoError::ConstraintViolation(format!(
                     "Cardinality constraint: role '{}' already has {} subjects (max {})",
                     role_name, current_subject_count, constraint.max_subjects,
-                )).into());
+                ))
+                .into());
             }
         }
         Ok(())
@@ -94,7 +98,8 @@ impl<S: ConstraintStore> ConstraintValidator<S> {
                 return Err(KirinoError::ConstraintViolation(format!(
                     "Prerequisite constraint: role '{}' requires '{}'",
                     role_name, constraint.requires,
-                )).into());
+                ))
+                .into());
             }
         }
         Ok(())

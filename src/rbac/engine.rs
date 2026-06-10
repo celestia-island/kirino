@@ -8,12 +8,12 @@ use std::{
 
 #[cfg(feature = "rbac-hierarchy")]
 use crate::rbac::hierarchy::resolve_role_chain;
-use anyhow::Result;
 use crate::rbac::{
     cache::{PermissionCache, TtlPermissionCache},
     shared::Shared,
     traits::{AssignmentStore, Permission, PermissionRegistry, RoleRegistry, Subject},
 };
+use anyhow::Result;
 
 pub struct RbacEngine<S, P, A>
 where
@@ -106,11 +106,7 @@ where
     /// Returns `Ok(Some(result))` if a decision was reached,
     /// `Err(e)` if a store error caused denial (error preserved),
     /// `Ok(None)` if role checking is still needed.
-    async fn check_cached_deny_extra(
-        &self,
-        subject: &S,
-        permission: &P,
-    ) -> Result<Option<bool>> {
+    async fn check_cached_deny_extra(&self, subject: &S, permission: &P) -> Result<Option<bool>> {
         if let Some(granted) = self.cache.get(subject, permission).await {
             return Ok(Some(granted));
         }
@@ -345,10 +341,10 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use anyhow::anyhow;
     use crate::rbac::store::memory::InMemoryAssignmentStore;
     use crate::rbac::store::registry::{SimpleRole, StaticPermissionRegistry, StaticRoleRegistry};
     use crate::test_utils::{TestPerm, TestSubject};
+    use anyhow::anyhow;
 
     fn build_engine(
     ) -> RbacEngine<TestSubject, TestPerm, InMemoryAssignmentStore<TestSubject, TestPerm>> {
@@ -786,11 +782,7 @@ mod tests {
         async fn extra_permissions(&self, _: &TestSubject) -> Result<HashSet<TestPerm>> {
             Err(anyhow!("store error"))
         }
-        async fn set_extra_permissions(
-            &self,
-            _: &TestSubject,
-            _: HashSet<TestPerm>,
-        ) -> Result<()> {
+        async fn set_extra_permissions(&self, _: &TestSubject, _: HashSet<TestPerm>) -> Result<()> {
             Ok(())
         }
         async fn denied_permissions(&self, _: &TestSubject) -> Result<HashSet<TestPerm>> {
@@ -821,10 +813,7 @@ mod tests {
         async fn subjects_with_role(&self, role: &str) -> Result<Vec<String>> {
             self.0.subjects_with_role(role).await
         }
-        async fn extra_permissions(
-            &self,
-            subject: &TestSubject,
-        ) -> Result<HashSet<TestPerm>> {
+        async fn extra_permissions(&self, subject: &TestSubject) -> Result<HashSet<TestPerm>> {
             self.0.extra_permissions(subject).await
         }
         async fn set_extra_permissions(
@@ -883,10 +872,7 @@ mod tests {
         ) -> Result<()> {
             self.0.set_extra_permissions(subject, perms).await
         }
-        async fn denied_permissions(
-            &self,
-            subject: &TestSubject,
-        ) -> Result<HashSet<TestPerm>> {
+        async fn denied_permissions(&self, subject: &TestSubject) -> Result<HashSet<TestPerm>> {
             self.0.denied_permissions(subject).await
         }
         async fn set_denied_permissions(

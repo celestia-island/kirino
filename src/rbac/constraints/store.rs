@@ -19,18 +19,12 @@ pub trait ConstraintStore: Send + Sync {
 
     #[must_use]
     async fn list_cardinality_constraints(&self) -> Result<Vec<CardinalityConstraint>>;
-    async fn add_cardinality_constraint(
-        &self,
-        constraint: CardinalityConstraint,
-    ) -> Result<()>;
+    async fn add_cardinality_constraint(&self, constraint: CardinalityConstraint) -> Result<()>;
     async fn remove_cardinality_constraint(&self, role_name: &str) -> Result<bool>;
 
     #[must_use]
     async fn list_prerequisite_constraints(&self) -> Result<Vec<PrerequisiteConstraint>>;
-    async fn add_prerequisite_constraint(
-        &self,
-        constraint: PrerequisiteConstraint,
-    ) -> Result<()>;
+    async fn add_prerequisite_constraint(&self, constraint: PrerequisiteConstraint) -> Result<()>;
     async fn remove_prerequisite_constraint(&self, role_name: &str) -> Result<bool>;
 
     #[must_use]
@@ -104,10 +98,7 @@ impl ConstraintStore for InMemoryConstraintStore {
         Ok(self.cardinality.read().await.clone())
     }
 
-    async fn add_cardinality_constraint(
-        &self,
-        constraint: CardinalityConstraint,
-    ) -> Result<()> {
+    async fn add_cardinality_constraint(&self, constraint: CardinalityConstraint) -> Result<()> {
         self.cardinality.write().await.push(constraint);
         Ok(())
     }
@@ -123,10 +114,7 @@ impl ConstraintStore for InMemoryConstraintStore {
         Ok(self.prerequisites.read().await.clone())
     }
 
-    async fn add_prerequisite_constraint(
-        &self,
-        constraint: PrerequisiteConstraint,
-    ) -> Result<()> {
+    async fn add_prerequisite_constraint(&self, constraint: PrerequisiteConstraint) -> Result<()> {
         self.prerequisites.write().await.push(constraint);
         Ok(())
     }

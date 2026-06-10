@@ -6,10 +6,8 @@ use tokio::sync::RwLock;
 
 use async_trait::async_trait;
 
+use crate::rbac::traits::{AssignmentStore, Permission, RoleStore, Subject};
 use anyhow::Result;
-use crate::{
-    rbac::traits::{AssignmentStore, Permission, RoleStore, Subject},
-};
 
 /// In-memory implementation of [`AssignmentStore`] backed by `tokio::sync::RwLock`.
 ///

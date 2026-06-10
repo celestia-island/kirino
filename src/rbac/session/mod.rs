@@ -8,7 +8,6 @@ use uuid::Uuid;
 
 #[cfg(feature = "rbac-constraints")]
 use crate::rbac::constraints::store::ConstraintStore;
-use anyhow::Result;
 use crate::{
     error::KirinoError,
     rbac::{
@@ -16,6 +15,7 @@ use crate::{
         traits::{AssignmentStore, Permission, Subject},
     },
 };
+use anyhow::Result;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Session<S: Subject> {
@@ -105,9 +105,11 @@ where
         let roles_vec: Vec<String> = roles.iter().cloned().collect();
         for policy in &policies {
             if !policy.validate(&roles_vec) {
-                return Err(KirinoError::ConstraintViolation(
-                    format!("DSD policy '{}' violated for roles {:?}", policy.name, roles,)
-                ).into());
+                return Err(KirinoError::ConstraintViolation(format!(
+                    "DSD policy '{}' violated for roles {:?}",
+                    policy.name, roles,
+                ))
+                .into());
             }
         }
         Ok(())
@@ -165,7 +167,8 @@ where
         if !assigned.contains(&role_str) {
             return Err(KirinoError::NotFound(format!(
                 "role '{role_name}' not assigned to subject"
-            )).into());
+            ))
+            .into());
         }
 
         let mut test_roles = current_roles;

@@ -2,10 +2,7 @@ use anyhow::Result;
 use hmac::{Hmac, Mac};
 
 use super::Credential;
-use crate::{
-    error::KirinoError,
-    utils::constant_time_eq,
-};
+use crate::{error::KirinoError, utils::constant_time_eq};
 
 type HmacSha256 = Hmac<sha2::Sha256>;
 
