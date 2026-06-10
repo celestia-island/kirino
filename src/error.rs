@@ -1,8 +1,7 @@
-#[derive(Debug, Clone, PartialEq, thiserror::Error)]
-pub enum KirinoError {
-    #[error("store error: {0}")]
-    Store(String),
+use thiserror::Error;
 
+#[derive(Debug, Error)]
+pub enum KirinoError {
     #[error("not found: {0}")]
     NotFound(String),
 
@@ -23,15 +22,4 @@ pub enum KirinoError {
 
     #[error("constraint violation: {0}")]
     ConstraintViolation(String),
-
-    #[error("internal error: {0}")]
-    Internal(String),
 }
-
-impl From<anyhow::Error> for KirinoError {
-    fn from(e: anyhow::Error) -> Self {
-        KirinoError::Internal(e.to_string())
-    }
-}
-
-pub type KirinoResult<T> = Result<T, KirinoError>;
