@@ -15,6 +15,10 @@ struct ChallengeEntry {
     attempts: u32,
 }
 
+const DEFAULT_CAPTCHA_TTL_SECS: u64 = 300;
+const DEFAULT_CAPTCHA_MAX_ATTEMPTS: u32 = 3;
+const CAPTCHA_CLEANUP_THRESHOLD: usize = 1000;
+
 pub struct CaptchaVerifier {
     challenges: Arc<RwLock<HashMap<String, ChallengeEntry>>>,
     ttl: Duration,
@@ -27,8 +31,8 @@ impl CaptchaVerifier {
     pub fn new() -> Self {
         Self {
             challenges: Arc::new(RwLock::new(HashMap::new())),
-            ttl: Duration::from_secs(300),
-            max_attempts: 3,
+            ttl: Duration::from_secs(DEFAULT_CAPTCHA_TTL_SECS),
+            max_attempts: DEFAULT_CAPTCHA_MAX_ATTEMPTS,
             cleanup_handle: None,
         }
     }
@@ -83,7 +87,7 @@ impl CaptchaVerifier {
             challenges.remove(challenge_id);
         }
 
-        if challenges.len() > 1000 {
+        if challenges.len() > CAPTCHA_CLEANUP_THRESHOLD {
             let now = Instant::now();
             challenges.retain(|_, entry| now.duration_since(entry.created_at) <= self.ttl);
         }

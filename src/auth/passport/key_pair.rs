@@ -7,6 +7,9 @@ use crate::utils::constant_time_eq;
 
 type HmacSha256 = Hmac<sha2::Sha256>;
 
+const SECRET_KEY_LENGTH: usize = 64;
+const PRIVATE_KEY_LENGTH: usize = 32;
+
 /// HMAC-based message authentication verifier.
 ///
 /// Note: Despite the historical name "KeyPairVerifier", this implementation
@@ -22,7 +25,7 @@ impl KeyPairVerifier {
     #[must_use]
     pub fn new() -> Self {
         let mut rng = rand::thread_rng();
-        let mut key = vec![0u8; 64];
+        let mut key = vec![0u8; SECRET_KEY_LENGTH];
         rng.fill(&mut key[..]);
         Self { secret_key: key }
     }
@@ -43,7 +46,7 @@ impl KeyPairVerifier {
 
         pub fn generate_keypair(&self) -> Result<(Vec<u8>, Vec<u8>)> {
         let mut rng = rand::thread_rng();
-        let mut private_key = vec![0u8; 32];
+        let mut private_key = vec![0u8; PRIVATE_KEY_LENGTH];
         rng.fill(&mut private_key[..]);
         let public_key = self.derive_public(&private_key)?;
         Ok((public_key, private_key))

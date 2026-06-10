@@ -1,5 +1,7 @@
 use anyhow::Result;
 
+const DEFAULT_BIOMETRIC_THRESHOLD: f64 = 0.85;
+
 /// Reference implementation of a biometric template verifier using bit-level similarity.
 ///
 /// **Security warning:** This uses a naive bit-comparison similarity metric.
@@ -12,7 +14,9 @@ pub struct BiologicalVerifier {
 impl BiologicalVerifier {
     #[must_use]
     pub fn new() -> Self {
-        Self { threshold: 0.85 }
+        Self {
+            threshold: DEFAULT_BIOMETRIC_THRESHOLD,
+        }
     }
 
     #[must_use]

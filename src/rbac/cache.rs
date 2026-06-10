@@ -9,6 +9,8 @@ use async_trait::async_trait;
 
 use super::traits::{Permission, Subject};
 
+const DEFAULT_MAX_CACHE_ENTRIES: usize = 10_000;
+
 #[async_trait]
 pub trait PermissionCache<S, P>: Send + Sync
 where
@@ -27,6 +29,11 @@ struct CacheEntry {
     expires_at: Instant,
 }
 
+/// TTL-based permission cache using an in-memory `HashMap`.
+///
+/// Entries expire after the configured TTL duration. When the cache exceeds
+/// `max_entries`, expired entries are evicted on the next write. Thread-safe
+/// via [`tokio::sync::RwLock`].
 pub struct TtlPermissionCache<S, P>
 where
     S: Subject,
@@ -48,7 +55,7 @@ where
     pub fn new(ttl: Duration) -> Self {
         Self {
             cache: RwLock::new(HashMap::new()),
-            max_entries: 10_000,
+            max_entries: DEFAULT_MAX_CACHE_ENTRIES,
             ttl,
             _phantom: PhantomData,
         }

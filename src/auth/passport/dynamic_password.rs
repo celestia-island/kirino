@@ -7,6 +7,10 @@ use crate::utils::constant_time_eq;
 
 type HmacSha1 = Hmac<Sha1>;
 
+/// Time-based One-Time Password (TOTP) verifier as defined in RFC 6238.
+///
+/// Uses HMAC-SHA1 with configurable digit count and time period.
+/// Accepts the current and previous time step to tolerate clock skew.
 pub struct TotpVerifier {
     secret: Vec<u8>,
     digits: u32,
@@ -51,6 +55,9 @@ impl TotpVerifier {
     }
 }
 
+/// HMAC-based One-Time Password (HOTP) verifier as defined in RFC 4226.
+///
+/// Uses HMAC-SHA1 with a monotonically increasing counter.
 pub struct HotpVerifier {
     secret: Vec<u8>,
     counter: u64,

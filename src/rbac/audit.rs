@@ -130,6 +130,9 @@ impl AuditCondition {
                 .verdict
                 .as_ref()
                 .is_some_and(|v| v.sub_scores.domain_mismatch >= *min_weight),
+            // RapidDenials cannot be evaluated at the condition level because it
+            // requires access to the AuditSink. Evaluation happens in
+            // InMemoryAuditPolicyEngine::evaluate which has access to the sink.
             AuditCondition::RapidDenials { .. } => false,
             AuditCondition::TrustBelow { threshold } => entry.verdict.as_ref().is_some_and(|v| {
                 let trust = 1.0 - v.sub_scores.trust_penalty;
@@ -245,6 +248,41 @@ impl Default for InMemoryAuditSink {
     }
 }
 
+fn matches_filter(entry: &AuditEntry, filter: &AuditFilter) -> bool {
+    if let Some(ref sid) = filter.subject_id {
+        if entry.subject_id != *sid {
+            return false;
+        }
+    }
+    if let Some(g) = filter.granted {
+        if entry.granted != g {
+            return false;
+        }
+    }
+    if let Some(ref perm) = filter.permission {
+        if entry.permission != *perm {
+            return false;
+        }
+    }
+    if let Some(since) = filter.since {
+        if entry.created_at < since {
+            return false;
+        }
+    }
+    if let Some(until) = filter.until {
+        if entry.created_at > until {
+            return false;
+        }
+    }
+    if let Some(min_risk) = filter.min_risk {
+        let risk = entry.verdict.as_ref().map_or(0.0, |v| v.risk_score);
+        if risk < min_risk {
+            return false;
+        }
+    }
+    true
+}
+
 #[async_trait::async_trait]
 impl AuditSink for InMemoryAuditSink {
     async fn append(&self, mut entry: AuditEntry) {
@@ -263,40 +301,7 @@ impl AuditSink for InMemoryAuditSink {
         let entries = self.entries.read().await;
         let mut result: Vec<AuditEntry> = entries
             .iter()
-            .filter(|e| {
-                if let Some(ref sid) = filter.subject_id {
-                    if e.subject_id != *sid {
-                        return false;
-                    }
-                }
-                if let Some(g) = filter.granted {
-                    if e.granted != g {
-                        return false;
-                    }
-                }
-                if let Some(ref perm) = filter.permission {
-                    if e.permission != *perm {
-                        return false;
-                    }
-                }
-                if let Some(since) = filter.since {
-                    if e.created_at < since {
-                        return false;
-                    }
-                }
-                if let Some(until) = filter.until {
-                    if e.created_at > until {
-                        return false;
-                    }
-                }
-                if let Some(min_risk) = filter.min_risk {
-                    let risk = e.verdict.as_ref().map_or(0.0, |v| v.risk_score);
-                    if risk < min_risk {
-                        return false;
-                    }
-                }
-                true
-            })
+            .filter(|e| matches_filter(e, filter))
             .cloned()
             .collect();
 
@@ -311,40 +316,7 @@ impl AuditSink for InMemoryAuditSink {
         let entries = self.entries.read().await;
         entries
             .iter()
-            .filter(|e| {
-                if let Some(ref sid) = filter.subject_id {
-                    if e.subject_id != *sid {
-                        return false;
-                    }
-                }
-                if let Some(g) = filter.granted {
-                    if e.granted != g {
-                        return false;
-                    }
-                }
-                if let Some(ref perm) = filter.permission {
-                    if e.permission != *perm {
-                        return false;
-                    }
-                }
-                if let Some(since) = filter.since {
-                    if e.created_at < since {
-                        return false;
-                    }
-                }
-                if let Some(until) = filter.until {
-                    if e.created_at > until {
-                        return false;
-                    }
-                }
-                if let Some(min_risk) = filter.min_risk {
-                    let risk = e.verdict.as_ref().map_or(0.0, |v| v.risk_score);
-                    if risk < min_risk {
-                        return false;
-                    }
-                }
-                true
-            })
+            .filter(|e| matches_filter(e, filter))
             .count() as u64
     }
 }

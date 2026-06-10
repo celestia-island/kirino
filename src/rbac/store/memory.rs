@@ -11,6 +11,10 @@ use crate::{
     rbac::traits::{AssignmentStore, Permission, RoleStore, Subject},
 };
 
+/// In-memory implementation of [`AssignmentStore`] backed by `tokio::sync::RwLock`.
+///
+/// Stores role assignments, extra permissions, and denied permissions per subject
+/// in separate `HashMap`s keyed by `subject_id`. All operations are thread-safe.
 pub struct InMemoryAssignmentStore<S, P>
 where
     S: Subject,
@@ -117,6 +121,9 @@ where
     }
 }
 
+/// In-memory implementation of [`RoleStore`] backed by `tokio::sync::RwLock`.
+///
+/// Stores role definitions (name → set of permissions) in a `HashMap`.
 pub struct InMemoryRoleStore<P: Permission> {
     roles: RwLock<HashMap<String, HashSet<P>>>,
 }

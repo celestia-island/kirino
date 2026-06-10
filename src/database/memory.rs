@@ -8,6 +8,11 @@ use crate::{
     service::login::{UserDatabase, UserRecord},
 };
 
+/// In-memory implementation of [`UserDatabase`].
+///
+/// Stores all user records in a `HashMap<String, UserRecord>` keyed by username,
+/// protected by a [`tokio::sync::RwLock`]. Suitable for testing and single-node
+/// deployments. For production, replace with a persistent backend.
 #[derive(Clone, Default)]
 pub struct InMemoryUserDatabase {
     users: std::sync::Arc<tokio::sync::RwLock<HashMap<String, UserRecord>>>,

@@ -27,11 +27,14 @@ pub struct JwtManager {
     revocation: Arc<RwLock<HashMap<String, i64>>>,
 }
 
+const MIN_JWT_SECRET_LENGTH: usize = 32;
+const MAX_JWT_EXPIRATION_HOURS: i64 = 87600;
+
 impl JwtManager {
     pub fn new(secret: &str, expiration_hours: i64) -> Result<Self> {
-        if secret.len() < 32 {
+        if secret.len() < MIN_JWT_SECRET_LENGTH {
             return Err(anyhow!(
-                "JWT secret must be at least 32 bytes for HS256 security"
+                "JWT secret must be at least {MIN_JWT_SECRET_LENGTH} bytes for HS256 security"
             ));
         }
         Ok(Self {
@@ -74,7 +77,7 @@ impl JwtManager {
             iat: now.timestamp(),
             exp: (now
                 + chrono::Duration::try_hours(self.expiration_hours).unwrap_or_else(|| {
-                    chrono::Duration::hours(87600) // cap at ~10 years
+                    chrono::Duration::hours(MAX_JWT_EXPIRATION_HOURS)
                 }))
             .timestamp(),
         };

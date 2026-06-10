@@ -19,6 +19,8 @@ pub struct OneTimeCredential {
     used: AtomicBool,
 }
 
+const TOKEN_LENGTH: usize = 32;
+
 impl OneTimeCredential {
     #[must_use]
     pub fn new(token: &str) -> Self {
@@ -30,7 +32,7 @@ impl OneTimeCredential {
 
     #[must_use]
     pub fn generate() -> Self {
-        let token = Self::generate_token(32);
+        let token = Self::generate_token(TOKEN_LENGTH);
         Self {
             token,
             used: AtomicBool::new(false),

@@ -9,6 +9,11 @@ use crate::{
 
 type HmacSha256 = Hmac<sha2::Sha256>;
 
+/// HMAC-SHA256 based service credential for machine-to-machine authentication.
+///
+/// Stores a pre-computed HMAC-SHA256 hash of the token and verifies
+/// future tokens by re-computing the hash and comparing in constant time.
+/// Supports reconstruction from a stored hash via [`from_hash`](Self::from_hash).
 pub struct ServiceCredential {
     token_hash: String,
     key: Vec<u8>,
