@@ -178,21 +178,15 @@ impl AnomalyDetector {
             counts.iter().map(|(&k, &c)| (k, c / n)).collect();
 
         let mut category_stdevs: HashMap<ActionCategory, f64> = HashMap::new();
-        for rec in &self.history {
-            if let Some(&mean) = category_means.get(&rec.category) {
-                let diff = 1.0 - mean;
-                *category_stdevs.entry(rec.category).or_insert(0.0) += diff * diff;
-            }
-        }
-        for (cat, sum_sq) in &mut category_stdevs {
-            let count = counts.get(cat).copied().unwrap_or(0.0);
-            let mean = category_means.get(cat).copied().unwrap_or(0.0);
+        for (&cat, &count) in &counts {
+            let p = count / n;
             let sample_var = if count > 1.0 {
-                *sum_sq / (count - 1.0)
+                // Correct Bernoulli sample variance: p(1-p) * n / (n-1)
+                p * (1.0 - p) * n / (n - 1.0)
             } else {
-                mean * (1.0 - mean)
+                p * (1.0 - p)
             };
-            *sum_sq = sample_var.sqrt().max(0.01);
+            category_stdevs.insert(cat, sample_var.sqrt().max(0.01));
         }
 
         self.baseline = Some(BehaviorBaseline {

@@ -55,13 +55,14 @@ impl Credential for ServiceCredential {
 }
 
 fn hmac_sha256_hex(key: &[u8], data: &[u8]) -> KirinoResult<String> {
+    use std::fmt::Write;
     let mut mac = HmacSha256::new_from_slice(key)
         .map_err(|_| KirinoError::Validation("HMAC key must not be empty".to_string()))?;
     mac.update(data);
     let result = mac.finalize().into_bytes();
     let mut hex = String::with_capacity(result.len() * 2);
     for byte in result.as_slice() {
-        hex.push_str(&format!("{:02x}", byte));
+        let _ = write!(hex, "{byte:02x}");
     }
     Ok(hex)
 }
