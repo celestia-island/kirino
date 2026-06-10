@@ -42,6 +42,9 @@ fn ip_in_cidr(ip: IpAddr, cidr: &str) -> bool {
 
     match ip {
         IpAddr::V4(v4) => {
+            if prefix_len > 32 {
+                return false;
+            }
             if let Ok(network) = parts[0].parse::<std::net::Ipv4Addr>() {
                 let ip_bits = u32::from(v4);
                 let net_bits = u32::from(network);
@@ -55,6 +58,9 @@ fn ip_in_cidr(ip: IpAddr, cidr: &str) -> bool {
             false
         }
         IpAddr::V6(v6) => {
+            if prefix_len > 128 {
+                return false;
+            }
             if let Ok(network) = parts[0].parse::<std::net::Ipv6Addr>() {
                 let ip_bits = u128::from(v6);
                 let net_bits = u128::from(network);
@@ -234,5 +240,30 @@ mod tests {
     fn test_ipv4_network_against_ipv6_ip() {
         let v = NetworkSourceVerifier::new(vec!["192.168.1.0/24".to_string()]);
         assert!(!v.is_allowed(IpAddr::V6(Ipv6Addr::LOCALHOST)).unwrap());
+    }
+
+    #[test]
+    fn test_prefix_len_over_32_returns_false() {
+        let v = NetworkSourceVerifier::new(vec!["10.0.0.0/33".to_string()]);
+        assert!(!v
+            .is_allowed(IpAddr::V4(Ipv4Addr::new(10, 0, 0, 1)))
+            .unwrap());
+    }
+
+    #[test]
+    fn test_prefix_len_over_128_returns_false() {
+        let v = NetworkSourceVerifier::new(vec!["::1/129".to_string()]);
+        assert!(!v.is_allowed(IpAddr::V6(Ipv6Addr::LOCALHOST)).unwrap());
+    }
+
+    #[test]
+    fn test_prefix_len_exactly_32() {
+        let v = NetworkSourceVerifier::new(vec!["10.0.0.0/32".to_string()]);
+        assert!(v
+            .is_allowed(IpAddr::V4(Ipv4Addr::new(10, 0, 0, 0)))
+            .unwrap());
+        assert!(!v
+            .is_allowed(IpAddr::V4(Ipv4Addr::new(10, 0, 0, 1)))
+            .unwrap());
     }
 }
