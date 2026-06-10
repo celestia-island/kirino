@@ -256,7 +256,7 @@ impl Permission for KirinoPermission {
 pub struct UserRecord {
     pub id: Uuid,
     pub username: String,
-    pub password_hash: String,
+    pub(crate) password_hash: String,
     pub display_name: Option<String>,
     pub is_active: bool,
     pub identity: Identity,
@@ -694,10 +694,11 @@ where
         ))
     }
 
-    pub async fn logout<SM>(&self, _user_id: &str, session_id: Uuid, session_mgr: &SM) -> Result<()>
+    pub async fn logout<SM>(&self, user_id: &str, session_id: Uuid, session_mgr: &SM) -> Result<()>
     where
         SM: crate::rbac::session::SessionManager<StringSubject>,
     {
+        self.jwt.revoke_all_for_user(user_id).await;
         session_mgr.destroy_session(session_id).await
     }
 }

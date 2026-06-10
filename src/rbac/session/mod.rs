@@ -17,6 +17,25 @@ use crate::{
     },
 };
 
+#[cfg(feature = "rbac-constraints")]
+pub(crate) async fn validate_dsd_with_store(
+    roles: &HashSet<String>,
+    constraint_store: &Shared<dyn ConstraintStore>,
+) -> Result<()> {
+    let policies = constraint_store.list_dsd_policies().await?;
+    let roles_vec: Vec<String> = roles.iter().cloned().collect();
+    for policy in &policies {
+        if !policy.validate(&roles_vec) {
+            return Err(KirinoError::ConstraintViolation(format!(
+                "DSD policy '{}' violated for roles {:?}",
+                policy.name, roles,
+            ))
+            .into());
+        }
+    }
+    Ok(())
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Session<S: Subject> {
     pub id: Uuid,
@@ -98,26 +117,6 @@ where
         sessions.retain(|_, session| !session.is_expired());
         before - sessions.len()
     }
-
-    #[cfg(feature = "rbac-constraints")]
-    async fn validate_dsd_with_store(
-        &self,
-        roles: &HashSet<String>,
-        constraint_store: &Shared<dyn ConstraintStore>,
-    ) -> Result<()> {
-        let policies = constraint_store.list_dsd_policies().await?;
-        let roles_vec: Vec<String> = roles.iter().cloned().collect();
-        for policy in &policies {
-            if !policy.validate(&roles_vec) {
-                return Err(KirinoError::ConstraintViolation(format!(
-                    "DSD policy '{}' violated for roles {:?}",
-                    policy.name, roles,
-                ))
-                .into());
-            }
-        }
-        Ok(())
-    }
 }
 
 #[async_trait::async_trait]
@@ -138,7 +137,7 @@ where
 
         #[cfg(feature = "rbac-constraints")]
         if let Some(ref cs) = self.constraint_store {
-            self.validate_dsd_with_store(&active_roles, cs).await?;
+            validate_dsd_with_store(&active_roles, cs).await?;
         }
 
         let session = Session {
@@ -181,7 +180,7 @@ where
             let mut test_roles = session.active_roles.clone();
             test_roles.insert(role_str);
             if let Some(ref cs) = self.constraint_store {
-                self.validate_dsd_with_store(&test_roles, cs).await?;
+                validate_dsd_with_store(&test_roles, cs).await?;
             }
         }
 

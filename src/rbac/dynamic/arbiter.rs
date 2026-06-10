@@ -22,6 +22,8 @@ const MAX_ANOMALY_DETECTORS: usize = 10_000;
 
 const DEFAULT_ANOMALY_SCORE_WHEN_AT_CAPACITY: f64 = 0.15;
 
+const LOCKDOWN_EVIDENCE_COUNT: u64 = 999;
+
 #[derive(Clone)]
 pub struct AuthorizationArbiter {
     trust_store: Shared<dyn TrustScoreStore>,
@@ -341,7 +343,7 @@ impl AuthorizationArbiter {
 
         let mut trust = TrustScore::new(0.0);
         trust.confidence = 1.0;
-        trust.evidence_count = 999;
+        trust.evidence_count = LOCKDOWN_EVIDENCE_COUNT;
         if let Err(e) = self.trust_store.set(delegator_id, trust).await {
             tracing::error!(target: "kirino::dynamic::arbiter",
                 delegator_id = delegator_id,
@@ -450,7 +452,13 @@ impl AuthorizationArbiter {
                     mitigation: verdict.mitigation.as_ref().map(|s| s.to_string()),
                 }),
             };
-            let _ = audit.log(entry).await;
+            let alerts = audit.log(entry).await;
+            if !alerts.is_empty() {
+                tracing::debug!(target: "kirino::dynamic::arbiter",
+                    alert_count = alerts.len(),
+                    "audit alerts fired for dynamic authorization verdict"
+                );
+            }
         }
     }
 }

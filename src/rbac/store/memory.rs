@@ -18,7 +18,7 @@ where
     S: Subject,
     P: Permission,
 {
-    role_assignments: RwLock<HashMap<String, Vec<String>>>,
+    role_assignments: RwLock<HashMap<String, HashSet<String>>>,
     extra_perms: RwLock<HashMap<String, HashSet<P>>>,
     denied_perms: RwLock<HashMap<String, HashSet<P>>>,
     _phantom: PhantomData<S>,
@@ -60,10 +60,7 @@ where
         let key = subject.subject_id().to_string();
         let mut assignments = self.role_assignments.write().await;
         let roles = assignments.entry(key).or_default();
-        let role = role_name.to_string();
-        if !roles.contains(&role) {
-            roles.push(role);
-        }
+        roles.insert(role_name.to_string());
         Ok(())
     }
 
@@ -79,7 +76,7 @@ where
     async fn roles_of(&self, subject: &S) -> Result<Vec<String>> {
         let key = subject.subject_id().to_string();
         let assignments = self.role_assignments.read().await;
-        Ok(assignments.get(&key).cloned().unwrap_or_default())
+        Ok(assignments.get(&key).map(|s| s.iter().cloned().collect()).unwrap_or_default())
     }
 
     async fn subjects_with_role(&self, role_name: &str) -> Result<Vec<String>> {

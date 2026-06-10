@@ -26,7 +26,7 @@ impl PersistentSessionStore for PgSessionStore {
             .transpose()?;
         let stmt = Statement::from_sql_and_values(
             self.conn.get_database_backend(),
-            "INSERT INTO rbac_sessions (id, subject_id, active_roles, context, expires_at, created_at) VALUES ($1, $2, $3::jsonb, $4, $5, $6)",
+            "INSERT INTO rbac_sessions (id, subject_id, active_roles, context, expires_at, created_at, updated_at) VALUES ($1, $2, $3::jsonb, $4, $5, $6, NOW())",
             [
                 row.id.to_string().into(),
                 row.subject_id.as_str().into(),
@@ -47,11 +47,15 @@ impl PersistentSessionStore for PgSessionStore {
             [id.to_string().into()],
         );
         if let Some(row) = self.conn.query_one(stmt).await? {
-            let active_roles: Vec<String> = row
-                .try_get::<String>("", "active_roles")
-                .ok()
-                .and_then(|s| serde_json::from_str(&s).ok())
-                .unwrap_or_default();
+            let active_roles: Vec<String> = {
+                let raw: String = row.try_get("", "active_roles")?;
+                serde_json::from_str(&raw).map_err(|e| {
+                    anyhow::anyhow!(
+                        "corrupted active_roles JSON for session {}: {e}",
+                        id
+                    )
+                })?
+            };
             let context: Option<serde_json::Value> = row
                 .try_get::<String>("", "context")
                 .ok()

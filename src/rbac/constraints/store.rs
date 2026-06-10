@@ -315,7 +315,7 @@ mod tests {
                 "temp_role",
                 now,
                 now + chrono::Duration::hours(1),
-            ))
+            ).unwrap())
             .await
             .unwrap();
 
@@ -440,11 +440,11 @@ mod tests {
         let t2_until = now + chrono::Duration::hours(3);
 
         store
-            .add_temporal_constraint(TemporalConstraint::new("role", t1_from, t1_until))
+            .add_temporal_constraint(TemporalConstraint::new("role", t1_from, t1_until).unwrap())
             .await
             .unwrap();
         store
-            .add_temporal_constraint(TemporalConstraint::new("role", t2_from, t2_until))
+            .add_temporal_constraint(TemporalConstraint::new("role", t2_from, t2_until).unwrap())
             .await
             .unwrap();
 
@@ -495,7 +495,7 @@ mod tests {
                 "temp",
                 now,
                 now + chrono::Duration::hours(1),
-            ))
+            ).unwrap())
             .await
             .unwrap();
 

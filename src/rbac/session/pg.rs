@@ -15,7 +15,7 @@ use crate::{
 #[cfg(feature = "rbac-constraints")]
 use crate::rbac::constraints::store::ConstraintStore;
 
-use super::{Session, SessionManager};
+use super::{validate_dsd_with_store, Session, SessionManager};
 
 pub struct PgSessionManager<S, P>
 where
@@ -60,26 +60,6 @@ where
     pub async fn cleanup_expired(&self) -> Result<usize> {
         self.store.cleanup_expired().await
     }
-
-    #[cfg(feature = "rbac-constraints")]
-    async fn validate_dsd_with_store(
-        &self,
-        roles: &HashSet<String>,
-        constraint_store: &Shared<dyn ConstraintStore>,
-    ) -> Result<()> {
-        let policies = constraint_store.list_dsd_policies().await?;
-        let roles_vec: Vec<String> = roles.iter().cloned().collect();
-        for policy in &policies {
-            if !policy.validate(&roles_vec) {
-                return Err(KirinoError::ConstraintViolation(format!(
-                    "DSD policy '{}' violated for roles {:?}",
-                    policy.name, roles,
-                ))
-                .into());
-            }
-        }
-        Ok(())
-    }
 }
 
 #[async_trait::async_trait]
@@ -107,7 +87,7 @@ where
 
         #[cfg(feature = "rbac-constraints")]
         if let Some(ref cs) = self.constraint_store {
-            self.validate_dsd_with_store(&validated_roles, cs).await?;
+            validate_dsd_with_store(&validated_roles, cs).await?;
         }
 
         let now = Utc::now();
@@ -163,7 +143,7 @@ where
 
         #[cfg(feature = "rbac-constraints")]
         if let Some(ref cs) = self.constraint_store {
-            self.validate_dsd_with_store(&roles, cs).await?;
+            validate_dsd_with_store(&roles, cs).await?;
         }
 
         let roles_vec: Vec<String> = roles.into_iter().collect();

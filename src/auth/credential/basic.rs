@@ -15,6 +15,8 @@ pub struct Claims {
     pub permissions: Vec<String>,
     #[serde(default)]
     pub session_id: Option<String>,
+    #[serde(default)]
+    pub jti: Option<String>,
     pub iat: i64,
     pub exp: i64,
 }
@@ -40,7 +42,7 @@ impl JwtManager {
         Ok(Self {
             encoding_key: EncodingKey::from_secret(secret.as_bytes()),
             decoding_key: DecodingKey::from_secret(secret.as_bytes()),
-            expiration_hours: expiration_hours.max(1),
+            expiration_hours: expiration_hours.clamp(1, MAX_JWT_EXPIRATION_HOURS),
             revocation: Arc::new(RwLock::new(HashMap::new())),
         })
     }
@@ -74,13 +76,9 @@ impl JwtManager {
             roles,
             permissions,
             session_id,
+            jti: Some(uuid::Uuid::now_v7().to_string()),
             iat: now.timestamp(),
-            exp: (now
-                + chrono::Duration::try_hours(self.expiration_hours).unwrap_or(
-                    chrono::Duration::try_hours(MAX_JWT_EXPIRATION_HOURS)
-                        .unwrap_or(chrono::Duration::hours(24)),
-                ))
-            .timestamp(),
+            exp: (now + chrono::Duration::hours(self.expiration_hours)).timestamp(),
         };
         encode(&Header::default(), &claims, &self.encoding_key)
             .map_err(|e| anyhow!("JWT encode failed: {e}"))
@@ -114,7 +112,20 @@ impl JwtManager {
                 return Err(anyhow!("token has been revoked"));
             }
         }
+        if let Some(ref jti) = claims.jti {
+            if let Some(&not_before) = revocation.get(jti) {
+                if claims.iat <= not_before {
+                    return Err(anyhow!("token has been revoked"));
+                }
+            }
+        }
         Ok(claims)
+    }
+
+    pub async fn revoke_token(&self, jti: &str) {
+        let not_before = Utc::now().timestamp();
+        let mut revocation = self.revocation.write().await;
+        revocation.insert(jti.to_string(), not_before);
     }
 
     pub async fn revoke_all_for_user(&self, user_id: &str) {

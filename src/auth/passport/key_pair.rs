@@ -33,9 +33,11 @@ impl KeyPairVerifier {
         Self { secret_key: Zeroizing::new(key) }
     }
 
-    #[must_use]
-    pub fn with_secret_key(secret_key: Vec<u8>) -> Self {
-        Self { secret_key: Zeroizing::new(secret_key) }
+    pub fn with_secret_key(secret_key: Vec<u8>) -> Result<Self> {
+        if secret_key.is_empty() {
+            return Err(anyhow!("secret key must not be empty"));
+        }
+        Ok(Self { secret_key: Zeroizing::new(secret_key) })
     }
 
     pub fn sign(&self, message: &[u8]) -> Result<Vec<u8>> {
@@ -119,7 +121,7 @@ mod tests {
 
     #[test]
     fn test_deterministic_signatures() {
-        let verifier = KeyPairVerifier::with_secret_key(vec![42u8; 64]);
+        let verifier = KeyPairVerifier::with_secret_key(vec![42u8; 64]).unwrap();
         let msg = b"deterministic test";
         let sig1 = verifier.sign(msg).unwrap();
         let sig2 = verifier.sign(msg).unwrap();
@@ -142,8 +144,13 @@ mod tests {
     #[test]
     fn test_with_secret_key() {
         let key = vec![0xAB; 64];
-        let verifier = KeyPairVerifier::with_secret_key(key);
+        let verifier = KeyPairVerifier::with_secret_key(key).unwrap();
         let signature = verifier.sign(b"message").unwrap();
         assert!(verifier.verify_signature(b"message", &signature).unwrap());
+    }
+
+    #[test]
+    fn test_with_empty_secret_key_returns_error() {
+        assert!(KeyPairVerifier::with_secret_key(vec![]).is_err());
     }
 }

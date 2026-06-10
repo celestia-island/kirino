@@ -289,7 +289,7 @@ mod tests {
                 "seasonal",
                 now - chrono::Duration::hours(1),
                 now + chrono::Duration::hours(1),
-            ))
+            ).unwrap())
             .await
             .unwrap();
 
@@ -306,7 +306,7 @@ mod tests {
                 "expired_role",
                 now - chrono::Duration::hours(2),
                 now - chrono::Duration::hours(1),
-            ))
+            ).unwrap())
             .await
             .unwrap();
 
@@ -323,7 +323,7 @@ mod tests {
                 "seasonal",
                 now - chrono::Duration::hours(1),
                 now + chrono::Duration::hours(1),
-            ))
+            ).unwrap())
             .await
             .unwrap();
 
@@ -359,7 +359,7 @@ mod tests {
                 "expired_role",
                 now - chrono::Duration::hours(2),
                 now - chrono::Duration::hours(1),
-            ))
+            ).unwrap())
             .await
             .unwrap();
 

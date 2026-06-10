@@ -15,7 +15,7 @@ use async_trait::async_trait;
 use crate::utils::constant_time_eq;
 
 pub struct OneTimeCredential {
-    token: String,
+    token: zeroize::Zeroizing<String>,
     used: AtomicBool,
 }
 
@@ -25,7 +25,7 @@ impl OneTimeCredential {
     #[must_use]
     pub fn new(token: &str) -> Self {
         Self {
-            token: token.to_string(),
+            token: zeroize::Zeroizing::new(token.to_string()),
             used: AtomicBool::new(false),
         }
     }
@@ -34,7 +34,7 @@ impl OneTimeCredential {
     pub fn generate() -> Self {
         let token = Self::generate_token(TOKEN_LENGTH);
         Self {
-            token,
+            token: zeroize::Zeroizing::new(token),
             used: AtomicBool::new(false),
         }
     }
@@ -69,6 +69,15 @@ impl super::Credential for OneTimeCredential {
             .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
             .is_ok();
         Ok(token_matches && was_unused)
+    }
+}
+
+impl std::fmt::Debug for OneTimeCredential {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("OneTimeCredential")
+            .field("token", &"[redacted]")
+            .field("used", &self.used.load(Ordering::Acquire))
+            .finish()
     }
 }
 

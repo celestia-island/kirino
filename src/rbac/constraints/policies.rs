@@ -1,3 +1,4 @@
+use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 
@@ -86,22 +87,25 @@ pub struct TemporalConstraint {
 }
 
 impl TemporalConstraint {
-    #[must_use]
     pub fn new(
         role_name: impl Into<String>,
         valid_from: chrono::DateTime<chrono::Utc>,
         valid_until: chrono::DateTime<chrono::Utc>,
-    ) -> Self {
-        let (valid_from, valid_until) = if valid_from < valid_until {
-            (valid_from, valid_until)
-        } else {
-            (valid_until, valid_from)
-        };
-        Self {
+    ) -> Result<Self> {
+        if valid_from >= valid_until {
+            return Err(crate::error::KirinoError::Validation(
+                format!(
+                    "TemporalConstraint: valid_from ({}) must be before valid_until ({})",
+                    valid_from, valid_until
+                ),
+            )
+            .into());
+        }
+        Ok(Self {
             role_name: role_name.into(),
             valid_from,
             valid_until,
-        }
+        })
     }
 
     #[must_use]
@@ -169,14 +173,27 @@ mod tests {
             "temp_role",
             now - chrono::Duration::hours(1),
             now + chrono::Duration::hours(1),
-        );
+        )
+        .unwrap();
         assert!(valid.is_valid());
 
         let expired = TemporalConstraint::new(
             "temp_role",
             now - chrono::Duration::hours(2),
             now - chrono::Duration::hours(1),
-        );
+        )
+        .unwrap();
         assert!(!expired.is_valid());
+    }
+
+    #[test]
+    fn test_temporal_constraint_inverted_dates_rejected() {
+        let now = chrono::Utc::now();
+        let result = TemporalConstraint::new(
+            "temp_role",
+            now + chrono::Duration::hours(1),
+            now - chrono::Duration::hours(1),
+        );
+        assert!(result.is_err());
     }
 }

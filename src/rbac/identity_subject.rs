@@ -94,17 +94,13 @@ impl Subject for IdentitySubject {
     }
 
     fn from_subject_id(id: &str) -> Self {
-        match Self::try_from_subject_id(id) {
-            Ok(s) => s,
-            Err(e) => {
-                tracing::error!(target: "kirino::rbac::identity_subject",
-                    subject_id = id,
-                    error = %e,
-                    "invalid subject UUID, using nil UUID as fallback — use try_from_subject_id to handle this error"
-                );
-                Self::new(Identity::Basic { id: uuid::Uuid::nil(), created_at: Utc::now() })
-            }
-        }
+        Self::try_from_subject_id(id).unwrap_or_else(|e| {
+            panic!(
+                "IdentitySubject::from_subject_id: invalid subject UUID '{}': {} \
+                 — use try_from_subject_id to handle this error gracefully",
+                id, e
+            )
+        })
     }
 
     fn try_from_subject_id(id: &str) -> Result<Self> {

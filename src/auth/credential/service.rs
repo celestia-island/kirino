@@ -13,7 +13,7 @@ type HmacSha256 = Hmac<sha2::Sha256>;
 /// future tokens by re-computing the hash and comparing in constant time.
 /// Supports reconstruction from a stored hash via [`from_hash`](Self::from_hash).
 pub struct ServiceCredential {
-    token_hash: String,
+    token_hash: zeroize::Zeroizing<String>,
     key: zeroize::Zeroizing<Vec<u8>>,
 }
 
@@ -27,7 +27,7 @@ impl ServiceCredential {
         }
         let hash = hmac_sha256_hex(key, token.as_bytes())?;
         Ok(Self {
-            token_hash: hash,
+            token_hash: zeroize::Zeroizing::new(hash),
             key: zeroize::Zeroizing::new(key.to_vec()),
         })
     }
@@ -39,7 +39,7 @@ impl ServiceCredential {
             )
             .into());
         }
-        Ok(Self { token_hash, key: zeroize::Zeroizing::new(key) })
+        Ok(Self { token_hash: zeroize::Zeroizing::new(token_hash), key: zeroize::Zeroizing::new(key) })
     }
 }
 
@@ -83,7 +83,7 @@ mod tests {
         let key = b"test-key-for-determinism-check-1234";
         let c1 = ServiceCredential::from_shared_key(key, "token").unwrap();
         let c2 = ServiceCredential::from_shared_key(key, "token").unwrap();
-        assert_eq!(c1.token_hash, c2.token_hash);
+        assert_eq!(*c1.token_hash, *c2.token_hash);
     }
 
     #[test]
@@ -92,14 +92,14 @@ mod tests {
             ServiceCredential::from_shared_key(b"key-a-that-is-long-enough-aaaa", "token").unwrap();
         let c2 =
             ServiceCredential::from_shared_key(b"key-b-that-is-long-enough-bbbb", "token").unwrap();
-        assert_ne!(c1.token_hash, c2.token_hash);
+        assert_ne!(*c1.token_hash, *c2.token_hash);
     }
 
     #[test]
     fn test_from_hash_with_known_key() {
         let key = b"key-for-from-hash-test-1234567890";
         let cred = ServiceCredential::from_shared_key(key, "token").unwrap();
-        let hash = cred.token_hash.clone();
+        let hash = (*cred.token_hash).clone();
 
         let cred2 = ServiceCredential::from_hash(hash, key.to_vec()).unwrap();
         assert!(cred2.verify("token").unwrap());
