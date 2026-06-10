@@ -199,15 +199,6 @@ where
             return Err(KirinoError::SessionExpired.into());
         }
 
-        #[cfg(feature = "rbac-constraints")]
-        {
-            let mut test_roles = session.active_roles.clone();
-            test_roles.remove(role_name);
-            if let Some(ref cs) = self.constraint_store {
-                self.validate_dsd_with_store(&test_roles, cs).await?;
-            }
-        }
-
         session.active_roles.remove(role_name);
         Ok(())
     }

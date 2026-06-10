@@ -87,7 +87,9 @@ where
     }
 
     pub fn register(&mut self, role: R) {
-        self.roles.insert(role.role_name().to_string(), role);
+        let name = role.role_name().to_string();
+        self.parents.remove(&name);
+        self.roles.insert(name, role);
     }
 
     pub fn set_parents(&mut self, role_name: &str, parents: Vec<String>) {
@@ -104,9 +106,7 @@ where
     pub fn register_hierarchical(&mut self, role: R) {
         let role_name = role.role_name().to_string();
         let parents = role.parent_roles();
-        if !parents.is_empty() {
-            self.parents.insert(role_name.clone(), parents);
-        }
+        self.parents.insert(role_name.clone(), parents);
         self.roles.insert(role_name, role);
     }
 }
