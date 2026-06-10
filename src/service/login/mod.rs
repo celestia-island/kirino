@@ -382,7 +382,9 @@ where
 
         let result = self.register_impl(&username, password, display_name).await;
 
-        self.register_rate_limiter.reset(&username).await;
+        if result.is_ok() {
+            self.register_rate_limiter.reset(&username).await;
+        }
         result
     }
 

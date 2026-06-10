@@ -218,12 +218,30 @@ where
             }
         }
 
-        if let Ok(extra) = self.assignment_store.extra_permissions(subject).await {
-            perms.extend(extra);
+        match self.assignment_store.extra_permissions(subject).await {
+            Ok(extra) => {
+                perms.extend(extra);
+            }
+            Err(e) => {
+                tracing::warn!(target: "kirino::rbac::engine",
+                    subject = %subject.subject_id(),
+                    error = %e,
+                    "failed to query extra permissions for effective_permissions"
+                );
+            }
         }
 
-        if let Ok(denied) = self.assignment_store.denied_permissions(subject).await {
-            perms.retain(|p| !denied.contains(p));
+        match self.assignment_store.denied_permissions(subject).await {
+            Ok(denied) => {
+                perms.retain(|p| !denied.contains(p));
+            }
+            Err(e) => {
+                tracing::warn!(target: "kirino::rbac::engine",
+                    subject = %subject.subject_id(),
+                    error = %e,
+                    "failed to query denied permissions for effective_permissions"
+                );
+            }
         }
 
         perms
@@ -279,12 +297,30 @@ where
             }
         }
 
-        if let Ok(extra) = self.assignment_store.extra_permissions(subject).await {
-            perms.extend(extra);
+        match self.assignment_store.extra_permissions(subject).await {
+            Ok(extra) => {
+                perms.extend(extra);
+            }
+            Err(e) => {
+                tracing::warn!(target: "kirino::rbac::engine",
+                    subject = %subject.subject_id(),
+                    error = %e,
+                    "failed to query extra permissions for effective_permissions_hierarchical"
+                );
+            }
         }
 
-        if let Ok(denied) = self.assignment_store.denied_permissions(subject).await {
-            perms.retain(|p| !denied.contains(p));
+        match self.assignment_store.denied_permissions(subject).await {
+            Ok(denied) => {
+                perms.retain(|p| !denied.contains(p));
+            }
+            Err(e) => {
+                tracing::warn!(target: "kirino::rbac::engine",
+                    subject = %subject.subject_id(),
+                    error = %e,
+                    "failed to query denied permissions for effective_permissions_hierarchical"
+                );
+            }
         }
 
         perms

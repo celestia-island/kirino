@@ -58,8 +58,9 @@ where
         let key = subject.subject_id().to_string();
         let mut assignments = self.role_assignments.write().await;
         let roles = assignments.entry(key).or_default();
-        if !roles.contains(&role_name.to_string()) {
-            roles.push(role_name.to_string());
+        let role = role_name.to_string();
+        if !roles.contains(&role) {
+            roles.push(role);
         }
         Ok(())
     }
