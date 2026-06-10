@@ -517,6 +517,10 @@ where
             self.engine
                 .effective_permissions(&subject)
                 .await
+                .map_err(|e| {
+                    tracing::warn!("failed to fetch effective permissions: {e}");
+                    KirinoError::AuthorizationDenied("store unavailable".into())
+                })?
                 .into_iter()
                 .map(|p| p.name().to_string())
                 .collect(),
@@ -623,10 +627,10 @@ where
 
         let session_id_str = session.id.to_string();
         let subject_for_perms = StringSubject::new(&result.user_id);
-        let perm_names = self
+        let perm_names: Vec<String> = self
             .engine
             .effective_permissions(&subject_for_perms)
-            .await
+            .await?
             .into_iter()
             .map(|p| p.name().to_string())
             .collect();

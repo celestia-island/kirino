@@ -205,54 +205,23 @@ where
         perms.into_iter().zip(outcomes).collect()
     }
 
-    #[must_use]
-    pub async fn effective_permissions(&self, subject: &S) -> HashSet<P> {
+    pub async fn effective_permissions(&self, subject: &S) -> Result<HashSet<P>> {
         let mut perms = HashSet::new();
 
-        match self.assignment_store.roles_of(subject).await {
-            Ok(role_names) => {
-                for role_name in &role_names {
-                    if let Some(role_perms) = self.role_registry.get_role_permissions(role_name) {
-                        perms.extend(role_perms);
-                    }
-                }
-            }
-            Err(e) => {
-                tracing::warn!(target: "kirino::rbac::engine",
-                    subject = %subject.subject_id(),
-                    error = %e,
-                    "failed to query roles for effective permissions"
-                );
+        let role_names = self.assignment_store.roles_of(subject).await?;
+        for role_name in &role_names {
+            if let Some(role_perms) = self.role_registry.get_role_permissions(role_name) {
+                perms.extend(role_perms);
             }
         }
 
-        match self.assignment_store.extra_permissions(subject).await {
-            Ok(extra) => {
-                perms.extend(extra);
-            }
-            Err(e) => {
-                tracing::warn!(target: "kirino::rbac::engine",
-                    subject = %subject.subject_id(),
-                    error = %e,
-                    "failed to query extra permissions for effective_permissions"
-                );
-            }
-        }
+        let extra = self.assignment_store.extra_permissions(subject).await?;
+        perms.extend(extra);
 
-        match self.assignment_store.denied_permissions(subject).await {
-            Ok(denied) => {
-                perms.retain(|p| !denied.contains(p));
-            }
-            Err(e) => {
-                tracing::warn!(target: "kirino::rbac::engine",
-                    subject = %subject.subject_id(),
-                    error = %e,
-                    "failed to query denied permissions for effective_permissions"
-                );
-            }
-        }
+        let denied = self.assignment_store.denied_permissions(subject).await?;
+        perms.retain(|p| !denied.contains(p));
 
-        perms
+        Ok(perms)
     }
 }
 
@@ -301,44 +270,22 @@ where
         false
     }
 
-    #[must_use]
-    pub async fn effective_permissions_hierarchical(&self, subject: &S) -> HashSet<P> {
+    pub async fn effective_permissions_hierarchical(&self, subject: &S) -> Result<HashSet<P>> {
         let mut perms = HashSet::new();
 
-        if let Ok(role_names) = self.assignment_store.roles_of(subject).await {
-            for role_name in &role_names {
-                let inherited = resolve_role_chain(role_name, &*self.role_registry);
-                perms.extend(inherited);
-            }
+        let role_names = self.assignment_store.roles_of(subject).await?;
+        for role_name in &role_names {
+            let inherited = resolve_role_chain(role_name, &*self.role_registry);
+            perms.extend(inherited);
         }
 
-        match self.assignment_store.extra_permissions(subject).await {
-            Ok(extra) => {
-                perms.extend(extra);
-            }
-            Err(e) => {
-                tracing::warn!(target: "kirino::rbac::engine",
-                    subject = %subject.subject_id(),
-                    error = %e,
-                    "failed to query extra permissions for effective_permissions_hierarchical"
-                );
-            }
-        }
+        let extra = self.assignment_store.extra_permissions(subject).await?;
+        perms.extend(extra);
 
-        match self.assignment_store.denied_permissions(subject).await {
-            Ok(denied) => {
-                perms.retain(|p| !denied.contains(p));
-            }
-            Err(e) => {
-                tracing::warn!(target: "kirino::rbac::engine",
-                    subject = %subject.subject_id(),
-                    error = %e,
-                    "failed to query denied permissions for effective_permissions_hierarchical"
-                );
-            }
-        }
+        let denied = self.assignment_store.denied_permissions(subject).await?;
+        perms.retain(|p| !denied.contains(p));
 
-        perms
+        Ok(perms)
     }
 }
 
@@ -532,7 +479,7 @@ mod tests {
             .await
             .unwrap();
 
-        let eff = engine.effective_permissions(&user).await;
+        let eff = engine.effective_permissions(&user).await.unwrap();
         assert!(eff.contains(&TestPerm::Read));
         assert!(eff.contains(&TestPerm::Write));
         assert!(eff.contains(&TestPerm::Delete));
@@ -557,7 +504,7 @@ mod tests {
             .await
             .unwrap();
 
-        let eff = engine.effective_permissions(&user).await;
+        let eff = engine.effective_permissions(&user).await.unwrap();
         assert!(eff.contains(&TestPerm::Read));
         assert!(eff.contains(&TestPerm::Write));
         assert!(!eff.contains(&TestPerm::Admin));
@@ -568,7 +515,7 @@ mod tests {
     async fn test_effective_permissions_no_roles() {
         let engine = build_engine();
         let anon = TestSubject("ep-anon".to_string());
-        let eff = engine.effective_permissions(&anon).await;
+        let eff = engine.effective_permissions(&anon).await.unwrap();
         assert!(eff.is_empty());
     }
 
