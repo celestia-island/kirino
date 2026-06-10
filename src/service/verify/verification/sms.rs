@@ -38,6 +38,7 @@ impl SmsVerifier {
         self.store.verify(phone, code).await
     }
 
+    #[must_use]
     pub fn generate_code(len: usize) -> String {
         generate_numeric_code(len)
     }

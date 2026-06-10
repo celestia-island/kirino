@@ -207,12 +207,12 @@ mod tests {
         let store = InMemoryAssignmentStore::<TestSubject, TestPerm>::new();
         let subj = TestSubject("user1".to_string());
 
-        let extra: HashSet<TestPerm> = [TestPerm("deploy")].into_iter().collect();
+        let extra: HashSet<TestPerm> = std::iter::once(TestPerm("deploy")).collect();
         store.set_extra_permissions(&subj, extra).await.unwrap();
         let got = store.extra_permissions(&subj).await.unwrap();
         assert!(got.contains(&TestPerm("deploy")));
 
-        let denied: HashSet<TestPerm> = [TestPerm("system_write")].into_iter().collect();
+        let denied: HashSet<TestPerm> = std::iter::once(TestPerm("system_write")).collect();
         store.set_denied_permissions(&subj, denied).await.unwrap();
         let got = store.denied_permissions(&subj).await.unwrap();
         assert!(got.contains(&TestPerm("system_write")));
@@ -309,10 +309,10 @@ mod tests {
         let store = InMemoryAssignmentStore::<TestSubject, TestPerm>::new();
         let subj = TestSubject("user1".to_string());
 
-        let first: HashSet<TestPerm> = [TestPerm("read")].into_iter().collect();
+        let first: HashSet<TestPerm> = std::iter::once(TestPerm("read")).collect();
         store.set_extra_permissions(&subj, first).await.unwrap();
 
-        let second: HashSet<TestPerm> = [TestPerm("write")].into_iter().collect();
+        let second: HashSet<TestPerm> = std::iter::once(TestPerm("write")).collect();
         store.set_extra_permissions(&subj, second).await.unwrap();
 
         let got = store.extra_permissions(&subj).await.unwrap();
@@ -335,8 +335,8 @@ mod tests {
     #[tokio::test]
     async fn test_role_store_duplicate_create_overwrites() {
         let store = InMemoryRoleStore::<TestPerm>::new();
-        let p1: HashSet<TestPerm> = [TestPerm("read")].into_iter().collect();
-        let p2: HashSet<TestPerm> = [TestPerm("write")].into_iter().collect();
+        let p1: HashSet<TestPerm> = std::iter::once(TestPerm("read")).collect();
+        let p2: HashSet<TestPerm> = std::iter::once(TestPerm("write")).collect();
 
         store.create_role("role", p1).await.unwrap();
         store.create_role("role", p2).await.unwrap();

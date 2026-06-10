@@ -20,19 +20,15 @@ pub enum TestPerm {
 impl Permission for TestPerm {
     fn name(&self) -> &str {
         match self {
-            TestPerm::Read => "read",
-            TestPerm::Write => "write",
-            TestPerm::Delete => "delete",
-            TestPerm::Admin => "admin",
+            Self::Read => "read",
+            Self::Write => "write",
+            Self::Delete => "delete",
+            Self::Admin => "admin",
         }
     }
 
     fn domain(&self) -> &'static str {
-        match self {
-            TestPerm::Read => "test",
-            TestPerm::Write => "test",
-            TestPerm::Delete => "test",
-            TestPerm::Admin => "test",
-        }
+        _ = self;
+        "test"
     }
 }

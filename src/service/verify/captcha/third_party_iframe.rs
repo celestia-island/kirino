@@ -12,7 +12,7 @@ pub struct ThirdPartyIframeVerifier {
 
 impl ThirdPartyIframeVerifier {
     #[must_use]
-    pub fn new(provider: String) -> Self {
+    pub const fn new(provider: String) -> Self {
         Self { provider }
     }
 

@@ -56,11 +56,7 @@ impl TrustScore {
 
     #[allow(clippy::cast_precision_loss)]
     pub fn on_policy_violation(&mut self, severity: f64) {
-        let penalty = if severity > 0.8 {
-            0.3 * severity
-        } else {
-            0.1 * severity
-        };
+        let penalty = 0.1 * severity + 0.2 * (severity - 0.8).max(0.0);
         self.value = (self.value - penalty).max(0.0);
         self.evidence_count += 1;
         self.confidence = (1.0 - (1.0 / (1.0 + self.evidence_count as f64 / 100.0))).min(0.99);
@@ -302,7 +298,23 @@ mod tests {
     fn test_trust_score_severe_violation_cliff() {
         let mut ts = TrustScore::new(0.9);
         ts.on_policy_violation(0.9);
-        assert!(ts.value < 0.7);
+        let penalty_at_09: f64 = 0.1 * 0.9 + 0.2 * f64::max(0.9 - 0.8, 0.0);
+        assert!((ts.value - (0.9 - penalty_at_09)).abs() < 1e-10);
+        assert!(ts.value < 0.8);
+    }
+
+    #[test]
+    fn test_trust_score_penalty_smoothness() {
+        let mut ts_low = TrustScore::new(1.0);
+        ts_low.on_policy_violation(0.79);
+        let penalty_low = 0.1 * 0.79;
+
+        let mut ts_high = TrustScore::new(1.0);
+        ts_high.on_policy_violation(0.81);
+        let penalty_high = 0.1 * 0.81 + 0.2 * 0.01;
+
+        let jump = penalty_high - penalty_low;
+        assert!(jump < 0.05, "penalty should be smooth, jump was {jump}");
     }
 
     #[test]

@@ -9,14 +9,14 @@ use crate::utils::base64;
 /// This implementation does **not** verify the JWT signature. Any token with a
 /// valid base64-encoded JSON payload containing a `"sub"` field will be accepted.
 /// **Do not use in production.** Replace with a verifier that validates the
-/// signature against the IdP's public key (e.g. via the `jsonwebtoken` crate).
+/// signature against the `IdP`'s public key (e.g. via the `jsonwebtoken` crate).
 pub struct SsoVerifier {
     provider: String,
 }
 
 impl SsoVerifier {
     #[must_use]
-    pub fn new(provider: String) -> Self {
+    pub const fn new(provider: String) -> Self {
         Self { provider }
     }
 
@@ -24,8 +24,7 @@ impl SsoVerifier {
         if token.is_empty() {
             return Err(anyhow!("empty SSO token"));
         }
-        let parts: Vec<&str> = token.split('.').collect();
-        if parts.len() == 3 {
+        if token.split('.').count() == 3 {
             return self.verify_jwt_sso(token);
         }
         Err(anyhow!(
@@ -81,9 +80,10 @@ mod tests {
     }
 
     fn make_jwt_payload(sub: &str, email: Option<&str>) -> String {
+        use std::fmt::Write;
         let mut json = format!(r#"{{"sub":"{sub}""#);
         if let Some(e) = email {
-            json.push_str(&format!(r#","email":"{e}""#));
+            let _ = write!(json, r#","email":"{e}""#);
         }
         json.push('}');
         let b64 = crate::utils::base64::url_safe_encode(json.as_bytes());

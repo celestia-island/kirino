@@ -151,6 +151,8 @@ mod tests {
 
     #[test]
     fn test_equality_and_hash() {
+        use std::collections::HashSet;
+
         let s1 = Shared::new(42);
         let s2 = s1.clone();
         assert_eq!(s1, s2);
@@ -158,7 +160,6 @@ mod tests {
         let s3 = Shared::new(42);
         assert_ne!(s1, s3);
 
-        use std::collections::HashSet;
         let mut set = HashSet::new();
         set.insert(s1);
         set.insert(s2);
@@ -190,7 +191,7 @@ mod tests {
         }
         struct Hello;
         impl Greet for Hello {
-            fn greet(&self) -> &str {
+            fn greet(&self) -> &'static str {
                 "hello"
             }
         }

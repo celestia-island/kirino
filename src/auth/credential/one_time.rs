@@ -264,8 +264,7 @@ mod tests {
         for _ in 0..8 {
             let c = Arc::clone(&cred);
             handles.push(thread::spawn(move || {
-                crate::auth::credential::Credential::verify(&*c, "shared-token-1234567890")
-                    .unwrap()
+                crate::auth::credential::Credential::verify(&*c, "shared-token-1234567890").unwrap()
             }));
         }
 

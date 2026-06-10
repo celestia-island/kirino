@@ -445,18 +445,15 @@ where
     }
 
     const DUMMY_HASH: &str =
-        "$argon2id$v=19$m=19456,t=2,p=1$dummy salts are not used$dummyhashvaluethatisnotused";
+        "$argon2id$v=19$m=19456,t=2,p=1$AAAAAAAAAAAAAAAAAAAAAA$AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
 
     pub async fn login(&self, username: &str, password: &str) -> Result<LoginResult> {
         let username = username.trim();
         self.rate_limiter.check_and_record_failure(username).await?;
 
-        let user = match self.db.find_by_username(username).await? {
-            Some(u) => u,
-            None => {
-                let _ = verify_password(password, Self::DUMMY_HASH);
-                return Err(KirinoError::AuthenticationFailed.into());
-            }
+        let Some(user) = self.db.find_by_username(username).await? else {
+            let _ = verify_password(password, Self::DUMMY_HASH);
+            return Err(KirinoError::AuthenticationFailed.into());
         };
 
         if !user.is_active {

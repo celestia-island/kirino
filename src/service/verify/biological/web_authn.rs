@@ -30,11 +30,11 @@ impl WebAuthnVerifier {
         }
     }
 
-    /// Verifies a WebAuthn assertion.
+    /// Verifies a `WebAuthn` assertion.
     ///
     /// **Note:** This is a reference stub that validates structure only.
     /// It does NOT verify the actual cryptographic signature.
-    /// In production, use a real WebAuthn library.
+    /// In production, use a real `WebAuthn` library.
     pub async fn verify_assertion(
         &self,
         credential_id: &[u8],
@@ -42,11 +42,14 @@ impl WebAuthnVerifier {
         client_data_json: &[u8],
         signature: &[u8],
     ) -> Result<bool> {
-        let challenges = self.challenges.read().await;
-        let cid_str = String::from_utf8_lossy(credential_id).to_string();
+        {
+            let challenges = self.challenges.read().await;
+            let cid_str = String::from_utf8_lossy(credential_id).to_string();
 
-        if !challenges.contains_key(&cid_str) {
-            return Err(anyhow!("unknown credential"));
+            if !challenges.contains_key(&cid_str) {
+                return Err(anyhow!("unknown credential"));
+            }
+            drop(challenges);
         }
         if authenticator_data.len() < 37 {
             return Err(anyhow!("authenticator data too short (minimum 37 bytes)"));
@@ -70,8 +73,7 @@ impl WebAuthnVerifier {
             (0..32).map(|_| rand::Rng::gen(&mut rng)).collect()
         };
         let key = format!("reg:{user_id}");
-        let mut challenges = self.challenges.write().await;
-        challenges.insert(key, challenge.clone());
+        self.challenges.write().await.insert(key, challenge.clone());
 
         Ok(RegistrationChallenge {
             challenge,
@@ -81,15 +83,20 @@ impl WebAuthnVerifier {
 
     pub async fn start_authentication(&self, credential_id: &[u8]) -> Result<Vec<u8>> {
         let cid_str = String::from_utf8_lossy(credential_id).to_string();
-        let mut challenges = self.challenges.write().await;
-        if !challenges.contains_key(&cid_str) {
-            return Err(anyhow!("credential not registered"));
+        {
+            let challenges = self.challenges.read().await;
+            if !challenges.contains_key(&cid_str) {
+                return Err(anyhow!("credential not registered"));
+            }
         }
         let challenge: Vec<u8> = {
             let mut rng = rand::thread_rng();
             (0..32).map(|_| rand::Rng::gen(&mut rng)).collect()
         };
-        challenges.insert(cid_str, challenge.clone());
+        self.challenges
+            .write()
+            .await
+            .insert(cid_str, challenge.clone());
         Ok(challenge)
     }
 }

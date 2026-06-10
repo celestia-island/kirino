@@ -40,6 +40,9 @@ impl UserDatabase for InMemoryUserDatabase {
         if inner.users.contains_key(&user.username) {
             return Err(KirinoError::Validation("username already exists".to_string()).into());
         }
+        if inner.id_to_username.contains_key(&user.id) {
+            return Err(KirinoError::Validation("user ID already exists".to_string()).into());
+        }
         let id = user.id;
         let username = user.username.clone();
         inner.users.insert(username.clone(), user.clone());
@@ -210,5 +213,39 @@ mod tests {
     async fn test_list_users_empty() {
         let db = InMemoryUserDatabase::new();
         assert!(db.list_users().await.unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_duplicate_id_rejected() {
+        let db = InMemoryUserDatabase::new();
+        let id = Uuid::now_v7();
+        let now = chrono::Utc::now();
+        let u1 = UserRecord {
+            id,
+            username: "alice".to_string(),
+            password_hash: "hash".to_string(),
+            display_name: None,
+            is_active: true,
+            identity: Identity::Basic { id },
+            created_at: now,
+            updated_at: now,
+        };
+        db.create_user(&u1).await.unwrap();
+
+        let id2 = Uuid::now_v7();
+        let u2 = UserRecord {
+            id,
+            username: "bob".to_string(),
+            password_hash: "hash".to_string(),
+            display_name: None,
+            is_active: true,
+            identity: Identity::Basic { id: id2 },
+            created_at: now,
+            updated_at: now,
+        };
+        let err = db.create_user(&u2).await.unwrap_err();
+        assert!(err
+            .downcast_ref::<KirinoError>()
+            .is_some_and(|e| matches!(e, KirinoError::Validation(_))));
     }
 }

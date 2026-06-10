@@ -1,4 +1,5 @@
 use anyhow::{anyhow, Result};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use hmac::{Hmac, Mac};
 use sha1::Sha1;
@@ -31,13 +32,13 @@ impl TotpVerifier {
     pub fn with_options(secret: Vec<u8>, digits: u32, period_secs: u32) -> Self {
         Self {
             secret,
-            digits,
-            period_secs,
+            digits: digits.max(1),
+            period_secs: period_secs.max(1),
         }
     }
 
     pub fn verify(&self, code: &str) -> Result<bool> {
-        let time_step = chrono::Utc::now().timestamp() as u64 / self.period_secs as u64;
+        let time_step = chrono::Utc::now().timestamp() as u64 / u64::from(self.period_secs);
         let generated = self.generate_at(time_step)?;
         let generated_prev = self.generate_at(time_step.saturating_sub(1))?;
         Ok(constant_time_eq(generated.as_bytes(), code.as_bytes())
@@ -45,7 +46,7 @@ impl TotpVerifier {
     }
 
     pub fn generate(&self) -> Result<String> {
-        let time_step = chrono::Utc::now().timestamp() as u64 / self.period_secs as u64;
+        let time_step = chrono::Utc::now().timestamp() as u64 / u64::from(self.period_secs);
         self.generate_at(time_step)
     }
 
@@ -58,21 +59,32 @@ impl TotpVerifier {
 /// HMAC-based One-Time Password (HOTP) verifier as defined in RFC 4226.
 ///
 /// Uses HMAC-SHA1 with a monotonically increasing counter.
+/// The counter advances atomically on each successful verification,
+/// preventing replay attacks as required by RFC 4226.
 pub struct HotpVerifier {
     secret: Vec<u8>,
-    counter: u64,
+    counter: AtomicU64,
 }
 
 impl HotpVerifier {
     #[must_use]
     pub fn new(secret: Vec<u8>, counter: u64) -> Self {
-        Self { secret, counter }
+        Self {
+            secret,
+            counter: AtomicU64::new(counter),
+        }
     }
 
     pub fn verify(&self, code: &str) -> Result<bool> {
-        let expected = hotp_code(&self.secret, self.counter, 6)?;
+        let current = self.counter.load(Ordering::SeqCst);
+        let expected = hotp_code(&self.secret, current, 6)?;
         let formatted = format_code(expected, 6);
-        Ok(constant_time_eq(formatted.as_bytes(), code.as_bytes()))
+        if constant_time_eq(formatted.as_bytes(), code.as_bytes()) {
+            self.counter.fetch_add(1, Ordering::SeqCst);
+            Ok(true)
+        } else {
+            Ok(false)
+        }
     }
 }
 
@@ -144,7 +156,7 @@ mod tests {
     fn test_hotp_wrong_code() {
         let secret = b"test-secret-hotp".to_vec();
         let hotp = HotpVerifier::new(secret, 0);
-        let code = hotp_code(&hotp.secret, hotp.counter, 6).unwrap();
+        let code = hotp_code(&hotp.secret, 0, 6).unwrap();
         let formatted = format_code(code, 6);
         let wrong = if formatted == "000000" {
             "999999"
@@ -157,12 +169,26 @@ mod tests {
     #[test]
     fn test_hotp_different_counters() {
         let secret = b"test-secret-counters".to_vec();
-        let hotp0 = HotpVerifier::new(secret.clone(), 0);
-        let hotp1 = HotpVerifier::new(secret, 1);
-
-        let code0 = hotp_code(&hotp0.secret, 0, 6).unwrap();
-        let code1 = hotp_code(&hotp1.secret, 1, 6).unwrap();
+        let code0 = hotp_code(&secret, 0, 6).unwrap();
+        let code1 = hotp_code(&secret, 1, 6).unwrap();
         assert_ne!(format_code(code0, 6), format_code(code1, 6));
+    }
+
+    #[test]
+    fn test_hotp_counter_advances() {
+        let secret = b"test-counter-advance".to_vec();
+        let hotp = HotpVerifier::new(secret.clone(), 0);
+        let code0 = format_code(hotp_code(&secret, 0, 6).unwrap(), 6);
+        let code1 = format_code(hotp_code(&secret, 1, 6).unwrap(), 6);
+        assert!(hotp.verify(&code0).unwrap());
+        assert!(
+            !hotp.verify(&code0).unwrap(),
+            "same code should not work twice"
+        );
+        assert!(
+            hotp.verify(&code1).unwrap(),
+            "next counter code should work"
+        );
     }
 
     #[test]

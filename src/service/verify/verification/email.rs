@@ -38,6 +38,7 @@ impl EmailVerifier {
         self.store.verify(address, code).await
     }
 
+    #[must_use]
     pub fn generate_code(len: usize) -> String {
         generate_numeric_code(len)
     }

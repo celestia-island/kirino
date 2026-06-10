@@ -362,7 +362,7 @@ mod tests {
         ));
         role_reg.register(SimpleRole::new(
             "viewer",
-            [TestPerm::Read].into_iter().collect(),
+            std::iter::once(TestPerm::Read).collect(),
         ));
         role_reg.register(SimpleRole::new(
             "editor",
@@ -435,7 +435,7 @@ mod tests {
             .unwrap();
         engine
             .assignment_store()
-            .set_denied_permissions(&user, [TestPerm::Admin].into_iter().collect())
+            .set_denied_permissions(&user, std::iter::once(TestPerm::Admin).collect())
             .await
             .unwrap();
 
@@ -449,12 +449,12 @@ mod tests {
         let user = TestSubject("deny-extra-user".to_string());
         engine
             .assignment_store()
-            .set_extra_permissions(&user, [TestPerm::Write].into_iter().collect())
+            .set_extra_permissions(&user, std::iter::once(TestPerm::Write).collect())
             .await
             .unwrap();
         engine
             .assignment_store()
-            .set_denied_permissions(&user, [TestPerm::Write].into_iter().collect())
+            .set_denied_permissions(&user, std::iter::once(TestPerm::Write).collect())
             .await
             .unwrap();
 
@@ -472,7 +472,7 @@ mod tests {
             .unwrap();
         engine
             .assignment_store()
-            .set_extra_permissions(&user, [TestPerm::Write].into_iter().collect())
+            .set_extra_permissions(&user, std::iter::once(TestPerm::Write).collect())
             .await
             .unwrap();
 
@@ -524,7 +524,7 @@ mod tests {
             .unwrap();
         engine
             .assignment_store()
-            .set_extra_permissions(&user, [TestPerm::Delete].into_iter().collect())
+            .set_extra_permissions(&user, std::iter::once(TestPerm::Delete).collect())
             .await
             .unwrap();
 
@@ -889,9 +889,9 @@ mod tests {
         let mut role_reg = StaticRoleRegistry::new();
         role_reg.register(SimpleRole::new(
             "viewer",
-            [TestPerm::Read].into_iter().collect(),
+            std::iter::once(TestPerm::Read).collect(),
         ));
-        let perm_reg = StaticPermissionRegistry::new([TestPerm::Read].into_iter().collect());
+        let perm_reg = StaticPermissionRegistry::new(std::iter::once(TestPerm::Read).collect());
 
         let engine = RbacEngine::<TestSubject, TestPerm, ExtraOnlyFailingStore>::new(
             role_reg,

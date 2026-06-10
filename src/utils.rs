@@ -23,12 +23,13 @@ pub mod base64 {
             }
             let val = lookup[b as usize];
             if val == 0xFF {
-                return Err(anyhow!("invalid base64 character: {:#04x}", b));
+                return Err(anyhow!("invalid base64 character: {b:#04x}"));
             }
             accum = (accum << 6) | u32::from(val);
             bits += 6;
             if bits >= 8 {
                 bits -= 8;
+                #[allow(clippy::cast_possible_truncation)]
                 result.push((accum >> bits) as u8);
             }
         }
@@ -48,13 +49,22 @@ pub mod base64 {
         decode(&padded)
     }
 
+    #[must_use]
     pub fn encode(input: &[u8]) -> String {
         const CHARS: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
         let mut result = String::new();
         for chunk in input.chunks(3) {
-            let b0 = chunk[0] as u32;
-            let b1 = if chunk.len() > 1 { chunk[1] as u32 } else { 0 };
-            let b2 = if chunk.len() > 2 { chunk[2] as u32 } else { 0 };
+            let b0 = u32::from(chunk[0]);
+            let b1 = if chunk.len() > 1 {
+                u32::from(chunk[1])
+            } else {
+                0
+            };
+            let b2 = if chunk.len() > 2 {
+                u32::from(chunk[2])
+            } else {
+                0
+            };
             let triple = (b0 << 16) | (b1 << 8) | b2;
             result.push(CHARS[((triple >> 18) & 0x3F) as usize] as char);
             result.push(CHARS[((triple >> 12) & 0x3F) as usize] as char);
@@ -72,6 +82,7 @@ pub mod base64 {
         result
     }
 
+    #[must_use]
     pub fn url_safe_encode(input: &[u8]) -> String {
         let encoded = encode(input);
         encoded
@@ -82,6 +93,7 @@ pub mod base64 {
 }
 
 /// Minimal percent-encoding for URL query parameters.
+#[must_use]
 pub fn url_encode(input: &str) -> String {
     const HEX: &[u8] = b"0123456789ABCDEF";
     let mut result = String::with_capacity(input.len());
@@ -102,6 +114,7 @@ pub fn url_encode(input: &str) -> String {
 }
 
 /// Constant-time byte comparison.
+#[must_use]
 pub fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
     if a.len() != b.len() {
         return false;

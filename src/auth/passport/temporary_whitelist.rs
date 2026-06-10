@@ -56,15 +56,12 @@ impl WhitelistVerifier {
 
     #[must_use]
     pub async fn cleanup_expired(&self) -> usize {
-        let before = {
-            let entries = self.entries.read().await;
-            entries.len()
-        };
+        let mut entries = self.entries.write().await;
+        let before = entries.len();
         if before == 0 {
             return 0;
         }
         let now = Instant::now();
-        let mut entries = self.entries.write().await;
         entries.retain(|e| e.expires_at.map_or(true, |exp| now < exp));
         before - entries.len()
     }

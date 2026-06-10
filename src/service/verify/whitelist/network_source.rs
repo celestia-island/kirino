@@ -133,17 +133,13 @@ mod tests {
     fn test_cidr_0_match_all() {
         let v = NetworkSourceVerifier::new(vec!["0.0.0.0/0".to_string()]);
         assert!(v.is_allowed(IpAddr::V4(Ipv4Addr::new(1, 2, 3, 4))).unwrap());
-        assert!(v
-            .is_allowed(IpAddr::V4(Ipv4Addr::new(255, 255, 255, 255)))
-            .unwrap());
+        assert!(v.is_allowed(IpAddr::V4(Ipv4Addr::BROADCAST)).unwrap());
     }
 
     #[test]
     fn test_invalid_cidr_returns_false() {
         let v = NetworkSourceVerifier::new(vec!["not-a-cidr".to_string()]);
-        assert!(!v
-            .is_allowed(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)))
-            .unwrap());
+        assert!(!v.is_allowed(IpAddr::V4(Ipv4Addr::LOCALHOST)).unwrap());
     }
 
     #[test]
@@ -195,7 +191,7 @@ mod tests {
     #[test]
     fn test_empty_allowed() {
         let v = NetworkSourceVerifier::new(vec![]);
-        let ip = IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1));
+        let ip = IpAddr::V4(Ipv4Addr::LOCALHOST);
         assert!(!v.is_allowed(ip).unwrap());
     }
 

@@ -33,9 +33,12 @@ impl VerificationCodeStore {
         let mut codes = self.codes.write().await;
         if let Some(pending) = codes.remove(key) {
             if std::time::Instant::now() < pending.expires_at {
-                return Ok(constant_time_eq(pending.code.as_bytes(), code.as_bytes()));
+                let result = constant_time_eq(pending.code.as_bytes(), code.as_bytes());
+                drop(codes);
+                return Ok(result);
             }
         }
+        drop(codes);
         Ok(false)
     }
 }

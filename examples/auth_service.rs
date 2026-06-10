@@ -1,6 +1,6 @@
 use kirino::{
     database::memory::InMemoryUserDatabase,
-    service::login::{build_default_engine, AuthService},
+    service::login::{build_default_engine, AuthService, KirinoPermission},
 };
 
 #[tokio::main(flavor = "current_thread")]
@@ -36,21 +36,20 @@ async fn main() {
     let claims = service.verify_token(&login.token).await.unwrap();
     println!("  Token verified for subject: {}", claims.sub);
 
-    use kirino::service::login::KirinoPermission;
     let can_manage = service
         .check_permission(&alice.id.to_string(), &KirinoPermission::SystemWrite)
         .await;
-    println!("\nAlice can manage system: {}", can_manage);
+    println!("\nAlice can manage system: {can_manage}");
 
     let can_manage = service
         .check_permission(&bob.id.to_string(), &KirinoPermission::SystemWrite)
         .await;
-    println!("Bob can manage system:   {}", can_manage);
+    println!("Bob can manage system:   {can_manage}");
 
     let can_read = service
         .check_permission(&bob.id.to_string(), &KirinoPermission::AgentRead)
         .await;
-    println!("Bob can read agents:     {}", can_read);
+    println!("Bob can read agents:     {can_read}");
 
     let users = service.list_users().await.unwrap();
     println!("\nAll users ({}):", users.len());
