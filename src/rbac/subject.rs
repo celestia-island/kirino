@@ -17,6 +17,10 @@ impl Subject for StringSubject {
     fn from_subject_id(id: &str) -> Self {
         Self::new(id)
     }
+
+    fn try_from_subject_id(id: &str) -> anyhow::Result<Self> {
+        Ok(Self::new(id))
+    }
 }
 
 impl std::fmt::Display for StringSubject {

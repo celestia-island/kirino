@@ -19,6 +19,10 @@ pub trait Subject: Eq + std::hash::Hash + Clone + Send + Sync + 'static {
     }
 
     fn from_subject_id(id: &str) -> Self;
+
+    fn try_from_subject_id(id: &str) -> Result<Self> {
+        Ok(Self::from_subject_id(id))
+    }
 }
 
 impl Subject for String {
@@ -28,6 +32,10 @@ impl Subject for String {
 
     fn from_subject_id(id: &str) -> Self {
         id.to_string()
+    }
+
+    fn try_from_subject_id(id: &str) -> Result<Self> {
+        Ok(id.to_string())
     }
 }
 

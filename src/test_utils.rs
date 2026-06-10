@@ -11,6 +11,10 @@ impl Subject for TestSubject {
     fn from_subject_id(id: &str) -> Self {
         Self(id.to_string())
     }
+
+    fn try_from_subject_id(id: &str) -> anyhow::Result<Self> {
+        Ok(Self(id.to_string()))
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -32,7 +36,6 @@ impl Permission for TestPerm {
     }
 
     fn domain(&self) -> &'static str {
-        _ = self;
         "test"
     }
 }
