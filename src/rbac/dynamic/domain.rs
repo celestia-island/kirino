@@ -91,6 +91,20 @@ impl DomainScope {
             .any(|d| d.allowed_action_categories.contains(category));
 
         if in_adjacent {
+            let adjacent_resource_ok = self.adjacent_domains.iter().any(|d| {
+                d.allowed_action_categories.contains(category)
+                    && match resource_path {
+                        Some(p) => d.is_resource_allowed(p),
+                        None => true,
+                    }
+            });
+
+            if !adjacent_resource_ok {
+                return DomainMatch::DomainResourceMismatch {
+                    excess_weight: ADJACENT_DOMAIN_WEIGHT + DOMAIN_RESOURCE_MISMATCH_WEIGHT,
+                };
+            }
+
             return DomainMatch::Adjacent {
                 excess_weight: ADJACENT_DOMAIN_WEIGHT,
             };
@@ -194,5 +208,41 @@ mod tests {
                 .excess_weight(),
             0.6
         );
+    }
+
+    #[test]
+    fn test_adjacent_domain_resource_mismatch() {
+        let adjacent = TaskDomain::new(
+            "monitoring",
+            [ActionCategory::ReadOnly].into(),
+            vec!["/metrics/".to_string()],
+            0.3,
+        );
+        let scope = DomainScope::with_adjacent(
+            TaskDomain::new("core", [ActionCategory::StateWrite].into(), vec![], 0.5),
+            vec![adjacent],
+        );
+        let m = scope.evaluate(&ActionCategory::ReadOnly, Some("/etc/passwd"));
+        assert!(
+            matches!(m, DomainMatch::DomainResourceMismatch { .. }),
+            "adjacent category but disallowed resource should be mismatch"
+        );
+        assert!(m.excess_weight() > ADJACENT_DOMAIN_WEIGHT);
+    }
+
+    #[test]
+    fn test_adjacent_domain_resource_allowed() {
+        let adjacent = TaskDomain::new(
+            "monitoring",
+            [ActionCategory::ReadOnly].into(),
+            vec!["/metrics/".to_string()],
+            0.3,
+        );
+        let scope = DomainScope::with_adjacent(
+            TaskDomain::new("core", [ActionCategory::StateWrite].into(), vec![], 0.5),
+            vec![adjacent],
+        );
+        let m = scope.evaluate(&ActionCategory::ReadOnly, Some("/metrics/cpu"));
+        assert!(matches!(m, DomainMatch::Adjacent { .. }));
     }
 }
