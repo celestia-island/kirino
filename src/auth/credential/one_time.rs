@@ -63,13 +63,12 @@ impl OneTimeCredential {
 
 impl super::Credential for OneTimeCredential {
     fn verify(&self, token: &str) -> Result<bool> {
-        if !constant_time_eq(self.token.as_bytes(), token.as_bytes()) {
-            return Ok(false);
-        }
-        Ok(self
+        let token_matches = constant_time_eq(self.token.as_bytes(), token.as_bytes());
+        let was_unused = self
             .used
             .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
-            .is_ok())
+            .is_ok();
+        Ok(token_matches && was_unused)
     }
 }
 

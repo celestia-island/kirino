@@ -1,5 +1,6 @@
 use anyhow::{anyhow, Result};
 use rand::Rng;
+use zeroize::Zeroizing;
 
 use hmac::{Hmac, Mac};
 
@@ -17,8 +18,10 @@ const PRIVATE_KEY_LENGTH: usize = 32;
 /// The "key pair" generated is derived via HMAC from a shared secret.
 /// For production use cases requiring true asymmetric signatures (e.g. Ed25519),
 /// replace this with a proper public-key library.
+///
+/// Secrets are zeroed on drop via [`Zeroizing`].
 pub struct KeyPairVerifier {
-    secret_key: Vec<u8>,
+    secret_key: Zeroizing<Vec<u8>>,
 }
 
 impl KeyPairVerifier {
@@ -27,12 +30,12 @@ impl KeyPairVerifier {
         let mut rng = rand::thread_rng();
         let mut key = vec![0u8; SECRET_KEY_LENGTH];
         rng.fill(&mut key[..]);
-        Self { secret_key: key }
+        Self { secret_key: Zeroizing::new(key) }
     }
 
     #[must_use]
     pub fn with_secret_key(secret_key: Vec<u8>) -> Self {
-        Self { secret_key }
+        Self { secret_key: Zeroizing::new(secret_key) }
     }
 
     pub fn sign(&self, message: &[u8]) -> Result<Vec<u8>> {

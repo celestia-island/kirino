@@ -51,6 +51,7 @@ hmac = "^0.12"
 jsonwebtoken = { version = "^9", optional = true }
 rand = "^0.8"
 sha1 = "^0.10"
+zeroize = { version = "^1", features = ["zeroize_derive"] }
 sha2 = "^0.10"
 tracing = { version = "^0.1", features = ["log"] }
 sea-orm = { version = "^1", features = ["sqlx-postgres", "runtime-tokio-rustls"], optional = true }

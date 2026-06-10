@@ -1,5 +1,6 @@
 use anyhow::{anyhow, Result};
 use std::sync::atomic::{AtomicU64, Ordering};
+use zeroize::Zeroizing;
 
 use hmac::{Hmac, Mac};
 use sha1::Sha1;
@@ -13,7 +14,7 @@ type HmacSha1 = Hmac<Sha1>;
 /// Uses HMAC-SHA1 with configurable digit count and time period.
 /// Accepts the current, previous (+1), and next (-1) time step to tolerate clock skew.
 pub struct TotpVerifier {
-    secret: Vec<u8>,
+    secret: Zeroizing<Vec<u8>>,
     digits: u32,
     period_secs: u32,
 }
@@ -25,7 +26,7 @@ impl TotpVerifier {
     #[must_use]
     pub fn new(secret: Vec<u8>) -> Self {
         Self {
-            secret,
+            secret: Zeroizing::new(secret),
             digits: 6,
             period_secs: 30,
         }
@@ -34,7 +35,7 @@ impl TotpVerifier {
     #[must_use]
     pub fn with_options(secret: Vec<u8>, digits: u32, period_secs: u32) -> Self {
         Self {
-            secret,
+            secret: Zeroizing::new(secret),
             digits: digits.clamp(1, MAX_DIGITS),
             period_secs: period_secs.max(1),
         }
@@ -67,7 +68,7 @@ impl TotpVerifier {
 /// The counter advances atomically on each successful verification,
 /// preventing replay attacks as required by RFC 4226.
 pub struct HotpVerifier {
-    secret: Vec<u8>,
+    secret: Zeroizing<Vec<u8>>,
     counter: AtomicU64,
 }
 
@@ -75,7 +76,7 @@ impl HotpVerifier {
     #[must_use]
     pub fn new(secret: Vec<u8>, counter: u64) -> Self {
         Self {
-            secret,
+            secret: Zeroizing::new(secret),
             counter: AtomicU64::new(counter),
         }
     }

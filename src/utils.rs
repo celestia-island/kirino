@@ -2,26 +2,38 @@ pub mod base64 {
 
     use anyhow::{anyhow, Result};
 
+    const LOOKUP: [u8; 256] = {
+        let mut table = [0xFFu8; 256];
+        let chars = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+        let mut i = 0;
+        while i < chars.len() {
+            table[chars[i] as usize] = i as u8;
+            i += 1;
+        }
+        table
+    };
+
     pub fn decode(input: &str) -> Result<Vec<u8>> {
-        let lookup: [u8; 256] = {
-            let mut table = [0xFFu8; 256];
-            for (i, c) in b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
-                .iter()
-                .enumerate()
-            {
-                table[*c as usize] = i as u8;
-            }
-            table
-        };
         let bytes = input.as_bytes();
         let mut result = Vec::with_capacity(bytes.len() * 3 / 4);
         let mut accum: u32 = 0;
         let mut bits: u32 = 0;
+        let mut pad_count = 0;
+
         for &b in bytes {
-            if b == b'=' || b == b'\n' || b == b'\r' || b == b' ' {
+            if b == b'\n' || b == b'\r' || b == b' ' {
                 continue;
             }
-            let val = lookup[b as usize];
+            if b == b'=' {
+                pad_count += 1;
+                continue;
+            }
+            if pad_count > 0 {
+                return Err(anyhow!(
+                    "unexpected character after padding in base64 input"
+                ));
+            }
+            let val = LOOKUP[b as usize];
             if val == 0xFF {
                 return Err(anyhow!("invalid base64 character: {b:#04x}"));
             }
@@ -34,6 +46,26 @@ pub mod base64 {
                 accum &= (1_u32 << bits).wrapping_sub(1);
             }
         }
+
+        if pad_count > 2 {
+            return Err(anyhow!("invalid base64 padding: too many padding characters"));
+        }
+        if pad_count > 0 {
+            let total_content_bytes = bytes.iter()
+                .filter(|&&b| b != b'\n' && b != b'\r' && b != b' ')
+                .count();
+            let data_chars = total_content_bytes - pad_count;
+            let expected_pad = (4 - data_chars % 4) % 4;
+            if expected_pad == 0 && pad_count > 0 {
+                return Err(anyhow!("invalid base64 padding: unexpected padding"));
+            }
+            if pad_count != expected_pad {
+                return Err(anyhow!(
+                    "invalid base64 padding: expected {expected_pad} pad characters, got {pad_count}"
+                ));
+            }
+        }
+
         Ok(result)
     }
 
@@ -115,14 +147,15 @@ pub fn url_encode(input: &str) -> String {
 }
 
 /// Constant-time byte comparison.
+///
+/// Compares the contents of `a` and `b` in constant time, regardless of
+/// whether the lengths match. This prevents timing side-channel attacks
+/// that could leak the length of the secret.
 #[must_use]
 pub fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
-    if a.len() != b.len() {
-        return false;
-    }
-    let mut diff = 0u8;
+    let mut diff = u64::from(a.len() != b.len());
     for (x, y) in a.iter().zip(b.iter()) {
-        diff |= x ^ y;
+        diff |= u64::from(x ^ y);
     }
     diff == 0
 }

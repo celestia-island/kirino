@@ -110,7 +110,7 @@ impl JwtManager {
         let claims = self.verify(token)?;
         let revocation = self.revocation.read().await;
         if let Some(&not_before) = revocation.get(&claims.user_id) {
-            if claims.iat < not_before {
+            if claims.iat <= not_before {
                 return Err(anyhow!("token has been revoked"));
             }
         }
@@ -118,15 +118,17 @@ impl JwtManager {
     }
 
     pub async fn revoke_all_for_user(&self, user_id: &str) {
-        let now = Utc::now().timestamp();
+        // Store not_before as now + 1 to ensure tokens issued at the same
+        // second as revocation are also covered by the check iat <= not_before.
+        let not_before = Utc::now().timestamp() + 1;
         let mut revocation = self.revocation.write().await;
-        revocation.insert(user_id.to_string(), now);
+        revocation.insert(user_id.to_string(), not_before);
     }
 
     pub async fn cleanup_revocation(&self, max_token_lifetime_secs: i64) {
         let cutoff = Utc::now().timestamp() - max_token_lifetime_secs;
         let mut revocation = self.revocation.write().await;
-        revocation.retain(|_, &mut not_before| not_before > cutoff);
+        revocation.retain(|_, &mut not_before| not_before >= cutoff);
     }
 }
 
@@ -193,6 +195,8 @@ mod tests {
         mgr.revoke_all_for_user("user-1").await;
         assert!(mgr.verify_with_revocation(&old_token).await.is_err());
 
+        // Wait for the not_before window (now + 1) to pass
+        tokio::time::sleep(std::time::Duration::from_secs(2)).await;
         let new_token = mgr.issue("user-1", "alice", vec!["admin".into()]).unwrap();
         assert!(mgr.verify_with_revocation(&new_token).await.is_ok());
     }
@@ -214,7 +218,11 @@ mod tests {
         mgr.revoke_all_for_user("user-1").await;
         mgr.revoke_all_for_user("user-2").await;
 
-        mgr.cleanup_revocation(0).await;
+        // Use a small positive lifetime to ensure entries are cleaned up
+        // while accounting for the +1 second offset in revoke_all_for_user.
+        const CLEANUP_WINDOW: i64 = 3;
+        tokio::time::sleep(std::time::Duration::from_secs(CLEANUP_WINDOW as u64)).await;
+        mgr.cleanup_revocation(CLEANUP_WINDOW).await;
 
         let token = mgr.issue("user-1", "alice", vec![]).unwrap();
         assert!(mgr.verify_with_revocation(&token).await.is_ok());
