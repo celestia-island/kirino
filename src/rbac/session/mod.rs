@@ -515,7 +515,20 @@ mod tests {
     #[tokio::test]
     async fn test_destroy_invalid_session_is_ok() {
         let mgr = make_mgr(make_store());
+        // Pre-seed a real session so we can prove the destroy call is a
+        // targeted no-op rather than a "nothing existed" trivial pass.
+        let keeper_subj = StringSubject::new("keeper");
+        let keeper = mgr
+            .create_session(&keeper_subj, HashSet::new(), Duration::hours(1))
+            .await
+            .unwrap();
+        // Destroying an unrelated (nonexistent) session id must succeed AND
+        // leave the seeded session untouched.
         mgr.destroy_session(uuid::Uuid::now_v7()).await.unwrap();
+        assert!(
+            mgr.get_session(keeper.id).await.unwrap().is_some(),
+            "destroying an unrelated session id must not evict other sessions"
+        );
     }
 }
 
