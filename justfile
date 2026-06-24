@@ -24,15 +24,27 @@ default:
 # Build tasks
 # ============================================================================
 
-# Build everything (Debug mode)
-build-dev:
-    @echo "Building all (Debug mode)..."
-    cargo build --all
-
-# Build everything (Release mode)
-build:
-    @echo "Building all (Release mode)..."
-    cargo build --release --all
+# Build all crates. Release by default; `--dev` for debug, `--clean` to clean first.
+#   just build            # release
+#   just build --dev      # debug
+#   just build --clean    # clean then release
+build *FLAGS='':
+    #!/usr/bin/env bash
+    set -euo pipefail
+    profile=release
+    for a in {{FLAGS}}; do
+      case "$a" in
+        --dev)   profile=dev ;;
+        --clean) cargo clean ;;
+      esac
+    done
+    if [ "$profile" = dev ]; then
+      echo "Building all (Debug)..."
+      cargo build --all
+    else
+      echo "Building all (Release)..."
+      cargo build --release --all
+    fi
 
 # ============================================================================
 # Code quality checks
