@@ -20,31 +20,15 @@ python := if os_family() == "windows" { "python" } else { "python3" }
 default:
     @just --list
 
+import "../just-common/build.just"
+
 # ============================================================================
 # Build tasks
 # ============================================================================
 
 # Build all crates. Release by default; `--dev` for debug, `--clean` to clean first.
-#   just build            # release
-#   just build --dev      # debug
-#   just build --clean    # clean then release
 build *FLAGS='':
-    #!/usr/bin/env bash
-    set -euo pipefail
-    profile=release
-    for a in {{FLAGS}}; do
-      case "$a" in
-        --dev)   profile=dev ;;
-        --clean) cargo clean ;;
-      esac
-    done
-    if [ "$profile" = dev ]; then
-      echo "Building all (Debug)..."
-      cargo build --all
-    else
-      echo "Building all (Release)..."
-      cargo build --release --all
-    fi
+    just _build ":" "cargo build --all" "cargo build --release --all" {{FLAGS}}
 
 # ============================================================================
 # Code quality checks
