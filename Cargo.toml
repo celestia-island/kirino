@@ -54,4 +54,4 @@ sha1 = "^0.10"
 zeroize = { version = "^1", features = ["zeroize_derive"] }
 sha2 = "^0.10"
 tracing = { version = "^0.1", features = ["log"] }
-sea-orm = { version = "^2.0.0-rc", features = ["sqlx-postgres", "runtime-tokio-rustls"], optional = true }
+sea-orm = { version = "=2.0.0-rc.41", features = ["sqlx-postgres", "runtime-tokio-rustls"], optional = true }
