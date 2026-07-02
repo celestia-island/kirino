@@ -214,14 +214,12 @@ fn bench_constraint_validation(c: &mut Criterion) {
         2,
     )))
     .unwrap();
-    rt.block_on(store.add_prerequisite_constraint(PrerequisiteConstraint::new(
-        "admin", "operator",
-    )))
+    rt.block_on(
+        store.add_prerequisite_constraint(PrerequisiteConstraint::new("admin", "operator")),
+    )
     .unwrap();
-    rt.block_on(store.add_cardinality_constraint(CardinalityConstraint::new(
-        "admin", 5,
-    )))
-    .unwrap();
+    rt.block_on(store.add_cardinality_constraint(CardinalityConstraint::new("admin", 5)))
+        .unwrap();
 
     let validator = ConstraintValidator::new(store);
 
@@ -231,24 +229,20 @@ fn bench_constraint_validation(c: &mut Criterion) {
     let mut group = c.benchmark_group("constraint_validation");
     group.bench_function("validate_assignment_pass", |b| {
         b.iter(|| {
-            black_box(
-                rt.block_on(validator.validate_assignment(
-                    black_box(&pass_roles),
-                    black_box("viewer"),
-                    black_box(0_usize),
-                )),
-            )
+            black_box(rt.block_on(validator.validate_assignment(
+                black_box(&pass_roles),
+                black_box("viewer"),
+                black_box(0_usize),
+            )))
         });
     });
     group.bench_function("validate_assignment_violation", |b| {
         b.iter(|| {
-            black_box(
-                rt.block_on(validator.validate_assignment(
-                    black_box(&violation_roles),
-                    black_box("admin"),
-                    black_box(0_usize),
-                )),
-            )
+            black_box(rt.block_on(validator.validate_assignment(
+                black_box(&violation_roles),
+                black_box("admin"),
+                black_box(0_usize),
+            )))
         });
     });
     group.finish();
@@ -266,7 +260,8 @@ fn bench_dynamic_auth(c: &mut Criterion) {
 
     let rt = runtime();
 
-    let arbiter = AuthorizationArbiter::new(InMemoryTrustScoreStore::new(), default_dynamic_policy());
+    let arbiter =
+        AuthorizationArbiter::new(InMemoryTrustScoreStore::new(), default_dynamic_policy());
 
     let mut trust = TrustScore::new(0.9);
     trust.confidence = 0.8;
