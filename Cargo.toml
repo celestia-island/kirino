@@ -6,6 +6,9 @@ description = "A customizable, zero-trust authentication and authorization frame
 license-file = "LICENSE"
 repository = "https://github.com/celestia-island/kirino"
 readme = "README.md"
+documentation = "https://docs.rs/kirino"
+categories = ["authentication"]
+keywords = ["rbac", "authentication", "authorization", "zero-trust", "anomaly-detection", "trust-score"]
 rust-version = "1.75"
 
 [lib]

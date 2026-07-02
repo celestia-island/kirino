@@ -57,7 +57,6 @@ clippy:
 
 # Format all code
 fmt:
-    cargo clippy --all-targets --all-features -- -D warnings
     cargo fmt --all
     python3 scripts/enforce_use_groups.py
 
