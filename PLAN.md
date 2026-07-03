@@ -9,7 +9,12 @@ kirino is the zero-trust authentication & RBAC framework (v0.5.0, SySL-1.0). Imp
 ### 1. Version mismatch with entelecheia consumer
 - entelecheia pins `kirino = "^0.4"` but kirino is at v0.5.0
 - Pre-1.0 semver: breaking changes allowed between minor versions
-- **Fix**: Either confirm 0.4.x API is compatible and still maintained, or update entelecheia to `^0.5`.
+- **Cannot be resolved inside this repository.** entelecheia is a separate
+  consumer repo; its dependency pin cannot be verified or fixed from here.
+- **Action (must be done in the entelecheia repo)**: Either confirm 0.4.x API
+  is compatible and still maintained, or update entelecheia to `^0.5`. Open a
+  tracking issue in `celestia-island/entelecheia` and link it back here.
+- **Status**: needs verification in the entelecheia repository — **not** done.
 
 ## High
 
