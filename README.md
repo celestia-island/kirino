@@ -1,4 +1,4 @@
-<p align="center"><img src="docs/logo.webp" alt="kirino" width="240" /></p>
+<p align="center"><img src="https://raw.githubusercontent.com/celestia-island/kirino/master/docs/logo.webp" alt="kirino" width="240" /></p>
 
 <h1 align="center">Kirino</h1>
 <div align="center">
