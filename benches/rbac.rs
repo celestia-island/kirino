@@ -12,8 +12,9 @@
 //!   cargo bench --all-features --no-run        # compile every group
 //!   cargo bench --all-features                 # run them
 
-use criterion::{black_box, Criterion};
 use std::collections::HashSet;
+
+use criterion::{black_box, Criterion};
 
 // The crate's own `test_utils` is `#[cfg(test)]`-gated and therefore invisible
 // to the benchmark target, so we define local fixtures with the same shape.

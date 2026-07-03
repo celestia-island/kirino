@@ -2,7 +2,7 @@
 name = "kirino"
 version = "0.5.0"
 edition = "2021"
-description = "A customizable, zero-trust authentication and authorization framework with RBAC and dynamic risk assessment."
+description = "Zero-trust authentication and authorization framework"
 license-file = "LICENSE"
 repository = "https://github.com/celestia-island/kirino"
 readme = "README.md"

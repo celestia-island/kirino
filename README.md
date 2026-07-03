@@ -3,7 +3,7 @@
 <h1 align="center">Kirino</h1>
 <div align="center">
  <strong>
-   Customizable Zero-Trust Authentication & RBAC Framework
+   Zero-trust authentication and authorization framework
  </strong>
 </div>
 
