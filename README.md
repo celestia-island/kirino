@@ -17,7 +17,7 @@
   <a href="https://crates.io/crates/kirino">
     <img src="https://img.shields.io/crates/v/kirino" alt="Crates.io Version" />
   </a>
-  [![License: SySL](https://img.shields.io/badge/license-SySL%201.0-blue)](./LICENSE)</div>
+  [![License: SySL](https://img.shields.io/badge/license-SySL%201.0-blue)](https://sysl.celestia.world)</div>
 
 <div align="center">
   <h3>
