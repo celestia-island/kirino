@@ -642,9 +642,7 @@ where
             .check_and_record_failure(username_trimmed)
             .await?;
 
-        let user = self
-            .authenticate_user(username_trimmed, password)
-            .await?;
+        let user = self.authenticate_user(username_trimmed, password).await?;
         let user_id = user.id.to_string();
         let (roles, perm_names) = self.fetch_user_roles_and_perms(&user_id).await?;
 

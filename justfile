@@ -13,9 +13,13 @@
 #   just test            - Run unit tests
 #   just ci              - Run all CI checks
 
+set unstable
+set lists
 set windows-shell := ["pwsh.exe", "-NoLogo", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", "[Console]::OutputEncoding = [System.Text.Encoding]::UTF8; $PSDefaultParameterValues['*:Encoding'] = 'utf8';"]
 
 python := if os_family() == "windows" { "python" } else { "python3" }
+
+import "./celestia-devtools.just"
 
 default:
     @just --list
@@ -24,15 +28,9 @@ default:
 # Build tasks
 # ============================================================================
 
-# Build everything (Debug mode)
-build-dev:
-    @echo "Building all (Debug mode)..."
-    cargo build --all
-
-# Build everything (Release mode)
-build:
-    @echo "Building all (Release mode)..."
-    cargo build --release --all
+# Build all crates. Release by default; `--dev` for debug, `--clean` to clean first.
+build *FLAGS='':
+    just _build ":" "cargo build --all" "cargo build --release --all" {{FLAGS}}
 
 # ============================================================================
 # Code quality checks
@@ -50,8 +48,8 @@ clippy:
 
 # Format all code
 fmt:
-    @echo "Formatting all code..."
     cargo fmt --all
+    python3 scripts/enforce_use_groups.py
 
 # Check formatting without modifying files
 fmt-check:

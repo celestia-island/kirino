@@ -1,0 +1,33 @@
+# Development PostgreSQL instance for kirino's `rbac-pg-session` integration tests.
+#
+# Usage:
+#   docker compose up -d
+#   export DATABASE_URL=postgres://kirino:kirino@localhost:5432/kirino_test
+#   cargo test --lib --features rbac-pg-session -- --ignored pg_session
+#   docker compose down -v   # tear down (also removes the data volume)
+#
+# The schema (rbac_sessions table) is created by the integration tests in
+# src/database/pg_session.rs before each run.
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: kirino-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: kirino
+      POSTGRES_PASSWORD: kirino
+      POSTGRES_DB: kirino_test
+    ports:
+      - "5432:5432"
+    volumes:
+      - kirino-pg-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U kirino -d kirino_test"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+
+volumes:
+  kirino-pg-data:

@@ -22,7 +22,7 @@ jobs:
         rust: [stable, nightly]
 
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
@@ -49,7 +49,7 @@ jobs:
         run: cargo check --all-targets
 
       - name: Clippy lints
-        run: cargo clippy --all-targets -- -D warnings
+        run: cargo clippy --all-targets --all-features -- -D warnings
 
       - name: Check formatting
         run: cargo fmt --all -- --check
@@ -70,3 +70,60 @@ jobs:
         run: |
           rustup install 1.75.0 --profile minimal
           cargo +1.75.0 check --all-features
+
+  pg-integration:
+    name: PostgreSQL integration tests
+    needs: check
+    # Service containers are only supported on Linux runners.
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    env:
+      # Matches the service container below. Hosts `localhost` because the job
+      # runs the container in the same network namespace (ports mapped).
+      DATABASE_URL: postgres://kirino:kirino@localhost:5432/kirino_test
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: kirino
+          POSTGRES_PASSWORD: kirino
+          POSTGRES_DB: kirino_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U kirino -d kirino_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: stable
+          components: clippy
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        continue-on-error: true
+        with:
+          path: |
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+          key: pg-integration-cargo-${{ github.sha }}
+          restore-keys: |
+            pg-integration-cargo-
+
+      - name: Clippy with rbac-pg-session
+        run: cargo clippy --lib --features rbac-pg-session -- -D warnings
+
+      - name: Run PostgreSQL integration tests
+        run: cargo test --lib --features rbac-pg-session -- --ignored pg_session

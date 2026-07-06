@@ -2,10 +2,13 @@
 name = "kirino"
 version = "0.5.0"
 edition = "2021"
-description = "A customizable, zero-trust authentication and authorization framework with RBAC and dynamic risk assessment."
-license = "SySL-1.0"
+description = "Zero-trust authentication and authorization framework"
+license-file = "LICENSE"
 repository = "https://github.com/celestia-island/kirino"
 readme = "README.md"
+documentation = "https://docs.rs/kirino"
+categories = ["authentication"]
+keywords = ["rbac", "authentication", "authorization", "zero-trust", "anomaly-detection", "trust-score"]
 rust-version = "1.75"
 
 [lib]
@@ -44,7 +47,7 @@ uuid = { version = "^1", features = ["serde", "v7"] }
 futures = "^0.3"
 serde = { version = "^1", features = ["derive"] }
 serde_json = "^1"
-yuuka = "^0.5"
+yuuka = { path = "../yuuka", version = "0.6" }
 
 argon2 = { version = "^0.5", optional = true }
 hmac = "^0.12"
@@ -54,4 +57,12 @@ sha1 = "^0.10"
 zeroize = { version = "^1", features = ["zeroize_derive"] }
 sha2 = "^0.10"
 tracing = { version = "^0.1", features = ["log"] }
-sea-orm = { version = "^1", features = ["sqlx-postgres", "runtime-tokio-rustls"], optional = true }
+sea-orm = { version = "=2.0.0-rc.41", features = ["sqlx-postgres", "runtime-tokio-rustls"], optional = true }
+
+[dev-dependencies]
+criterion = "^0.5"
+tokio = { version = "^1", features = ["rt", "macros", "time", "sync"] }
+
+[[bench]]
+name = "rbac"
+harness = false

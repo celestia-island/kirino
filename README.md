@@ -1,9 +1,9 @@
-<p align="center"><img src="docs/logo.webp" alt="kirino" width="240" /></p>
+<p align="center"><img src="https://raw.githubusercontent.com/celestia-island/kirino/master/docs/logo.webp" alt="kirino" width="240" /></p>
 
 <h1 align="center">Kirino</h1>
 <div align="center">
  <strong>
-   Customizable Zero-Trust Authentication & RBAC Framework
+   Zero-trust authentication and authorization framework
  </strong>
 </div>
 
@@ -11,13 +11,13 @@
 
 <div align="center">
   <a href="https://github.com/celestia-island/kirino/actions">
-    <img src="https://img.shields.io/github/actions/workflow/status/celestia-island/kirino/checks.yml?branch=main"
+    <img src="https://img.shields.io/github/actions/workflow/status/celestia-island/kirino/checks.yml?branch=master"
       alt="CI Status" />
   </a>
   <a href="https://crates.io/crates/kirino">
     <img src="https://img.shields.io/crates/v/kirino" alt="Crates.io Version" />
   </a>
-  [[![License: SySL](https://img.shields.io/badge/license-SySL%201.0-blue)](./LICENSE.txt)](./LICENSE.txt)</div>
+  [![License: SySL](https://img.shields.io/badge/license-SySL%201.0-blue)](https://sysl.celestia.world)</div>
 
 <div align="center">
   <h3>

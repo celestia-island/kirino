@@ -1,0 +1,7 @@
+[site]
+title = "Kirino"
+description = "A customizable, zero-trust authentication and authorization framework with RBAC and dynamic risk assessment."
+
+[languages]
+default = "en"
+order = ["en", "zhs", "zht", "ja", "ko", "fr", "es", "ru", "ar"]
