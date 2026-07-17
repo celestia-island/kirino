@@ -68,8 +68,8 @@ jobs:
 
       - name: Check MSRV
         run: |
-          rustup install 1.85.0 --profile minimal
-          cargo +1.85.0 check --no-default-features --features rbac-full
+          rustup install 1.88.0 --profile minimal
+          cargo +1.88.0 check --no-default-features --features rbac-full
 
   pg-integration:
     name: PostgreSQL integration tests

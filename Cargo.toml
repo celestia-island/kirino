@@ -9,7 +9,7 @@ readme = "README.md"
 documentation = "https://docs.rs/kirino"
 categories = ["authentication"]
 keywords = ["rbac", "authentication", "authorization", "zero-trust", "anomaly-detection", "trust-score"]
-rust-version = "1.85"
+rust-version = "1.88"
 
 [lib]
 crate-type = ["rlib"]
