@@ -1,0 +1,29 @@
+{
+  "name": "@celestia-island/kirino",
+  "version": "0.5.0",
+  "description": "Client-side auth utilities for kirino — JWT validation, session storage fallback, auth-lost handling",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    }
+  },
+  "files": ["dist"],
+  "scripts": {
+    "build": "tsc",
+    "prepublishOnly": "npm run build"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/celestia-island/kirino.git",
+    "directory": "packages/web_ts"
+  },
+  "keywords": ["kirino", "auth", "jwt", "session"],
+  "license": "SySL-1.0",
+  "devDependencies": {
+    "typescript": "^5.7"
+  }
+}
