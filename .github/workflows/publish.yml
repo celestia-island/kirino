@@ -18,14 +18,15 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
-
+      - name: Clone yuuka (workspace dep)
+        run: git clone --depth 1 https://github.com/celestia-island/yuuka.git ../yuuka
       - uses: Swatinem/rust-cache@v2
       - run: cargo install cargo-release
-
       - run: cargo login ${{ secrets.CRATES_IO_API_TOKEN }}
       - run: |-
           cargo release \
             publish \
+            -p kirino_session \
             --all-features \
             --allow-branch HEAD \
             --no-confirm \
