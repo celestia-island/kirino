@@ -292,3 +292,4 @@ mod tests {
         assert_eq!(code_a, code_b);
     }
 }
+}
