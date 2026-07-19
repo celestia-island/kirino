@@ -1,3 +1,4 @@
+use async_trait::async_trait;
 use axum::{
     extract::FromRequestParts,
     http::{request::Parts, StatusCode},
@@ -12,7 +13,7 @@ pub struct JwtClaims {
     pub claims: TokenClaims,
 }
 
-#[axum::async_trait]
+#[async_trait]
 impl<S> FromRequestParts<S> for JwtClaims
 where
     S: Send + Sync,
