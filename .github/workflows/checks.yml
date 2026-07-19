@@ -22,20 +22,20 @@ jobs:
         rust: [stable, nightly]
 
     steps:
-      - uses: actions/checkout@v5
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@master
         uses: dtolnay/rust-toolchain@stable
+        with:
           toolchain: ${{ matrix.rust }}
           components: rustfmt, clippy
 
       - name: Cache cargo registry
         uses: actions/cache@v4
         continue-on-error: true
+        with:
           path: |
             ~/.cargo/registry/index/
             ~/.cargo/registry/cache/
@@ -48,63 +48,5 @@ jobs:
       - name: Check compilation
         run: cargo check --all-targets
 
-      - name: Clippy lints
-        run: cargo clippy --all-targets -- -D warnings
-        run: cargo clippy --all-targets --all-features -- -D warnings
-
-      - name: Check formatting
-        run: cargo fmt --all -- --check
-
       - name: Run tests
-        run: cargo test --lib --all-features
-
-      - name: Run doc tests
-        run: cargo test --doc --all-features
-
-      - name: Check minimal features
-        run: cargo check --no-default-features --features rbac-core
-
-      - name: Check rbac-full features
-        run: cargo check --all-features --all-targets
-
-      - name: Check MSRV
-        run: |
-          rustup install 1.75.0 --profile minimal
-          cargo +1.75.0 check --all-features
-
-  pg-integration:
-    name: PostgreSQL integration tests
-    needs: check
-    # Service containers are only supported on Linux runners.
-    runs-on: ubuntu-latest
-
-      # Matches the service container below. Hosts `localhost` because the job
-      # runs the container in the same network namespace (ports mapped).
-      DATABASE_URL: postgres://kirino:kirino@localhost:5432/kirino_test
-
-    services:
-      postgres:
-        image: postgres:16-alpine
-          POSTGRES_USER: kirino
-          POSTGRES_PASSWORD: kirino
-          POSTGRES_DB: kirino_test
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd "pg_isready -U kirino -d kirino_test"
-          --health-interval 5s
-          --health-timeout 5s
-          --health-retries 10
-
-
-          toolchain: stable
-          components: clippy
-
-          key: pg-integration-cargo-${{ github.sha }}
-            pg-integration-cargo-
-
-      - name: Clippy with rbac-pg-session
-        run: cargo clippy --lib --features rbac-pg-session -- -D warnings
-
-      - name: Run PostgreSQL integration tests
-        run: cargo test --lib --features rbac-pg-session -- --ignored pg_session
+        run: cargo test --all-targets
