@@ -6,6 +6,7 @@ rust-version = "1.75"
 description = "Distributed session management with JWT and PostgreSQL for kirino"
 license = "SySL-1.0"
 repository = "https://github.com/celestia-island/kirino"
+documentation = "https://docs.rs/kirino_session"
 keywords = ["session", "jwt", "authentication", "kirino"]
 
 [dependencies]
