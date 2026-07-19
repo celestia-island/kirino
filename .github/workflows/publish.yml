@@ -27,7 +27,7 @@ jobs:
           cargo release \
             publish \
             -p kirino_session \
-            --all-features \
+            --features default \
             --allow-branch HEAD \
             --no-confirm \
             --execute
