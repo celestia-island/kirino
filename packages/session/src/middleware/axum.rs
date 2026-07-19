@@ -1,4 +1,3 @@
-use async_trait::async_trait;
 use axum::{
     extract::FromRequestParts,
     http::{request::Parts, StatusCode},
@@ -13,7 +12,6 @@ pub struct JwtClaims {
     pub claims: TokenClaims,
 }
 
-#[async_trait]
 impl<S> FromRequestParts<S> for JwtClaims
 where
     S: Send + Sync,
@@ -68,7 +66,7 @@ impl IntoResponse for AuthRejection {
     }
 }
 
-/// Put `Arc<TokenManager>` into axum extensions for `JwtClaims` to find.
+/// Put \`Arc\<TokenManager\>\` into axum extensions for \`JwtClaims\` to find.
 pub fn layer(manager: TokenManager) -> Arc<TokenManager> {
     Arc::new(manager)
 }
