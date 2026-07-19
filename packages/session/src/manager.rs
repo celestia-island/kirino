@@ -27,15 +27,10 @@ impl TokenManager {
         roles: Vec<String>,
     ) -> SessionResult<TokenPair> {
         let sid = Uuid::new_v4().to_string();
-        let access = self.sign(
-            TokenClaims::new(user_id, username.clone(), TokenType::Access, self.config.access_ttl_secs, &self.config.issuer)
-                .with_session(&sid)
-                .with_roles(roles.clone()),
-        )?;
-        let refresh = self.sign(
-            TokenClaims::new(user_id, username, TokenType::Refresh, self.config.refresh_ttl_secs, &self.config.issuer)
-                .with_session(&sid),
-        )?;
+        let access = self.sign(&TokenClaims::new(user_id, username.clone(), TokenType::Access, self.config.access_ttl_secs, &self.config.issuer)
+                .with_session(&sid))?;
+        let refresh = self.sign(&TokenClaims::new(user_id, username, TokenType::Refresh, self.config.refresh_ttl_secs, &self.config.issuer)
+                .with_session(&sid))?;
         Ok(TokenPair {
             access_token: access,
             refresh_token: refresh,
