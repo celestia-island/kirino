@@ -30,7 +30,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: celestia-island/yuuka
-          path: yuuka
+          path: ../yuuka
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
