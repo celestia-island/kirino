@@ -16,15 +16,8 @@ jobs:
     timeout-minutes: 10
 
     steps:
-<<<<<<< HEAD
-<<<<<<< HEAD
       - uses: actions/checkout@v5
-=======
       - uses: actions/checkout@v4
->>>>>>> origin/dev
-=======
-      - uses: actions/checkout@v4
->>>>>>> dev
       - uses: dtolnay/rust-toolchain@stable
 
       - uses: Swatinem/rust-cache@v2
