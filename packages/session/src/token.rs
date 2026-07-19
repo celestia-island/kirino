@@ -32,6 +32,15 @@ pub struct TokenClaims {
     /// User roles.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub roles: Vec<String>,
+    /// Auxiliary user ID (backward compat — redundant with sub).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub user_id: Option<String>,
+    /// Tenant ID for multi-tenant deployments.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tenant_id: Option<String>,
+    /// Cross-auth relay ID (UUIDv7, permanent).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub relay_id: Option<String>,
 }
 
 impl TokenClaims {
@@ -55,6 +64,9 @@ impl TokenClaims {
             jti: Uuid::new_v4().to_string(),
             sid: None,
             roles: Vec::new(),
+            user_id: None,
+            tenant_id: None,
+            relay_id: None,
         }
     }
 
@@ -65,6 +77,21 @@ impl TokenClaims {
 
     pub fn with_roles(mut self, roles: Vec<String>) -> Self {
         self.roles = roles;
+        self
+    }
+
+    pub fn with_user_id(mut self, user_id: impl Into<String>) -> Self {
+        self.user_id = Some(user_id.into());
+        self
+    }
+
+    pub fn with_tenant(mut self, tenant_id: impl Into<String>) -> Self {
+        self.tenant_id = Some(tenant_id.into());
+        self
+    }
+
+    pub fn with_relay(mut self, relay_id: impl Into<String>) -> Self {
+        self.relay_id = Some(relay_id.into());
         self
     }
 
