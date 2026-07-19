@@ -2,49 +2,32 @@
 name = "kirino"
 version = "0.5.0"
 edition = "2021"
-<<<<<<< HEAD
-<<<<<<< HEAD
-description = "A customizable, zero-trust authentication and authorization framework with RBAC and dynamic risk assessment."
-license = "SySL-1.0"
-repository = "https://github.com/celestia-island/kirino"
-readme = "README.md"
-=======
-=======
->>>>>>> dev
-description = "Zero-trust authentication and authorization framework"
+description = "Zero-trust authentication and authorization framework with RBAC and dynamic risk assessment."
 license-file = "LICENSE"
 repository = "https://github.com/celestia-island/kirino"
 readme = "README.md"
 documentation = "https://docs.rs/kirino"
 categories = ["authentication"]
 keywords = ["rbac", "authentication", "authorization", "zero-trust", "anomaly-detection", "trust-score"]
-<<<<<<< HEAD
->>>>>>> origin/dev
-=======
->>>>>>> dev
 rust-version = "1.75"
+
+[workspace]
+members = [
+    "packages/session",
+]
 
 [lib]
 crate-type = ["rlib"]
 
 [features]
 default = ["rbac-inmemory", "auth-password", "auth-jwt"]
-
 rbac-core = []
 rbac-inmemory = ["rbac-core"]
 rbac-hierarchy = ["rbac-core"]
 rbac-constraints = ["rbac-core"]
 rbac-pg-session = ["rbac-core", "dep:sea-orm"]
 rbac-dynamic = ["rbac-core"]
-rbac-full = [
-    "rbac-inmemory",
-    "rbac-hierarchy",
-    "rbac-constraints",
-    "rbac-dynamic",
-    "auth-password",
-    "auth-jwt",
-]
-
+rbac-full = ["rbac-inmemory", "rbac-hierarchy", "rbac-constraints", "rbac-dynamic", "auth-password", "auth-jwt"]
 auth-password = ["dep:argon2"]
 auth-jwt = ["dep:jsonwebtoken"]
 
@@ -52,24 +35,13 @@ auth-jwt = ["dep:jsonwebtoken"]
 anyhow = "^1"
 async-trait = "^0.1"
 thiserror = "^2"
-
 chrono = { version = "^0.4", features = ["serde"] }
 tokio = { version = "^1", features = ["sync", "macros", "rt", "time"] }
 uuid = { version = "^1", features = ["serde", "v7"] }
-
 futures = "^0.3"
 serde = { version = "^1", features = ["derive"] }
 serde_json = "^1"
-<<<<<<< HEAD
-<<<<<<< HEAD
-yuuka = "^0.5"
-=======
 yuuka = { path = "../yuuka", version = "0.6" }
->>>>>>> origin/dev
-=======
-yuuka = { path = "../yuuka", version = "0.6" }
->>>>>>> dev
-
 argon2 = { version = "^0.5", optional = true }
 hmac = "^0.12"
 jsonwebtoken = { version = "^9", optional = true }
@@ -78,12 +50,6 @@ sha1 = "^0.10"
 zeroize = { version = "^1", features = ["zeroize_derive"] }
 sha2 = "^0.10"
 tracing = { version = "^0.1", features = ["log"] }
-<<<<<<< HEAD
-<<<<<<< HEAD
-sea-orm = { version = "^1", features = ["sqlx-postgres", "runtime-tokio-rustls"], optional = true }
-=======
-=======
->>>>>>> dev
 sea-orm = { version = "^2.0.0-rc", features = ["sqlx-postgres", "runtime-tokio-rustls"], optional = true }
 
 [dev-dependencies]
@@ -93,7 +59,3 @@ tokio = { version = "^1", features = ["rt", "macros", "time", "sync"] }
 [[bench]]
 name = "rbac"
 harness = false
-<<<<<<< HEAD
->>>>>>> origin/dev
-=======
->>>>>>> dev
