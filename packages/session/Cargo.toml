@@ -27,7 +27,7 @@ actix-rt = { version = "^2", optional = true }
 futures-util = { version = "^0.3", optional = true }
 
 [features]
-default = []
+default = ["axum"]
 postgres = ["sea-orm"]
 axum = ["dep:axum", "dep:axum-core", "dep:async-trait"]
 actix = ["dep:actix-web", "dep:actix-rt", "dep:futures-util"]
