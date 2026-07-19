@@ -20,6 +20,8 @@ jobs:
       - name: Amend squash message
         run: |
           set -euo pipefail
+          git config user.email "actions@github.com"
+          git config user.name "GitHub Actions"
           BODY_LINES=$(git log -1 --format='%B' | wc -l)
           if [ "$BODY_LINES" -le 1 ]; then
             echo "Commit body is already clean (${BODY_LINES} lines), skipping."
