@@ -20,6 +20,7 @@
 mod config;
 mod error;
 mod manager;
+pub mod middleware;
 mod token;
 
 #[cfg(feature = "postgres")]
