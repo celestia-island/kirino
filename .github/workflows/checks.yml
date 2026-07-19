@@ -38,7 +38,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
 
       - name: Check compilation
-        run: cargo check -p kirino_session
+        run: cargo check -p kirino-session
 
       - name: Run tests
-        run: cargo test -p kirino_session
+        run: cargo test -p kirino-session
