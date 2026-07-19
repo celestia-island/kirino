@@ -65,11 +65,3 @@ pub use token::{TokenClaims, TokenPair, TokenType};
 ///     }))
 ///     .layer(axum::Extension(manager));
 /// ```
-///
-/// # Features
-///
-/// | Flag | Description |
-/// |------|-------------|
-/// | `axum` (default) | `JwtClaims` extractor for axum 0.8 |
-/// | `actix` | `JwtMiddleware` for actix-web 4 |
-/// | `postgres` | `SessionStore` backed by sea-orm/PostgreSQL |
