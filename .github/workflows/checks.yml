@@ -27,10 +27,7 @@ jobs:
           fetch-depth: 0
 
       - name: Checkout yuuka (workspace dep)
-        uses: actions/checkout@v4
-        with:
-          repository: celestia-island/yuuka
-          path: ../yuuka
+        run: git clone --depth 1 https://github.com/celestia-island/yuuka.git ../yuuka
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
