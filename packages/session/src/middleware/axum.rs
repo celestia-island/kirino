@@ -8,34 +8,22 @@ use std::sync::Arc;
 use crate::{SessionError, TokenClaims, TokenManager};
 
 /// Extractor that validates a JWT from the Authorization header.
-///
-/// # Usage
-/// ```ignore
-/// async fn protected_route(claims: JwtClaims) -> impl IntoResponse {
-///     format!("Hello, {}!", claims.username)
-/// }
-/// ```
 pub struct JwtClaims {
     pub claims: TokenClaims,
 }
 
-#[async_trait::async_trait]
+#[axum::async_trait]
 impl<S> FromRequestParts<S> for JwtClaims
 where
     S: Send + Sync,
 {
     type Rejection = AuthRejection;
 
-    async fn from_request_parts(parts: &mut Parts, state: &S) -> Result<Self, Self::Rejection> {
+    async fn from_request_parts(parts: &mut Parts, _state: &S) -> Result<Self, Self::Rejection> {
         let manager = parts
             .extensions
             .get::<Arc<TokenManager>>()
-            .or_else(|| {
-                parts
-                    .extensions
-                    .get::<Arc<AppState>>()
-                    .map(|s| &s.token_manager)
-            })
+            .cloned()
             .ok_or(AuthRejection::MissingManager)?;
 
         let header = parts
@@ -79,12 +67,7 @@ impl IntoResponse for AuthRejection {
     }
 }
 
-/// Helper state wrapper for axum.
-pub struct AppState {
-    pub token_manager: Arc<TokenManager>,
-}
-
-/// Add the TokenManager to axum's shared state.
+/// Put `Arc<TokenManager>` into axum extensions for `JwtClaims` to find.
 pub fn layer(manager: TokenManager) -> Arc<TokenManager> {
     Arc::new(manager)
 }
