@@ -26,6 +26,12 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Checkout yuuka (workspace dep)
+        uses: actions/checkout@v4
+        with:
+          repository: celestia-island/yuuka
+          path: yuuka
+
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
         with:
@@ -46,7 +52,7 @@ jobs:
             ${{ matrix.os }}-cargo-
 
       - name: Check compilation
-        run: cargo check -p kirino_session --all-targets
+        run: cargo check --all-targets
 
       - name: Run tests
         run: cargo test --all-targets
