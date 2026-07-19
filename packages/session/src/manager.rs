@@ -84,24 +84,31 @@ mod tests {
         let config = SessionConfig::new("test-secret-key-for-unit-tests");
         let manager = TokenManager::new(config);
         let user_id = Uuid::new_v4();
-        let pair = manager.issue_pair(user_id, "testuser".into(), vec!["admin".into()]).unwrap();
+        let pair = manager.issue_pair(user_id, "testuser".into(), vec!["admin".to_string()]).unwrap();
 
         let claims = manager.verify(&pair.access_token).unwrap();
         assert_eq!(claims.sub, user_id.to_string());
         assert_eq!(claims.username, "testuser");
-        assert_eq!(claims.roles, vec!["admin"]);
+        assert_eq!(claims.roles, vec!["admin".to_string()]);
         assert_eq!(claims.token_type, TokenType::Access);
     }
 
     #[test]
     fn expired_token_fails() {
-        let mut config = SessionConfig::new("test-secret").with_ttl(0, 0);
-        let manager = TokenManager::new(config.clone());
-        // Force TTL to 0 for immediate expiry test
+        let config = SessionConfig::new("test-secret");
+        let manager = TokenManager::new(config);
+        // Create token with 0 TTL (immediately expired)
         let claims = TokenClaims::new(Uuid::new_v4(), "u".into(), TokenType::Access, 0, "kirino");
         let token = manager.sign(&claims).unwrap();
-        std::thread::sleep(std::time::Duration::from_secs(1));
-        assert!(manager.verify(&token).is_err());
+        // jsonwebtoken default leeway is 60s, set to 0 for this test
+        let mut validation = jsonwebtoken::Validation::default();
+        validation.set_issuer(&["kirino"]);
+        validation.leeway = 0;
+        assert!(jsonwebtoken::decode::<TokenClaims>(
+            &token,
+            &jsonwebtoken::DecodingKey::from_secret(b"test-secret"),
+            &validation,
+        ).is_err());
     }
 
     #[test]
