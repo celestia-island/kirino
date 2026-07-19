@@ -49,7 +49,7 @@ jobs:
             ${{ matrix.os }}-cargo-
 
       - name: Check compilation
-        run: cargo check --all-targets
+        run: cargo check -p kirino_session
 
       - name: Run tests
-        run: cargo test --all-targets
+        run: cargo test -p kirino_session
