@@ -8,7 +8,7 @@
 //!
 //! # Example
 //! ```ignore
-//! use kirino_session::{TokenManager, SessionConfig};
+//! use kirino-session::{TokenManager, SessionConfig};
 //!
 //! let config = SessionConfig::new("my-secret-key");
 //! let manager = TokenManager::new(config);
