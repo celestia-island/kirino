@@ -1,0 +1,48 @@
+name: npm Release
+
+on:
+  push:
+    tags: ["kirino_session-v*"]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to publish (e.g. 0.5.0)"
+        required: true
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  publish:
+    name: Publish @celestia-island/kirino to npm
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          registry-url: https://registry.npmjs.org/
+      - name: Install and build
+        run: |
+          cd packages/web_ts
+          npm install
+          npm run build
+      - name: Resolve version
+        id: ver
+        shell: bash
+        run: |
+          if [ -n "${{ github.event.inputs.version }}" ]; then
+            v="${{ github.event.inputs.version }}"
+          else
+            v="${GITHUB_REF_NAME#kirino_session-v}"
+          fi
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+      - name: Bump version
+        run: |
+          cd packages/web_ts
+          npm version "${{ steps.ver.outputs.version }}" --no-git-tag-version --allow-same-version
+      - name: Publish
+        run: |
+          cd packages/web_ts
+          npm publish --access public --provenance
