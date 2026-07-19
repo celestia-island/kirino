@@ -22,36 +22,20 @@ jobs:
         rust: [stable, nightly]
 
     steps:
-<<<<<<< HEAD
-<<<<<<< HEAD
       - uses: actions/checkout@v5
-=======
       - uses: actions/checkout@v4
->>>>>>> origin/dev
-=======
-      - uses: actions/checkout@v4
->>>>>>> dev
         with:
           fetch-depth: 0
 
       - name: Install Rust toolchain
-<<<<<<< HEAD
-<<<<<<< HEAD
         uses: dtolnay/rust-toolchain@master
-=======
         uses: dtolnay/rust-toolchain@stable
->>>>>>> origin/dev
-=======
-        uses: dtolnay/rust-toolchain@stable
->>>>>>> dev
-        with:
           toolchain: ${{ matrix.rust }}
           components: rustfmt, clippy
 
       - name: Cache cargo registry
         uses: actions/cache@v4
         continue-on-error: true
-        with:
           path: |
             ~/.cargo/registry/index/
             ~/.cargo/registry/cache/
@@ -65,15 +49,8 @@ jobs:
         run: cargo check --all-targets
 
       - name: Clippy lints
-<<<<<<< HEAD
-<<<<<<< HEAD
         run: cargo clippy --all-targets -- -D warnings
-=======
         run: cargo clippy --all-targets --all-features -- -D warnings
->>>>>>> origin/dev
-=======
-        run: cargo clippy --all-targets --all-features -- -D warnings
->>>>>>> dev
 
       - name: Check formatting
         run: cargo fmt --all -- --check
@@ -94,21 +71,13 @@ jobs:
         run: |
           rustup install 1.75.0 --profile minimal
           cargo +1.75.0 check --all-features
-<<<<<<< HEAD
-<<<<<<< HEAD
-=======
-=======
->>>>>>> dev
 
   pg-integration:
     name: PostgreSQL integration tests
     needs: check
     # Service containers are only supported on Linux runners.
     runs-on: ubuntu-latest
-    permissions:
-      contents: read
 
-    env:
       # Matches the service container below. Hosts `localhost` because the job
       # runs the container in the same network namespace (ports mapped).
       DATABASE_URL: postgres://kirino:kirino@localhost:5432/kirino_test
@@ -116,7 +85,6 @@ jobs:
     services:
       postgres:
         image: postgres:16-alpine
-        env:
           POSTGRES_USER: kirino
           POSTGRES_PASSWORD: kirino
           POSTGRES_DB: kirino_test
@@ -128,27 +96,11 @@ jobs:
           --health-timeout 5s
           --health-retries 10
 
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
 
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
-        with:
           toolchain: stable
           components: clippy
 
-      - name: Cache cargo registry
-        uses: actions/cache@v4
-        continue-on-error: true
-        with:
-          path: |
-            ~/.cargo/registry/index/
-            ~/.cargo/registry/cache/
-            ~/.cargo/git/db/
           key: pg-integration-cargo-${{ github.sha }}
-          restore-keys: |
             pg-integration-cargo-
 
       - name: Clippy with rbac-pg-session
@@ -156,7 +108,3 @@ jobs:
 
       - name: Run PostgreSQL integration tests
         run: cargo test --lib --features rbac-pg-session -- --ignored pg_session
-<<<<<<< HEAD
->>>>>>> origin/dev
-=======
->>>>>>> dev
