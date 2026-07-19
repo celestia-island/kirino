@@ -46,7 +46,7 @@ jobs:
             ${{ matrix.os }}-cargo-
 
       - name: Check compilation
-        run: cargo check --all-targets
+        run: cargo check -p kirino_session --all-targets
 
       - name: Clippy lints
         run: cargo clippy --all-targets -- -D warnings
