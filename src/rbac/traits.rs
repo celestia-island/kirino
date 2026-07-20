@@ -9,6 +9,51 @@ pub trait Permission: Eq + std::hash::Hash + Clone + Send + Sync + 'static {
     fn domain(&self) -> &'static str {
         ""
     }
+
+    fn path_segments(&self) -> &[&str] {
+        &[]
+    }
+
+    fn ancestry_names(&self) -> Vec<&str> {
+        vec![self.name()]
+    }
+
+    fn matches_pattern(&self, pattern: &str) -> bool {
+        pattern == self.name()
+    }
+
+    fn is_leaf(&self) -> bool {
+        true
+    }
+
+    fn is_branch(&self) -> bool {
+        false
+    }
+
+    fn all() -> Vec<Self>
+    where
+        Self: Sized,
+    {
+        Vec::new()
+    }
+
+    fn all_domains() -> Vec<&'static str> {
+        Vec::new()
+    }
+
+    fn from_path(_path: &str) -> Option<Self>
+    where
+        Self: Sized,
+    {
+        None
+    }
+
+    fn expand_domain(_domain_str: &str) -> Vec<Self>
+    where
+        Self: Sized,
+    {
+        Vec::new()
+    }
 }
 
 pub trait Subject: Eq + std::hash::Hash + Clone + Send + Sync + 'static {
@@ -96,4 +141,111 @@ pub trait RoleStore<P: Permission>: Send + Sync {
     async fn get_role_permissions(&self, role_name: &str) -> Result<Option<HashSet<P>>>;
     #[must_use]
     async fn list_roles(&self) -> Result<Vec<String>>;
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SystemRole {
+    Admin,
+    Operator,
+    Member,
+    Viewer,
+}
+
+impl SystemRole {
+    pub fn from_str_lossy(s: &str) -> Option<Self> {
+        match s {
+            "admin" => Some(Self::Admin),
+            "operator" => Some(Self::Operator),
+            "member" => Some(Self::Member),
+            "viewer" => Some(Self::Viewer),
+            _ => None,
+        }
+    }
+
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Admin => "admin",
+            Self::Operator => "operator",
+            Self::Member => "member",
+            Self::Viewer => "viewer",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WorkspaceRole {
+    Viewer,
+    Operator,
+    Owner,
+}
+
+impl WorkspaceRole {
+    pub fn from_str_lossy(s: &str) -> Option<Self> {
+        match s {
+            "viewer" => Some(Self::Viewer),
+            "operator" => Some(Self::Operator),
+            "owner" => Some(Self::Owner),
+            _ => None,
+        }
+    }
+
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Viewer => "viewer",
+            Self::Operator => "operator",
+            Self::Owner => "owner",
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct PermissionContext {
+    pub user_id: uuid::Uuid,
+    pub system_role: SystemRole,
+    pub group_ids: Vec<uuid::Uuid>,
+    pub workspace_id: Option<uuid::Uuid>,
+    pub workspace_role: Option<WorkspaceRole>,
+    pub session_version: u64,
+    pub current_user_version: u64,
+}
+
+impl PermissionContext {
+    pub fn is_session_stale(&self) -> bool {
+        self.session_version < self.current_user_version
+    }
+}
+
+#[derive(Debug, Clone)]
+pub enum PermissionDecision {
+    Granted {
+        reason: String,
+        source: GrantSource,
+    },
+    Denied {
+        reason: String,
+        source: Option<GrantSource>,
+    },
+}
+
+#[derive(Debug, Clone)]
+pub enum GrantSource {
+    RoleDefault,
+    GlobalGrant,
+    GroupGrant,
+    UserGrant,
+    WorkspaceRole,
+    AdminBypass,
+}
+
+#[async_trait]
+pub trait GrantResolver<P: Permission>: Send + Sync {
+    #[must_use]
+    async fn resolve(
+        &self,
+        ctx: &PermissionContext,
+        permission: &P,
+        resource_id: Option<&str>,
+    ) -> Result<PermissionDecision>;
 }

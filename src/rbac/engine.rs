@@ -11,7 +11,10 @@ use crate::rbac::hierarchy::resolve_role_chain;
 use crate::rbac::{
     cache::{PermissionCache, TtlPermissionCache},
     shared::Shared,
-    traits::{AssignmentStore, Permission, PermissionRegistry, RoleRegistry, Subject},
+    traits::{
+        AssignmentStore, GrantResolver, Permission, PermissionContext, PermissionDecision,
+        PermissionRegistry, RoleRegistry, Subject,
+    },
 };
 
 pub struct RbacEngine<S, P, A>
@@ -222,6 +225,57 @@ where
         perms.retain(|p| !denied.contains(p));
 
         Ok(perms)
+    }
+
+    /// Unified permission check with wildcard-supporting grant resolver.
+    ///
+    /// Uses `GrantResolver` to expand wildcard grants (e.g., a grant for
+    /// `"agent"` covers all `agent.read` / `agent.write` / `agent.execute`
+    /// leaf permissions).  Also enforces session-version freshness.
+    pub async fn check_permission(
+        &self,
+        ctx: &PermissionContext,
+        permission: &P,
+        resource_id: Option<&str>,
+        grant_resolver: &dyn GrantResolver<P>,
+    ) -> Result<PermissionDecision> {
+        if ctx.is_session_stale() {
+            return Ok(PermissionDecision::Denied {
+                reason: "session version is stale — re-authentication required".into(),
+                source: None,
+            });
+        }
+
+        grant_resolver.resolve(ctx, permission, resource_id).await
+    }
+
+    /// Resolve all effective permissions including wildcard grant expansion.
+    ///
+    /// Collects every leaf permission that the subject can exercise, taking
+    /// wildcard grants into account.
+    pub async fn resolve_effective_permissions(
+        &self,
+        ctx: &PermissionContext,
+        grant_resolver: &dyn GrantResolver<P>,
+    ) -> Result<Vec<P>> {
+        let all_leaves = P::all();
+        let mut granted = Vec::new();
+
+        for perm in &all_leaves {
+            match grant_resolver.resolve(ctx, perm, None).await {
+                Ok(PermissionDecision::Granted { .. }) => granted.push(perm.clone()),
+                Ok(PermissionDecision::Denied { .. }) => {}
+                Err(e) => {
+                    tracing::warn!(target: "kirino::rbac::engine",
+                        permission = %perm.name(),
+                        error = %e,
+                        "failed to resolve permission, treating as denied"
+                    );
+                }
+            }
+        }
+
+        Ok(granted)
     }
 }
 

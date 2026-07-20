@@ -1,6 +1,7 @@
 use kirino::rbac::{
     prelude::*,
     store::registry::{SimpleRole, StaticPermissionRegistry, StaticRoleRegistry},
+    traits::Permission as PermissionTrait,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -10,7 +11,7 @@ enum MyPermission {
     UserManage,
 }
 
-impl Permission for MyPermission {
+impl PermissionTrait for MyPermission {
     fn name(&self) -> &str {
         match self {
             Self::DocumentRead => "document:read",
