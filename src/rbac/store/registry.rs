@@ -8,8 +8,6 @@ use crate::rbac::traits::{Permission, PermissionRegistry, Role, RoleRegistry};
 #[cfg(feature = "rbac-hierarchy")]
 use crate::rbac::hierarchy::HierarchicalRole;
 
-#[cfg(feature = "rbac-hierarchy")]
-
 #[derive(Debug, Clone)]
 pub struct SimpleRole<P: Permission> {
     name: String,
