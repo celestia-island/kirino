@@ -1,7 +1,8 @@
 use kirino_macro::hierarchical_permission;
+use crate::rbac::traits::Permission as PermissionTrait;
 
 hierarchical_permission!(
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
     pub enum Permission {
         Agent(Read, Write, Execute),
         Config(Read, Write),
@@ -25,3 +26,14 @@ impl std::fmt::Display for Permission {
         f.write_str(self.name())
     }
 }
+
+impl PermissionTrait for Permission {
+    fn name(&self) -> &str {
+        Permission::name(self)
+    }
+    fn domain(&self) -> &'static str {
+        Permission::domain(self)
+    }
+}
+
+use serde::{Deserialize, Serialize};
