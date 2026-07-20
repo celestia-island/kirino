@@ -25,6 +25,3 @@ impl std::fmt::Display for Permission {
         f.write_str(self.name())
     }
 }
-
-// serde needs to be available in the inner module scope
-use serde::{Deserialize, Serialize};

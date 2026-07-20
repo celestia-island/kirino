@@ -1,12 +1,12 @@
 use proc_macro::TokenStream;
 use proc_macro2::TokenStream as TokenStream2;
-use quote::{format_ident, quote, ToTokens};
+use quote::{format_ident, quote};
 use syn::{
     braced, parenthesized,
     parse::{Parse, ParseStream},
     parse_macro_input,
     punctuated::Punctuated,
-    DeriveInput, Ident, Token, Visibility,
+    Ident, Token, Visibility,
 };
 
 struct HierarchicalPermission {
@@ -24,7 +24,7 @@ struct DomainEntry {
 impl Parse for HierarchicalPermission {
     fn parse(input: ParseStream) -> syn::Result<Self> {
         let attrs = syn::Attribute::parse_outer(input)?;
-        let vis = input.parse()?;
+        let vis: Visibility = input.parse()?;
 
         input.parse::<Token![enum]>()?;
         let enum_name: Ident = input.parse()?;
@@ -83,6 +83,14 @@ fn action_snake(name: &Ident) -> String {
     name.to_string().to_lowercase()
 }
 
+struct LeafData {
+    domain_ident: Ident,
+    action_ident: Ident,
+    domain_snake: String,
+    action_snake: String,
+    leaf_name: String,
+}
+
 #[proc_macro]
 pub fn hierarchical_permission(input: TokenStream) -> TokenStream {
     let HierarchicalPermission {
@@ -96,17 +104,17 @@ pub fn hierarchical_permission(input: TokenStream) -> TokenStream {
     let inner_attrs = filter_derive_attrs(&attrs);
 
     let mut inner_enums = Vec::new();
-    let mut outer_variants = Vec::new();
-    let mut name_arms = Vec::new();
-    let mut domain_arms = Vec::new();
-    let mut all_leaves = Vec::new();
-    let mut all_domain_names: Vec<String> = Vec::new();
+    let mut outer_variants: Vec<TokenStream2> = Vec::new();
+    let mut domain_arms: Vec<TokenStream2> = Vec::new();
+    let mut all_domain_strs: Vec<String> = Vec::new();
+    let mut all_leaves: Vec<TokenStream2> = Vec::new();
+
+    let mut leaves: Vec<LeafData> = Vec::new();
 
     for domain in &domains {
         let domain_ident = &domain.name;
         let domain_snake_str = domain_snake(domain_ident);
 
-        // --- Inner action enum ---
         let action_variants: Vec<&Ident> = domain.actions.iter().collect();
         let inner_enum_def = quote! {
             #(#inner_attrs)*
@@ -117,49 +125,98 @@ pub fn hierarchical_permission(input: TokenStream) -> TokenStream {
         };
         inner_enums.push(inner_enum_def);
 
-        // --- Outer variant ---
         outer_variants.push(quote! { #domain_ident(#inner_mod_name::#domain_ident) });
 
-        // --- name() match arms ---
-        for action in &domain.actions {
-            let action_snake_str = action_snake(action);
-            let leaf_name = format!("{}.{}", domain_snake_str, action_snake_str);
-            let name_arm = quote! {
-                Self::#domain_ident(#inner_mod_name::#domain_ident::#action) => #leaf_name,
-            };
-            name_arms.push(name_arm);
-
-            let all_leaf = quote! {
-                Self::#domain_ident(#inner_mod_name::#domain_ident::#action)
-            };
-            all_leaves.push(all_leaf);
-        }
-
-        // --- domain() match arm ---
         let domain_arm = quote! {
             Self::#domain_ident(_) => #domain_snake_str,
         };
         domain_arms.push(domain_arm);
 
-        all_domain_names.push(domain_snake_str);
-    }
+        all_domain_strs.push(domain_snake_str.clone());
 
-    // --- from_path() arms ---
-    let mut from_path_arms = Vec::new();
-    for domain in &domains {
-        let domain_snake_str = domain_snake(&domain.name);
         for action in &domain.actions {
-            let action_snake_str = action_snake(action);
+            let action_ident = action;
+            let action_snake_str = action_snake(action_ident);
             let leaf_name = format!("{}.{}", domain_snake_str, action_snake_str);
-            let arm = quote! {
-                #leaf_name => Some(Self::#domain(#inner_mod_name::#domain::#action)),
+
+            let all_leaf = quote! {
+                Self::#domain_ident(#inner_mod_name::#domain_ident::#action_ident)
             };
-            from_path_arms.push(arm);
+            all_leaves.push(all_leaf);
+
+            leaves.push(LeafData {
+                domain_ident: domain_ident.clone(),
+                action_ident: action_ident.clone(),
+                domain_snake: domain_snake_str.clone(),
+                action_snake: action_snake_str,
+                leaf_name,
+            });
         }
     }
 
-    // --- all_domains() list ---
-    let all_domain_strs: Vec<String> = domains.iter().map(|d| domain_snake(&d.name)).collect();
+    let name_arms: Vec<TokenStream2> = leaves
+        .iter()
+        .map(|leaf| {
+            let LeafData {
+                domain_ident,
+                action_ident,
+                leaf_name,
+                ..
+            } = leaf;
+            quote! {
+                Self::#domain_ident(#inner_mod_name::#domain_ident::#action_ident) => #leaf_name,
+            }
+        })
+        .collect();
+
+    let path_segments_arms: Vec<TokenStream2> = leaves
+        .iter()
+        .map(|leaf| {
+            let LeafData {
+                domain_ident,
+                action_ident,
+                domain_snake,
+                action_snake,
+                ..
+            } = leaf;
+            quote! {
+                Self::#domain_ident(#inner_mod_name::#domain_ident::#action_ident) => &[#domain_snake, #action_snake],
+            }
+        })
+        .collect();
+
+    let from_path_arms: Vec<TokenStream2> = leaves
+        .iter()
+        .map(|leaf| {
+            let LeafData {
+                domain_ident,
+                action_ident,
+                leaf_name,
+                ..
+            } = leaf;
+            quote! {
+                #leaf_name => Some(Self::#domain_ident(#inner_mod_name::#domain_ident::#action_ident)),
+            }
+        })
+        .collect();
+
+    let expand_domain_arms: Vec<TokenStream2> = domains
+        .iter()
+        .map(|domain| {
+            let domain_ident = &domain.name;
+            let domain_snake_str = domain_snake(domain_ident);
+            let action_tokens: Vec<TokenStream2> = domain
+                .actions
+                .iter()
+                .map(|action| {
+                    quote! { Self::#domain_ident(#inner_mod_name::#domain_ident::#action) }
+                })
+                .collect();
+            quote! {
+                #domain_snake_str => vec![#(#action_tokens),*],
+            }
+        })
+        .collect();
 
     let outer_attrs = attrs;
 
@@ -170,7 +227,7 @@ pub fn hierarchical_permission(input: TokenStream) -> TokenStream {
         }
 
         #(#outer_attrs)*
-        pub enum #enum_name {
+        #vis enum #enum_name {
             #(#outer_variants),*
         }
 
@@ -189,7 +246,7 @@ pub fn hierarchical_permission(input: TokenStream) -> TokenStream {
 
             pub fn path_segments(&self) -> &'static [&'static str] {
                 match self {
-                    #(Self::#domain(#inner_mod_name::#domain::#action) => &[#domain_snake_str, #action_snake_str],)*
+                    #(#path_segments_arms)*
                 }
             }
 
@@ -230,11 +287,7 @@ pub fn hierarchical_permission(input: TokenStream) -> TokenStream {
 
             pub fn expand_domain(domain_str: &str) -> Vec<Self> {
                 match domain_str {
-                    #(
-                        #all_domain_strs => vec![#(
-                            Self::#domain(#inner_mod_name::#domain::#action),
-                        )*],
-                    )*
+                    #(#expand_domain_arms)*
                     _ => Vec::new(),
                 }
             }
