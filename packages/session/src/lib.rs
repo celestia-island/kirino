@@ -21,6 +21,7 @@ mod config;
 mod error;
 mod manager;
 pub mod middleware;
+mod one_shot;
 mod token;
 
 #[cfg(feature = "postgres")]
@@ -29,5 +30,6 @@ mod store;
 pub use config::SessionConfig;
 pub use error::{SessionError, SessionResult};
 pub use manager::TokenManager;
+pub use one_shot::OneShotStore;
 pub use token::{TokenClaims, TokenPair, TokenType};
 

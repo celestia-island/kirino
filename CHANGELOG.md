@@ -5,6 +5,29 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.1] - 2026-07-20
+
+### Added — kirino-session 0.6.1
+
+- `OneShotStore`: in-memory JTI replay protection with automatic expiry cleanup.
+- `TokenManager::verify_lenient()`: verify JWT signature without rejecting expired tokens (session restore flow).
+- `SessionStore`: real PostgreSQL-backed session persistence (create, revoke, validate, prune).
+- `MultiJwt`: multi-source JWT extractor for axum — Bearer header, cookie, query parameter, with configurable source order.
+- Examples: `axum_ws_one_shot` (full WS auth chain), `session_restore` (lenient verify + reissue).
+
+### Added — kirino 0.5.1
+
+- `WorkspaceGuard`: three-dimensional RBAC — Subject, Group, Workspace — with scoped permission checks.
+- `WorkspaceStore` trait with `InMemoryWorkspaceStore` for testing.
+- `WorkspaceRole` enum (Viewer / Operator / Owner) with capability mapping.
+- `ScopedPermission` trait with optional workspace scope.
+
+### Fixed
+
+- Restored missing `use anyhow::Result` in `identity_subject.rs` (compile error on master).
+- Cleaned up merge-conflict `#[cfg]` debris in `store/mod.rs`.
+- Ungated `SimpleRole` from stray `#[cfg(feature = "rbac-hierarchy")]`.
+
 ## [0.5.0] - 2025-06-09
 
 ### Added

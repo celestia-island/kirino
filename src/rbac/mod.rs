@@ -13,6 +13,7 @@ pub mod shared;
 pub mod store;
 pub mod subject;
 pub mod traits;
+pub mod workspace_guard;
 pub mod prelude {
 
     #[cfg(feature = "rbac-constraints")]
@@ -65,6 +66,10 @@ pub mod prelude {
         subject::StringSubject,
         traits::{
             AssignmentStore, Permission, PermissionRegistry, Role, RoleRegistry, RoleStore, Subject,
+        },
+        workspace_guard::{
+            InMemoryWorkspaceStore, ScopedPermission, WorkspaceGuard, WorkspaceRole,
+            WorkspaceStore,
         },
     };
 }
