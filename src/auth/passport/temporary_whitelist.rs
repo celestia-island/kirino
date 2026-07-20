@@ -43,20 +43,14 @@ impl WhitelistVerifier {
     }
 
     pub async fn add(&self, source: ClientSource, ttl: Option<std::time::Duration>) {
-<<<<<<< HEAD
-<<<<<<< HEAD
         let expires_at = ttl.map(|d| Instant::now() + d);
         let mut entries = self.entries.write().await;
         let now = Instant::now();
         entries.retain(|e| e.expires_at.map_or(true, |exp| now < exp));
-=======
+
         let mut entries = self.entries.write().await;
         let expires_at = ttl.map(|d| Instant::now() + d);
->>>>>>> origin/dev
-=======
-        let mut entries = self.entries.write().await;
-        let expires_at = ttl.map(|d| Instant::now() + d);
->>>>>>> dev
+
         entries.retain(|e| e.source != source);
         entries.push(WhitelistEntry { source, expires_at });
     }
@@ -182,18 +176,12 @@ mod tests {
         let wl = WhitelistVerifier::new();
         let ip1 = ClientSource::Ip(IpAddr::V4(Ipv4Addr::new(10, 0, 0, 1)));
         let ip2 = ClientSource::Ip(IpAddr::V4(Ipv4Addr::new(10, 0, 0, 2)));
-<<<<<<< HEAD
-<<<<<<< HEAD
         wl.add(ip1.clone(), Some(Duration::from_millis(1))).await;
         wl.add(ip2.clone(), None).await;
-=======
+
         wl.add(ip2.clone(), None).await;
         wl.add(ip1.clone(), Some(Duration::from_millis(1))).await;
->>>>>>> origin/dev
-=======
-        wl.add(ip2.clone(), None).await;
-        wl.add(ip1.clone(), Some(Duration::from_millis(1))).await;
->>>>>>> dev
+
         assert_eq!(wl.len().await, 2);
 
         tokio::time::sleep(Duration::from_millis(5)).await;

@@ -1,20 +1,8 @@
 use anyhow::{anyhow, Result};
 use rand::Rng;
-<<<<<<< HEAD
-<<<<<<< HEAD
 use zeroize::Zeroizing;
-
 use hmac::{Hmac, Mac};
-=======
 
-use hmac::{Hmac, Mac};
-use zeroize::Zeroizing;
->>>>>>> origin/dev
-=======
-
-use hmac::{Hmac, Mac};
-use zeroize::Zeroizing;
->>>>>>> dev
 
 use crate::utils::constant_time_eq;
 
