@@ -1,6 +1,7 @@
 use kirino::{
     database::memory::InMemoryUserDatabase,
-    service::login::{build_default_engine, AuthService, KirinoPermission},
+    rbac::permission::Permission as KirinoPermission,
+    service::login::{build_default_engine, AuthService},
 };
 
 #[tokio::main(flavor = "current_thread")]
