@@ -4,15 +4,16 @@ mod tests {
     use crate::{
         database::memory::InMemoryUserDatabase,
         rbac::{
+            permission::Permission,
             store::memory::InMemoryAssignmentStore, subject::StringSubject, traits::AssignmentStore,
         },
-        service::login::{build_default_engine, AuthService, KirinoPermission, LoginRateLimiter},
+        service::login::{build_default_engine, AuthService, LoginRateLimiter},
     };
 
     fn make_auth() -> AuthService<
         InMemoryUserDatabase,
-        KirinoPermission,
-        InMemoryAssignmentStore<StringSubject, KirinoPermission>,
+        Permission,
+        InMemoryAssignmentStore<StringSubject, Permission>,
     > {
         let db = InMemoryUserDatabase::new();
         let engine = build_default_engine();
@@ -65,7 +66,7 @@ mod tests {
         assert!(
             auth.check_permission(
                 &auth.login("admin", "Password123!").await.unwrap().user_id,
-                &KirinoPermission::SystemWrite,
+                &Permission::from_path("system.write").unwrap(),
             )
             .await
         );
@@ -90,7 +91,7 @@ mod tests {
             !auth
                 .check_permission(
                     &auth.login("first", "Password123!").await.unwrap().user_id,
-                    &KirinoPermission::SystemWrite,
+                    &Permission::from_path("system.write").unwrap(),
                 )
                 .await
         );
@@ -105,12 +106,18 @@ mod tests {
 
         let viewer_id = auth.login("viewer", "Password123!").await.unwrap().user_id;
         assert!(
-            auth.check_permission(&viewer_id, &KirinoPermission::AgentRead)
-                .await
+            auth.check_permission(
+                &viewer_id,
+                &Permission::from_path("agent.read").unwrap(),
+            )
+            .await
         );
         assert!(
             !auth
-                .check_permission(&viewer_id, &KirinoPermission::SystemWrite)
+                .check_permission(
+                    &viewer_id,
+                    &Permission::from_path("system.write").unwrap(),
+                )
                 .await
         );
     }
@@ -236,12 +243,18 @@ mod tests {
 
         let uid = user.id.to_string();
         assert!(
-            auth.check_permission(&uid, &KirinoPermission::AgentWrite)
-                .await
+            auth.check_permission(
+                &uid,
+                &Permission::from_path("agent.write").unwrap(),
+            )
+            .await
         );
         assert!(
             !auth
-                .check_permission(&uid, &KirinoPermission::SystemWrite)
+                .check_permission(
+                    &uid,
+                    &Permission::from_path("system.write").unwrap(),
+                )
                 .await
         );
     }
