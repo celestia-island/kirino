@@ -1,6 +1,6 @@
 [package]
 name = "kirino-session"
-version = "0.6.0"
+version = "0.6.1"
 edition = "2021"
 rust-version = "1.75"
 description = "Distributed session management with JWT and PostgreSQL for kirino"
@@ -34,3 +34,15 @@ actix = ["dep:actix-web", "dep:actix-rt", "dep:futures-util"]
 
 [dev-dependencies]
 tokio = { version = "^1", features = ["full"] }
+axum = { version = "^0.8", features = ["ws"] }
+serde = { version = "^1", features = ["derive"] }
+serde_json = "^1"
+uuid = { version = "^1", features = ["v4"] }
+
+[[example]]
+name = "axum_ws_one_shot"
+path = "examples/axum_ws_one_shot.rs"
+
+[[example]]
+name = "session_restore"
+path = "examples/session_restore.rs"

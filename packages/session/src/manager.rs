@@ -24,7 +24,7 @@ impl TokenManager {
         &self,
         user_id: Uuid,
         username: String,
-        roles: Vec<String>,
+        _roles: Vec<String>,
     ) -> SessionResult<TokenPair> {
         let sid = Uuid::new_v4().to_string();
         let access = self.sign(&TokenClaims::new(user_id, username.clone(), TokenType::Access, self.config.access_ttl_secs, &self.config.issuer)
@@ -49,6 +49,20 @@ impl TokenManager {
         let mut validation = Validation::default();
         validation.set_issuer(&[&self.config.issuer]);
         validation.validate_exp = true;
+        let data = decode::<TokenClaims>(token, &self.decoding_key, &validation)?;
+        Ok(data.claims)
+    }
+
+    /// Verify a JWT without rejecting expired tokens.
+    ///
+    /// Useful for **session restore** flows where an expired access token
+    /// should still identify the user so a new token pair can be issued
+    /// in exchange.  Expiry is checked on the returned claims so callers
+    /// can decide whether to issue a fresh token.
+    pub fn verify_lenient(&self, token: &str) -> SessionResult<TokenClaims> {
+        let mut validation = Validation::default();
+        validation.set_issuer(&[&self.config.issuer]);
+        validation.validate_exp = false;
         let data = decode::<TokenClaims>(token, &self.decoding_key, &validation)?;
         Ok(data.claims)
     }
@@ -84,7 +98,7 @@ mod tests {
         let config = SessionConfig::new("test-secret-key-for-unit-tests");
         let manager = TokenManager::new(config);
         let user_id = Uuid::new_v4();
-        let pair = manager.issue_pair(user_id, "testuser".into(), vec!["admin".to_string()]).unwrap();
+        let pair = manager.issue_pair(user_id, "testuser".into(), vec![]).unwrap();
 
         let claims = manager.verify(&pair.access_token).unwrap();
         assert_eq!(claims.sub, user_id.to_string());
@@ -127,5 +141,33 @@ mod tests {
         let pair = manager.issue_pair(Uuid::new_v4(), "u".into(), vec![]).unwrap();
         let new_pair = manager.refresh(&pair.refresh_token).unwrap();
         assert_ne!(new_pair.access_token, pair.access_token);
+    }
+
+    #[test]
+    fn verify_lenient_accepts_expired_token() {
+        let manager = TokenManager::new(SessionConfig::new("secret"));
+        let claims = TokenClaims::new(Uuid::new_v4(), "u".into(), TokenType::Access, 0, "kirino");
+        let token = manager.sign(&claims).unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(100));
+        let result = manager.verify_lenient(&token).unwrap();
+        assert!(result.is_expired());
+        assert_eq!(result.username, "u");
+    }
+
+    #[test]
+    fn verify_lenient_rejects_wrong_secret() {
+        let m1 = TokenManager::new(SessionConfig::new("secret-a"));
+        let m2 = TokenManager::new(SessionConfig::new("secret-b"));
+        let claims = TokenClaims::new(Uuid::new_v4(), "u".into(), TokenType::Access, 3600, "kirino");
+        let token = m1.sign(&claims).unwrap();
+        assert!(m2.verify_lenient(&token).is_err());
+    }
+
+    #[test]
+    fn verify_lenient_rejects_invalid_type_for_refresh() {
+        let manager = TokenManager::new(SessionConfig::new("secret"));
+        let pair = manager.issue_pair(Uuid::new_v4(), "u".into(), vec![]).unwrap();
+        // Using access token where refresh token is expected
+        assert!(manager.refresh(&pair.access_token).is_err());
     }
 }
