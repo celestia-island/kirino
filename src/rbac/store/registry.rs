@@ -3,22 +3,10 @@ use std::{
     marker::PhantomData,
 };
 
-<<<<<<< HEAD
-<<<<<<< HEAD
 use crate::rbac::traits::{Permission, PermissionRegistry, Role, RoleRegistry};
 
 #[cfg(feature = "rbac-hierarchy")]
 use crate::rbac::hierarchy::HierarchicalRole;
-=======
-#[cfg(feature = "rbac-hierarchy")]
-use crate::rbac::hierarchy::HierarchicalRole;
-use crate::rbac::traits::{Permission, PermissionRegistry, Role, RoleRegistry};
->>>>>>> origin/dev
-=======
-#[cfg(feature = "rbac-hierarchy")]
-use crate::rbac::hierarchy::HierarchicalRole;
-use crate::rbac::traits::{Permission, PermissionRegistry, Role, RoleRegistry};
->>>>>>> dev
 
 #[derive(Debug, Clone)]
 pub struct SimpleRole<P: Permission> {
