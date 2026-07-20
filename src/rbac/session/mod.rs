@@ -42,6 +42,7 @@ pub struct Session<S: Subject> {
     pub subject: S,
     pub active_roles: HashSet<String>,
     pub context: Option<serde_json::Value>,
+    pub version: u64,
     pub created_at: DateTime<Utc>,
     pub expires_at: DateTime<Utc>,
 }
@@ -70,6 +71,15 @@ pub trait SessionManager<S: Subject>: Send + Sync {
     async fn get_session(&self, session_id: Uuid) -> Result<Option<Session<S>>>;
     #[must_use]
     async fn destroy_session(&self, session_id: Uuid) -> Result<()>;
+
+    /// Revoke all active sessions for a subject (e.g., after role/grant change).
+    async fn revoke_all_for_subject(&self, subject: &S) -> Result<usize>;
+
+    /// Return the current version counter for a subject.
+    async fn current_version(&self, subject: &S) -> Result<u64>;
+
+    /// Increment the version counter for a subject, invalidating all prior sessions.
+    async fn bump_version_for_subject(&self, subject: &S) -> Result<u64>;
 }
 
 pub struct InMemorySessionManager<S, P>
@@ -78,6 +88,7 @@ where
     P: Permission,
 {
     sessions: tokio::sync::RwLock<HashMap<Uuid, Session<S>>>,
+    subject_versions: tokio::sync::RwLock<HashMap<String, u64>>,
     assignment_store: Shared<dyn AssignmentStore<S, P>>,
     #[cfg(feature = "rbac-constraints")]
     constraint_store: Option<Shared<dyn ConstraintStore>>,
@@ -92,6 +103,7 @@ where
     pub fn new(assignment_store: impl AssignmentStore<S, P> + 'static) -> Self {
         Self {
             sessions: tokio::sync::RwLock::new(HashMap::new()),
+            subject_versions: tokio::sync::RwLock::new(HashMap::new()),
             assignment_store: Shared::from_arc_unsized(Arc::new(assignment_store)),
             #[cfg(feature = "rbac-constraints")]
             constraint_store: None,
@@ -140,11 +152,20 @@ where
             validate_dsd_with_store(&active_roles, cs).await?;
         }
 
+        let version = {
+            let versions = self.subject_versions.read().await;
+            versions
+                .get(subject.subject_id())
+                .copied()
+                .unwrap_or(0)
+        };
+
         let session = Session {
             id: Uuid::now_v7(),
             subject: subject.clone(),
             active_roles,
             context: None,
+            version,
             created_at: Utc::now(),
             expires_at: Utc::now() + ttl,
         };
@@ -211,6 +232,32 @@ where
         let mut sessions = self.sessions.write().await;
         sessions.remove(&session_id);
         Ok(())
+    }
+
+    async fn revoke_all_for_subject(&self, subject: &S) -> Result<usize> {
+        let mut sessions = self.sessions.write().await;
+        let before = sessions.len();
+        sessions.retain(|_, s| s.subject.subject_id() != subject.subject_id());
+        Ok(before - sessions.len())
+    }
+
+    async fn current_version(&self, subject: &S) -> Result<u64> {
+        let versions = self.subject_versions.read().await;
+        Ok(versions
+            .get(subject.subject_id())
+            .copied()
+            .unwrap_or(0))
+    }
+
+    async fn bump_version_for_subject(&self, subject: &S) -> Result<u64> {
+        let mut versions = self.subject_versions.write().await;
+        let current = versions
+            .get(subject.subject_id())
+            .copied()
+            .unwrap_or(0);
+        let next = current.wrapping_add(1);
+        versions.insert(subject.subject_id().to_string(), next);
+        Ok(next)
     }
 }
 

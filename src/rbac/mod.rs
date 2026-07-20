@@ -8,6 +8,7 @@ pub mod engine;
 #[cfg(feature = "rbac-hierarchy")]
 pub mod hierarchy;
 pub mod identity_subject;
+pub mod permission;
 pub mod session;
 pub mod shared;
 pub mod store;
@@ -57,6 +58,7 @@ pub mod prelude {
         cache::{PermissionCache, TtlPermissionCache},
         engine::RbacEngine,
         identity_subject::{Delegatable, IdentitySubject},
+        permission::Permission,
         session::{InMemorySessionManager, Session, SessionManager},
         shared::Shared,
         store::{
@@ -65,11 +67,12 @@ pub mod prelude {
         },
         subject::StringSubject,
         traits::{
-            AssignmentStore, Permission, PermissionRegistry, Role, RoleRegistry, RoleStore, Subject,
+            AssignmentStore, GrantResolver, GrantSource, Permission as PermissionTrait,
+            PermissionContext, PermissionDecision, PermissionRegistry, Role, RoleRegistry,
+            RoleStore, Subject, SystemRole, WorkspaceRole,
         },
         workspace_guard::{
-            InMemoryWorkspaceStore, ScopedPermission, WorkspaceGuard, WorkspaceRole,
-            WorkspaceStore,
+            InMemoryWorkspaceStore, ScopedPermission, WorkspaceGuard, WorkspaceStore,
         },
     };
 }

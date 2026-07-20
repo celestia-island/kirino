@@ -1,0 +1,16 @@
+[package]
+name = "kirino-macro"
+version = "0.1.0"
+edition = "2021"
+description = "Procedural macros for kirino — hierarchical permission derivation"
+license-file = "../../LICENSE"
+repository = "https://github.com/celestia-island/kirino"
+rust-version = "1.75"
+
+[lib]
+proc-macro = true
+
+[dependencies]
+syn = { version = "^2", features = ["full", "extra-traits"] }
+proc-macro2 = "^1"
+quote = "^1"
