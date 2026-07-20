@@ -1,0 +1,30 @@
+use kirino_macro::hierarchical_permission;
+
+hierarchical_permission!(
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+    pub enum Permission {
+        Agent(Read, Write, Execute),
+        Config(Read, Write),
+        Knowledge(Read, Write),
+        Container(Read, Write),
+        System(Read, Write),
+        Deploy(Read, Execute),
+        Provider(List, Create, Update, Delete, Use),
+        Mcp(List, Create, Update, Delete, Use),
+        Channel(List, Create, Update, Delete, Use),
+        Yolo(Use),
+        Workspace(List, Create, Manage),
+        Device(List, Connect),
+        Rbac(Manage),
+        Oauth(Read, Write),
+    }
+);
+
+impl std::fmt::Display for Permission {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.name())
+    }
+}
+
+// serde needs to be available in the inner module scope
+use serde::{Deserialize, Serialize};

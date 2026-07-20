@@ -174,6 +174,7 @@ impl LoginRateLimiter {
     }
 }
 
+#[deprecated(since = "0.6.0", note = "Use `kirino::rbac::permission::Permission` instead")]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum KirinoPermission {
@@ -693,6 +694,7 @@ type DefaultEngine = RbacEngine<
     InMemoryAssignmentStore<StringSubject, KirinoPermission>,
 >;
 
+#[deprecated(since = "0.6.0", note = "Use `build_default_engine_hierarchical` instead")]
 #[must_use]
 pub fn build_default_engine() -> Shared<DefaultEngine> {
     let mut role_reg = StaticRoleRegistry::new();
@@ -736,6 +738,60 @@ pub fn build_default_engine() -> Shared<DefaultEngine> {
     ));
 
     let perm_reg = StaticPermissionRegistry::new(KirinoPermission::all());
+    let store = InMemoryAssignmentStore::new();
+
+    Shared::new(RbacEngine::new(role_reg, perm_reg, store))
+}
+
+/// Build an RBAC engine using the hierarchical `Permission` enum (v0.6).
+///
+/// Replaces the deprecated `build_default_engine()` which uses the flat
+/// `KirinoPermission`.
+#[must_use]
+pub fn build_default_engine_hierarchical(
+) -> Shared<RbacEngine<StringSubject, crate::rbac::permission::Permission, InMemoryAssignmentStore<StringSubject, crate::rbac::permission::Permission>>>
+{
+    use crate::rbac::permission::Permission;
+
+    let mut role_reg = StaticRoleRegistry::new();
+    role_reg.register(SimpleRole::new("admin", Permission::all().into_iter().collect()));
+    role_reg.register(SimpleRole::new(
+        "operator",
+        Permission::all()
+            .into_iter()
+            .filter(|p| {
+                p.domain() != "system" && p.domain() != "rbac"
+            })
+            .collect(),
+    ));
+    role_reg.register(SimpleRole::new(
+        "member",
+        Permission::all()
+            .into_iter()
+            .filter(|p| {
+                matches!(
+                    p.name(),
+                    "provider.list" | "provider.use"
+                        | "mcp.list" | "mcp.use"
+                        | "agent.list" | "agent.use"
+                        | "channel.list" | "channel.use"
+                        | "workspace.list" | "workspace.create"
+                        | "device.list" | "device.connect"
+                )
+            })
+            .collect(),
+    ));
+    role_reg.register(SimpleRole::new(
+        "viewer",
+        Permission::all()
+            .into_iter()
+            .filter(|p| {
+                p.name().ends_with(".list") || p.name() == "deploy.read"
+            })
+            .collect(),
+    ));
+
+    let perm_reg = StaticPermissionRegistry::new(Permission::all().into_iter().collect());
     let store = InMemoryAssignmentStore::new();
 
     Shared::new(RbacEngine::new(role_reg, perm_reg, store))
