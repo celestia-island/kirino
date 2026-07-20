@@ -223,6 +223,8 @@ pub fn hierarchical_permission(input: TokenStream) -> TokenStream {
     let expanded = quote! {
         #[allow(non_snake_case)]
         mod #inner_mod_name {
+            use serde::{Serialize, Deserialize};
+
             #(#inner_enums)*
         }
 

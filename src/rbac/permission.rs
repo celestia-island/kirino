@@ -1,8 +1,9 @@
 use kirino_macro::hierarchical_permission;
+use serde::{Deserialize, Serialize};
 use crate::rbac::traits::Permission as PermissionTrait;
 
 hierarchical_permission!(
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
     pub enum Permission {
         Agent(Read, Write, Execute),
         Config(Read, Write),
@@ -35,5 +36,3 @@ impl PermissionTrait for Permission {
         Permission::domain(self)
     }
 }
-
-use serde::{Deserialize, Serialize};

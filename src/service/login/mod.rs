@@ -174,86 +174,6 @@ impl LoginRateLimiter {
     }
 }
 
-#[deprecated(since = "0.6.0", note = "Use `kirino::rbac::permission::Permission` instead")]
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum KirinoPermission {
-    AgentRead,
-    AgentWrite,
-    AgentExecute,
-    ConfigRead,
-    ConfigWrite,
-    KnowledgeRead,
-    KnowledgeWrite,
-    ContainerRead,
-    ContainerWrite,
-    SystemRead,
-    SystemWrite,
-    DeployRead,
-    DeployExecute,
-}
-
-impl KirinoPermission {
-    #[must_use]
-    pub fn all() -> HashSet<Self> {
-        use KirinoPermission::{
-            AgentExecute, AgentRead, AgentWrite, ConfigRead, ConfigWrite, ContainerRead,
-            ContainerWrite, DeployExecute, DeployRead, KnowledgeRead, KnowledgeWrite, SystemRead,
-            SystemWrite,
-        };
-        [
-            AgentRead,
-            AgentWrite,
-            AgentExecute,
-            ConfigRead,
-            ConfigWrite,
-            KnowledgeRead,
-            KnowledgeWrite,
-            ContainerRead,
-            ContainerWrite,
-            SystemRead,
-            SystemWrite,
-            DeployRead,
-            DeployExecute,
-        ]
-        .into_iter()
-        .collect()
-    }
-}
-
-impl Permission for KirinoPermission {
-    fn name(&self) -> &str {
-        match self {
-            KirinoPermission::AgentRead => "agent_read",
-            KirinoPermission::AgentWrite => "agent_write",
-            KirinoPermission::AgentExecute => "agent_execute",
-            KirinoPermission::ConfigRead => "config_read",
-            KirinoPermission::ConfigWrite => "config_write",
-            KirinoPermission::KnowledgeRead => "knowledge_read",
-            KirinoPermission::KnowledgeWrite => "knowledge_write",
-            KirinoPermission::ContainerRead => "container_read",
-            KirinoPermission::ContainerWrite => "container_write",
-            KirinoPermission::SystemRead => "system_read",
-            KirinoPermission::SystemWrite => "system_write",
-            KirinoPermission::DeployRead => "deploy_read",
-            KirinoPermission::DeployExecute => "deploy_execute",
-        }
-    }
-
-    fn domain(&self) -> &'static str {
-        match self {
-            KirinoPermission::AgentRead
-            | KirinoPermission::AgentWrite
-            | KirinoPermission::AgentExecute => "agent",
-            KirinoPermission::ConfigRead | KirinoPermission::ConfigWrite => "config",
-            KirinoPermission::KnowledgeRead | KirinoPermission::KnowledgeWrite => "knowledge",
-            KirinoPermission::ContainerRead | KirinoPermission::ContainerWrite => "container",
-            KirinoPermission::SystemRead | KirinoPermission::SystemWrite => "system",
-            KirinoPermission::DeployRead | KirinoPermission::DeployExecute => "deploy",
-        }
-    }
-}
-
 #[derive(Clone)]
 pub struct UserRecord {
     pub id: Uuid,
@@ -688,67 +608,9 @@ where
     }
 }
 
-type DefaultEngine = RbacEngine<
-    StringSubject,
-    KirinoPermission,
-    InMemoryAssignmentStore<StringSubject, KirinoPermission>,
->;
-
-#[deprecated(since = "0.6.0", note = "Use `build_default_engine_hierarchical` instead")]
+/// Build an RBAC engine using the hierarchical `Permission` enum.
 #[must_use]
-pub fn build_default_engine() -> Shared<DefaultEngine> {
-    let mut role_reg = StaticRoleRegistry::new();
-    role_reg.register(SimpleRole::new("admin", KirinoPermission::all()));
-    role_reg.register(SimpleRole::new(
-        "operator",
-        [
-            KirinoPermission::AgentRead,
-            KirinoPermission::AgentWrite,
-            KirinoPermission::AgentExecute,
-            KirinoPermission::ConfigRead,
-            KirinoPermission::KnowledgeRead,
-            KirinoPermission::KnowledgeWrite,
-            KirinoPermission::ContainerRead,
-            KirinoPermission::SystemRead,
-        ]
-        .into_iter()
-        .collect(),
-    ));
-    role_reg.register(SimpleRole::new(
-        "viewer",
-        [
-            KirinoPermission::AgentRead,
-            KirinoPermission::ConfigRead,
-            KirinoPermission::KnowledgeRead,
-            KirinoPermission::ContainerRead,
-            KirinoPermission::SystemRead,
-        ]
-        .into_iter()
-        .collect(),
-    ));
-    role_reg.register(SimpleRole::new(
-        "agent",
-        [
-            KirinoPermission::AgentRead,
-            KirinoPermission::AgentExecute,
-            KirinoPermission::KnowledgeRead,
-        ]
-        .into_iter()
-        .collect(),
-    ));
-
-    let perm_reg = StaticPermissionRegistry::new(KirinoPermission::all());
-    let store = InMemoryAssignmentStore::new();
-
-    Shared::new(RbacEngine::new(role_reg, perm_reg, store))
-}
-
-/// Build an RBAC engine using the hierarchical `Permission` enum (v0.6).
-///
-/// Replaces the deprecated `build_default_engine()` which uses the flat
-/// `KirinoPermission`.
-#[must_use]
-pub fn build_default_engine_hierarchical(
+pub fn build_default_engine(
 ) -> Shared<RbacEngine<StringSubject, crate::rbac::permission::Permission, InMemoryAssignmentStore<StringSubject, crate::rbac::permission::Permission>>>
 {
     use crate::rbac::permission::Permission;
@@ -759,7 +621,7 @@ pub fn build_default_engine_hierarchical(
         "operator",
         Permission::all()
             .into_iter()
-            .filter(|p| {
+            .filter(|p: &Permission| {
                 p.domain() != "system" && p.domain() != "rbac"
             })
             .collect(),
@@ -768,7 +630,7 @@ pub fn build_default_engine_hierarchical(
         "member",
         Permission::all()
             .into_iter()
-            .filter(|p| {
+            .filter(|p: &Permission| {
                 matches!(
                     p.name(),
                     "provider.list" | "provider.use"
@@ -1033,36 +895,42 @@ mod tests {
             .role_registry()
             .get_role_permissions("admin")
             .unwrap();
-        assert_eq!(admin.len(), KirinoPermission::all().len());
+        assert_eq!(admin.len(), crate::rbac::permission::Permission::all().len());
     }
 
     #[test]
-    fn test_build_default_engine_viewer_is_read_only() {
+    fn test_build_default_engine_viewer_is_list_read_only() {
         let engine = build_default_engine();
         let viewer = engine
             .role_registry()
             .get_role_permissions("viewer")
             .unwrap();
         for perm in &viewer {
+            let n = perm.name();
             assert!(
-                perm.name().ends_with("_read"),
-                "viewer should only have read perms, got {}",
-                perm.name()
+                n.ends_with(".list") || n == "deploy.read",
+                "viewer should only have .list or deploy.read, got {}",
+                n
             );
         }
     }
 
     #[test]
-    fn test_kirino_permission_all_count() {
-        assert_eq!(KirinoPermission::all().len(), 13);
+    fn test_permission_all_count() {
+        assert_eq!(crate::rbac::permission::Permission::all().len(), 30);
     }
 
     #[test]
-    fn test_kirino_permission_domains() {
-        assert_eq!(KirinoPermission::AgentRead.domain(), "agent");
-        assert_eq!(KirinoPermission::ConfigWrite.domain(), "config");
-        assert_eq!(KirinoPermission::SystemRead.domain(), "system");
-        assert_eq!(KirinoPermission::DeployExecute.domain(), "deploy");
+    fn test_permission_domains() {
+        use crate::rbac::permission::Permission;
+        let p = Permission::from_path("agent.read").unwrap();
+        assert_eq!(p.domain(), "agent");
+        let p = Permission::from_path("config.write").unwrap();
+        assert_eq!(p.domain(), "config");
+        let p = Permission::from_path("system.read").unwrap();
+        assert_eq!(p.domain(), "system");
+        let p = Permission::from_path("deploy.execute").unwrap();
+        assert_eq!(p.domain(), "deploy");
     }
 
     #[test]
