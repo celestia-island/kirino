@@ -917,7 +917,7 @@ mod tests {
 
     #[test]
     fn test_permission_all_count() {
-        assert_eq!(crate::rbac::permission::Permission::all().len(), 30);
+        assert_eq!(crate::rbac::permission::Permission::all().len(), 37);
     }
 
     #[test]
