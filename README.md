@@ -1,25 +1,9 @@
-<<<<<<< HEAD
-<<<<<<< HEAD
-<p align="center"><img src="docs/logo.webp" alt="kirino" width="240" /></p>
-=======
 <p align="center"><img src="https://raw.githubusercontent.com/celestia-island/docs.celestia.world/dev/res/logo/kirino.webp" alt="kirino" width="240" /></p>
->>>>>>> origin/dev
-=======
-<p align="center"><img src="https://raw.githubusercontent.com/celestia-island/docs.celestia.world/dev/res/logo/kirino.webp" alt="kirino" width="240" /></p>
->>>>>>> dev
 
 <h1 align="center">Kirino</h1>
 <div align="center">
  <strong>
-<<<<<<< HEAD
-<<<<<<< HEAD
-   Customizable Zero-Trust Authentication & RBAC Framework
-=======
    Zero-trust authentication and authorization framework
->>>>>>> origin/dev
-=======
-   Zero-trust authentication and authorization framework
->>>>>>> dev
  </strong>
 </div>
 
@@ -27,29 +11,13 @@
 
 <div align="center">
   <a href="https://github.com/celestia-island/kirino/actions">
-<<<<<<< HEAD
-<<<<<<< HEAD
-    <img src="https://img.shields.io/github/actions/workflow/status/celestia-island/kirino/checks.yml?branch=main"
-=======
     <img src="https://img.shields.io/github/actions/workflow/status/celestia-island/kirino/checks.yml?branch=master"
->>>>>>> origin/dev
-=======
-    <img src="https://img.shields.io/github/actions/workflow/status/celestia-island/kirino/checks.yml?branch=master"
->>>>>>> dev
       alt="CI Status" />
   </a>
   <a href="https://crates.io/crates/kirino">
     <img src="https://img.shields.io/crates/v/kirino" alt="Crates.io Version" />
   </a>
-<<<<<<< HEAD
-<<<<<<< HEAD
-  [[![License: SySL](https://img.shields.io/badge/license-SySL%201.0-blue)](./LICENSE.txt)](./LICENSE.txt)</div>
-=======
   [![License: SySL](https://img.shields.io/badge/license-SySL%201.0-blue)](https://sysl.celestia.world)</div>
->>>>>>> origin/dev
-=======
-  [![License: SySL](https://img.shields.io/badge/license-SySL%201.0-blue)](https://sysl.celestia.world)</div>
->>>>>>> dev
 
 <div align="center">
   <h3>
@@ -376,12 +344,4 @@ It does **not** prescribe:
 
 ## License
 
-<<<<<<< HEAD
-<<<<<<< HEAD
-Licensed under the [Synthetic Source License (SySL), Version 1.0](./LICENSE.txt).
-=======
 Licensed under the [Synthetic Source License (SySL), Version 1.0](./LICENSE).
->>>>>>> origin/dev
-=======
-Licensed under the [Synthetic Source License (SySL), Version 1.0](./LICENSE).
->>>>>>> dev
