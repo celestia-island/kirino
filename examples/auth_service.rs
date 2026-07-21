@@ -1,6 +1,6 @@
 use kirino::{
     database::memory::InMemoryUserDatabase,
-    rbac::permission::Permission as KirinoPermission,
+    rbac::permission::Permission,
     service::login::{build_default_engine, AuthService},
 };
 
@@ -16,45 +16,15 @@ async fn main() {
         engine,
         "admin",
         "viewer",
-    )
-    .unwrap()
-    .with_auto_admin_first_user(true);
+    ).unwrap().with_auto_admin_first_user(true);
 
-    let alice = service
-        .register("alice", "SecureP@ss1", Some("Alice"))
-        .await
-        .unwrap();
-    println!("Registered: {} (id: {})", alice.username, alice.id);
-
+    let alice = service.register("alice", "SecureP@ss1", Some("Alice")).await.unwrap();
     let bob = service.register("bob", "AnotherP@ss2", None).await.unwrap();
-    println!("Registered: {} (id: {})", bob.username, bob.id);
 
     let login = service.login("alice", "SecureP@ss1").await.unwrap();
-    println!("\nAlice logged in:");
-    println!("  Token: {}...", &login.token[..50]);
-    println!("  Roles: {:?}", login.roles);
+    let _claims = service.verify_token(&login.token).await.unwrap();
 
-    let claims = service.verify_token(&login.token).await.unwrap();
-    println!("  Token verified for subject: {}", claims.sub);
-
-    let can_manage = service
-        .check_permission(&alice.id.to_string(), &KirinoPermission::SystemWrite)
-        .await;
-    println!("\nAlice can manage system: {can_manage}");
-
-    let can_manage = service
-        .check_permission(&bob.id.to_string(), &KirinoPermission::SystemWrite)
-        .await;
-    println!("Bob can manage system:   {can_manage}");
-
-    let can_read = service
-        .check_permission(&bob.id.to_string(), &KirinoPermission::AgentRead)
-        .await;
-    println!("Bob can read agents:     {can_read}");
-
-    let users = service.list_users().await.unwrap();
-    println!("\nAll users ({}):", users.len());
-    for u in &users {
-        println!("  - {} ({})", u.username, u.id);
-    }
+    let _ = service.check_permission(&alice.id.to_string(), &Permission::from_path("system.write").unwrap()).await;
+    let _ = service.check_permission(&bob.id.to_string(), &Permission::from_path("system.write").unwrap()).await;
+    let _ = service.check_permission(&bob.id.to_string(), &Permission::from_path("agent.read").unwrap()).await;
 }
