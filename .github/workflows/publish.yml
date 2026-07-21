@@ -21,8 +21,9 @@ jobs:
       - name: Clone yuuka (workspace dep)
         run: git clone --depth 1 https://github.com/celestia-island/yuuka.git ../yuuka
       - uses: Swatinem/rust-cache@v2
+      - name: Install celestia-devtools
+        run: pip install git+https://github.com/celestia-island/celestia-devtools.git
       - run: cargo login ${{ secrets.CRATES_IO_API_TOKEN }}
-      # Publish in dependency order: macro (proc-macro dep) → session → root
-      - run: cargo publish -p kirino-macro --allow-dirty --no-verify
-      - run: cargo publish -p kirino-session --allow-dirty --no-verify
-      - run: cargo publish -p kirino --allow-dirty --no-verify
+      # celestia-devtools handles topological ordering, pre-flight existence
+      # checks, smart error handling, and index-wait automatically.
+      - run: python -m celestia_devtools.publish.crates
