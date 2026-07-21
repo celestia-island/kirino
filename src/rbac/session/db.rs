@@ -3,9 +3,9 @@ use chrono::{Duration, Utc};
 use std::collections::HashSet;
 use uuid::Uuid;
 
+use super::{Session, SessionManager};
 #[cfg(feature = "rbac-constraints")]
 use super::validate_dsd_with_store;
-use super::{Session, SessionManager};
 #[cfg(feature = "rbac-constraints")]
 use crate::rbac::constraints::store::ConstraintStore;
 
@@ -18,14 +18,7 @@ use crate::{
     },
 };
 
-#[cfg(feature = "rbac-constraints")]
-use crate::rbac::constraints::store::ConstraintStore;
-
-#[cfg(feature = "rbac-constraints")]
-use super::validate_dsd_with_store;
-use super::{Session, SessionManager};
-
-pub struct PgSessionManager<S, P>
+pub struct DbSessionManager<S, P>
 where
     S: Subject,
     P: Permission,
@@ -37,7 +30,7 @@ where
     _phantom: std::marker::PhantomData<P>,
 }
 
-impl<S, P> PgSessionManager<S, P>
+impl<S, P> DbSessionManager<S, P>
 where
     S: Subject,
     P: Permission,
@@ -71,7 +64,7 @@ where
 }
 
 #[async_trait::async_trait]
-impl<S, P> SessionManager<S> for PgSessionManager<S, P>
+impl<S, P> SessionManager<S> for DbSessionManager<S, P>
 where
     S: Subject,
     P: Permission,
@@ -104,6 +97,7 @@ where
             subject: subject.clone(),
             active_roles: validated_roles.clone(),
             context: None,
+            version: 0,
             created_at: now,
             expires_at: now + ttl,
         };
@@ -113,6 +107,7 @@ where
             subject_id: subject.subject_id().to_string(),
             active_roles: validated_roles.into_iter().collect(),
             context: None,
+            version: 0,
             expires_at: session.expires_at,
             created_at: now,
         };
@@ -198,6 +193,7 @@ where
                     subject,
                     active_roles: r.active_roles.into_iter().collect(),
                     context: r.context,
+                    version: r.version,
                     created_at: r.created_at,
                     expires_at: r.expires_at,
                 }))
@@ -208,5 +204,26 @@ where
 
     async fn destroy_session(&self, session_id: Uuid) -> Result<()> {
         self.store.delete_session(session_id).await
+    }
+
+    async fn revoke_all_for_subject(&self, subject: &S) -> Result<usize> {
+        let subject_id = subject.subject_id();
+        let assignments = self.assignment_store.roles_of(subject).await?;
+        for role in &assignments {
+            self.assignment_store.revoke_role(subject, role).await?;
+        }
+        Ok(assignments.len())
+    }
+
+    async fn current_version(&self, subject: &S) -> Result<u64> {
+        let session = self.store.load_session_metadata(subject.subject_id()).await?;
+        Ok(session.map(|s| s.version).unwrap_or(0))
+    }
+
+    async fn bump_version_for_subject(&self, subject: &S) -> Result<u64> {
+        let current = self.current_version(subject).await?;
+        let next = current.wrapping_add(1);
+        self.store.bump_version(subject.subject_id(), next).await?;
+        Ok(next)
     }
 }

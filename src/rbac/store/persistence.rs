@@ -44,6 +44,7 @@ pub struct SessionRow {
     pub subject_id: String,
     pub active_roles: Vec<String>,
     pub context: Option<serde_json::Value>,
+    pub version: u64,
     pub expires_at: chrono::DateTime<chrono::Utc>,
     pub created_at: chrono::DateTime<chrono::Utc>,
 }
@@ -55,6 +56,8 @@ pub trait PersistentSessionStore: Send + Sync {
     async fn delete_session(&self, id: uuid::Uuid) -> anyhow::Result<()>;
     async fn update_roles(&self, id: uuid::Uuid, active_roles: &[String]) -> anyhow::Result<()>;
     async fn cleanup_expired(&self) -> anyhow::Result<usize>;
+    async fn load_session_metadata(&self, subject_id: &str) -> anyhow::Result<Option<SessionRow>>;
+    async fn bump_version(&self, subject_id: &str, version: u64) -> anyhow::Result<()>;
 }
 
 /// SPI for persisting role assignments to an external store (e.g. PostgreSQL, Redis).

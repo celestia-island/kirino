@@ -1,4 +1,4 @@
 pub mod memory;
 
-#[cfg(feature = "rbac-pg-session")]
-pub mod pg_session;
+#[cfg(feature = "rbac-db-session")]
+pub mod db_session;
