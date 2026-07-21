@@ -1,10 +1,5 @@
 target
 Cargo.lock
-<<<<<<< HEAD
-<<<<<<< HEAD
-=======
-=======
->>>>>>> dev
 
 dist/
 
@@ -18,7 +13,3 @@ Thumbs.db
 # celestia-devtools: staged-on-demand shared justfile recipes (just fetch)
 /.just/
 /celestia-devtools.just
-<<<<<<< HEAD
->>>>>>> origin/dev
-=======
->>>>>>> dev
