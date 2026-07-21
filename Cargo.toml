@@ -8,7 +8,7 @@ repository = "https://github.com/celestia-island/kirino"
 readme = "README.md"
 documentation = "https://docs.rs/kirino"
 categories = ["authentication"]
-keywords = ["rbac", "authentication", "authorization", "zero-trust", "anomaly-detection", "trust-score"]
+keywords = ["rbac", "authentication", "authorization", "zero-trust", "anomaly-detection"]
 rust-version = "1.75"
 
 [workspace]
