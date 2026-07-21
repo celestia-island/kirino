@@ -13,7 +13,7 @@ jobs:
     name: Publish to crates.io
     runs-on: ubuntu-latest
     needs: [checks]
-    timeout-minutes: 10
+    timeout-minutes: 15
 
     steps:
       - uses: actions/checkout@v4
@@ -21,13 +21,8 @@ jobs:
       - name: Clone yuuka (workspace dep)
         run: git clone --depth 1 https://github.com/celestia-island/yuuka.git ../yuuka
       - uses: Swatinem/rust-cache@v2
-      - run: cargo install cargo-release
       - run: cargo login ${{ secrets.CRATES_IO_API_TOKEN }}
-      - run: |-
-          cargo release \
-            publish \
-            -p kirino-session \
-            --features default \
-            --allow-branch HEAD \
-            --no-confirm \
-            --execute
+      # Publish in dependency order: macro (proc-macro dep) → session → root
+      - run: cargo publish -p kirino-macro --allow-dirty --no-verify
+      - run: cargo publish -p kirino-session --allow-dirty --no-verify
+      - run: cargo publish -p kirino --allow-dirty --no-verify
