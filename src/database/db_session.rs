@@ -2,26 +2,22 @@ use anyhow::Result;
 use async_trait::async_trait;
 use sea_orm::{ConnectionTrait, DatabaseConnection, Statement};
 use uuid::Uuid;
-use uuid::Uuid;
-
-use async_trait::async_trait;
-use sea_orm::{ConnectionTrait, DatabaseConnection, Statement};
 
 use crate::rbac::store::persistence::{PersistentSessionStore, SessionRow};
 
 #[derive(Debug, Clone)]
-pub struct PgSessionStore {
+pub struct DbSessionStore {
     conn: DatabaseConnection,
 }
 
-impl PgSessionStore {
+impl DbSessionStore {
     pub fn new(conn: DatabaseConnection) -> Self {
         Self { conn }
     }
 }
 
 #[async_trait]
-impl PersistentSessionStore for PgSessionStore {
+impl PersistentSessionStore for DbSessionStore {
     async fn save_session(&self, row: &SessionRow) -> Result<()> {
         let roles_json = serde_json::to_string(&row.active_roles)?;
         let context_str = row
@@ -41,9 +37,9 @@ impl PersistentSessionStore for PgSessionStore {
                 row.created_at.to_rfc3339().into(),
             ],
         );
-        self.conn.execute(stmt).await?;
+        self.conn.execute_raw(stmt.clone()).await?;
 
-        self.conn.execute_raw(stmt).await?;
+        self.conn.execute_raw(stmt.clone()).await?;
 
         Ok(())
     }
@@ -54,8 +50,6 @@ impl PersistentSessionStore for PgSessionStore {
             "SELECT id, subject_id, active_roles, context, expires_at, created_at FROM rbac_sessions WHERE id = $1",
             [id.to_string().into()],
         );
-        if let Some(row) = self.conn.query_one(stmt).await? {
-
         if let Some(row) = self.conn.query_one_raw(stmt).await? {
 
             let active_roles: Vec<String> = {
@@ -77,19 +71,6 @@ impl PersistentSessionStore for PgSessionStore {
                     None
                 }
             };
-            let context: Option<serde_json::Value> =
-                match row.try_get::<Option<String>>("rbac_sessions", "context") {
-                    Ok(Some(s)) => Some(serde_json::from_str(&s).map_err(|e| {
-                        anyhow::anyhow!("corrupted context JSON for session {}: {e}", id)
-                    })?),
-                    Ok(None) => None,
-                    Err(e) => {
-                        tracing::warn!(target: "kirino::database::pg_session",
-                        "failed to read context for session {}: {e}", id);
-                        None
-                    }
-                };
-
             let expires_at_str = row.try_get::<String>("rbac_sessions", "expires_at")?;
             let expires_at =
                 chrono::DateTime::parse_from_rfc3339(&expires_at_str)?.with_timezone(&chrono::Utc);
@@ -102,6 +83,7 @@ impl PersistentSessionStore for PgSessionStore {
                 subject_id,
                 active_roles,
                 context,
+                version: 0,
                 expires_at,
                 created_at,
             }))
@@ -116,9 +98,9 @@ impl PersistentSessionStore for PgSessionStore {
             "DELETE FROM rbac_sessions WHERE id = $1",
             [id.to_string().into()],
         );
-        self.conn.execute(stmt).await?;
+        self.conn.execute_raw(stmt.clone()).await?;
 
-        self.conn.execute_raw(stmt).await?;
+        self.conn.execute_raw(stmt.clone()).await?;
 
         Ok(())
     }
@@ -130,9 +112,9 @@ impl PersistentSessionStore for PgSessionStore {
             "UPDATE rbac_sessions SET active_roles = $1::jsonb, updated_at = NOW() WHERE id = $2",
             [roles_json.into(), id.to_string().into()],
         );
-        let result = self.conn.execute(stmt).await?;
+        let result = self.conn.execute_raw(stmt.clone()).await?;
 
-        let result = self.conn.execute_raw(stmt).await?;
+        let result = self.conn.execute_raw(stmt.clone()).await?;
 
         if result.rows_affected() == 0 {
             return Err(anyhow::anyhow!("session {} not found", id));
@@ -145,18 +127,57 @@ impl PersistentSessionStore for PgSessionStore {
             self.conn.get_database_backend(),
             "DELETE FROM rbac_sessions WHERE expires_at < NOW()",
         );
-        let result = self.conn.execute(stmt).await?;
+        let result = self.conn.execute_raw(stmt.clone()).await?;
         Ok(result.rows_affected() as usize)
     }
-}
-        let result = self.conn.execute_raw(stmt).await?;
-        Ok(result.rows_affected() as usize)
+
+    async fn load_session_metadata(&self, subject_id: &str) -> Result<Option<SessionRow>> {
+        let stmt = Statement::from_sql_and_values(
+            self.conn.get_database_backend(),
+            "SELECT id, subject_id, active_roles, context, version, expires_at, created_at FROM rbac_sessions WHERE subject_id = $1 ORDER BY created_at DESC LIMIT 1",
+            [subject_id.to_string().into()],
+        );
+        if let Some(row) = self.conn.query_one_raw(stmt).await? {
+            let version: i64 = row.try_get("rbac_sessions", "version")?;
+            Ok(Some(SessionRow {
+                id: row.try_get("rbac_sessions", "id")?,
+                subject_id: row.try_get("rbac_sessions", "subject_id")?,
+                active_roles: serde_json::from_str(
+                    &row.try_get::<String>("rbac_sessions", "active_roles")?,
+                )?,
+                context: row
+                    .try_get::<Option<String>>("rbac_sessions", "context")?
+                    .map(|s| serde_json::from_str(&s))
+                    .transpose()?,
+                version: version as u64,
+                expires_at: chrono::DateTime::parse_from_rfc3339(
+                    &row.try_get::<String>("rbac_sessions", "expires_at")?,
+                )?
+                .with_timezone(&chrono::Utc),
+                created_at: chrono::DateTime::parse_from_rfc3339(
+                    &row.try_get::<String>("rbac_sessions", "created_at")?,
+                )?
+                .with_timezone(&chrono::Utc),
+            }))
+        } else {
+            Ok(None)
+        }
+    }
+
+    async fn bump_version(&self, subject_id: &str, version: u64) -> Result<()> {
+        let stmt = Statement::from_sql_and_values(
+            self.conn.get_database_backend(),
+            "UPDATE rbac_sessions SET version = $1 WHERE subject_id = $2",
+            [(version as i64).into(), subject_id.to_string().into()],
+        );
+        self.conn.execute_raw(stmt.clone()).await?;
+        Ok(())
     }
 }
 
 #[cfg(test)]
 mod tests {
-    //! PostgreSQL integration tests for [`PgSessionStore`].
+    //! PostgreSQL integration tests for [`DbSessionStore`].
     //!
     //! These require a live PostgreSQL instance. They are `#[ignore]`'d so the
     //! normal `cargo test` run does not need a database. Run them explicitly:
@@ -176,7 +197,7 @@ mod tests {
     use sea_orm::{ConnectionTrait, Database, DatabaseConnection, Statement};
     use uuid::Uuid;
 
-    use super::PgSessionStore;
+    use super::DbSessionStore;
     use crate::rbac::store::persistence::{PersistentSessionStore, SessionRow};
 
     /// Default connection string used when `DATABASE_URL` is unset. Matches the
@@ -192,12 +213,12 @@ mod tests {
 
     /// Creates the `rbac_sessions` table if it does not exist, and truncates it
     /// so each test starts from a clean slate. The DDL mirrors the queries in
-    /// `PgSessionStore` and is emitted directly (no sea-orm entity) so the tests
+    /// `DbSessionStore` and is emitted directly (no sea-orm entity) so the tests
     /// stay independent of any migration tooling the host application might use.
     async fn setup_schema(conn: &DatabaseConnection) {
         // Build the CREATE TABLE from the model. `Schema::create_table_from_entity`
         // is not available because there is no sea-orm entity here, so emit the
-        // DDL directly to stay aligned with the queries in `PgSessionStore`.
+        // DDL directly to stay aligned with the queries in `DbSessionStore`.
         let backend = conn.get_database_backend();
         conn.execute_raw(Statement::from_string(
             backend,
@@ -227,6 +248,7 @@ mod tests {
             subject_id: "subject-1".to_string(),
             active_roles: vec!["admin".to_string(), "viewer".to_string()],
             context: Some(serde_json::json!({"ip": "10.0.0.1"})),
+            version: 0,
             expires_at: chrono::Utc::now() + chrono::Duration::hours(1),
             created_at: chrono::Utc::now(),
         }
@@ -238,7 +260,7 @@ mod tests {
         let conn = connect().await;
         setup_schema(&conn).await;
 
-        let store = PgSessionStore::new(conn);
+        let store = DbSessionStore::new(conn);
         let id = Uuid::now_v7();
         let row = sample_row(id);
 
@@ -261,7 +283,7 @@ mod tests {
         let conn = connect().await;
         setup_schema(&conn).await;
 
-        let store = PgSessionStore::new(conn);
+        let store = DbSessionStore::new(conn);
         let loaded = store
             .load_session(Uuid::now_v7())
             .await
@@ -275,7 +297,7 @@ mod tests {
         let conn = connect().await;
         setup_schema(&conn).await;
 
-        let store = PgSessionStore::new(conn);
+        let store = DbSessionStore::new(conn);
         let id = Uuid::now_v7();
         store
             .save_session(&sample_row(id))
@@ -296,7 +318,7 @@ mod tests {
         let conn = connect().await;
         setup_schema(&conn).await;
 
-        let store = PgSessionStore::new(conn);
+        let store = DbSessionStore::new(conn);
         let id = Uuid::now_v7();
         store
             .save_session(&sample_row(id))
@@ -319,7 +341,7 @@ mod tests {
         let conn = connect().await;
         setup_schema(&conn).await;
 
-        let store = PgSessionStore::new(conn);
+        let store = DbSessionStore::new(conn);
         let result = store.update_roles(Uuid::now_v7(), &["x".to_string()]).await;
         assert!(
             result.is_err(),
@@ -333,7 +355,7 @@ mod tests {
         let conn = connect().await;
         setup_schema(&conn).await;
 
-        let store = PgSessionStore::new(conn);
+        let store = DbSessionStore::new(conn);
         let now = chrono::Utc::now();
 
         // expired
@@ -342,6 +364,7 @@ mod tests {
             subject_id: "expired".to_string(),
             active_roles: vec![],
             context: None,
+            version: 0,
             expires_at: now - chrono::Duration::minutes(5),
             created_at: now - chrono::Duration::hours(1),
         };
@@ -351,6 +374,7 @@ mod tests {
             subject_id: "valid".to_string(),
             active_roles: vec![],
             context: None,
+            version: 0,
             expires_at: now + chrono::Duration::hours(1),
             created_at: now,
         };
@@ -363,4 +387,5 @@ mod tests {
         assert!(store.load_session(expired.id).await.unwrap().is_none());
     }
 }
+
 
