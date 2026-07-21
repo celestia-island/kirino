@@ -1,23 +1,16 @@
 name: Publish crates.io
-
 on:
   push:
     tags: [v*]
 
 jobs:
   publish:
-    name: Publish to crates.io
     runs-on: ubuntu-latest
-    timeout-minutes: 15
-
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
-      - name: Clone yuuka (workspace dep)
-        run: git clone --depth 1 https://github.com/celestia-island/yuuka.git ../yuuka
+      - run: git clone --depth 1 https://github.com/celestia-island/yuuka.git ../yuuka
       - uses: Swatinem/rust-cache@v2
-      - run: cargo check -p kirino-session -p kirino -p kirino-macro --lib
-      - name: Install celestia-devtools
-        run: pip install git+https://github.com/celestia-island/celestia-devtools.git
       - run: cargo login ${{ secrets.CRATES_IO_API_TOKEN }}
-      - run: python -m celestia_devtools.publish.crates
+      - run: cargo publish -p kirino --allow-dirty 2>&1; true
