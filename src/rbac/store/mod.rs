@@ -1,10 +1,10 @@
 pub mod memory;
-#[cfg(any(feature = "rbac-pg-session", feature = "rbac-dynamic"))]
+#[cfg(any(feature = "rbac-db-session", feature = "rbac-dynamic"))]
 pub mod persistence;
 pub mod registry;
 
 pub use memory::{InMemoryAssignmentStore, InMemoryRoleStore};
-#[cfg(any(feature = "rbac-pg-session", feature = "rbac-dynamic"))]
+#[cfg(any(feature = "rbac-db-session", feature = "rbac-dynamic"))]
 pub use persistence::{
     AssignmentRow, AuditRow, ConstraintRow, PersistentAssignmentStore, PersistentAuditStore,
     PersistentConstraintStore, PersistentRoleStore, PersistentStore, RoleRow,

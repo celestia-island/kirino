@@ -581,5 +581,5 @@ mod tests {
     }
 }
 
-#[cfg(feature = "rbac-pg-session")]
-pub mod pg;
+#[cfg(feature = "rbac-db-session")]
+pub mod db;

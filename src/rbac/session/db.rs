@@ -18,7 +18,7 @@ use crate::{
     },
 };
 
-pub struct PgSessionManager<S, P>
+pub struct DbSessionManager<S, P>
 where
     S: Subject,
     P: Permission,
@@ -30,7 +30,7 @@ where
     _phantom: std::marker::PhantomData<P>,
 }
 
-impl<S, P> PgSessionManager<S, P>
+impl<S, P> DbSessionManager<S, P>
 where
     S: Subject,
     P: Permission,
@@ -64,7 +64,7 @@ where
 }
 
 #[async_trait::async_trait]
-impl<S, P> SessionManager<S> for PgSessionManager<S, P>
+impl<S, P> SessionManager<S> for DbSessionManager<S, P>
 where
     S: Subject,
     P: Permission,

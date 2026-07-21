@@ -6,18 +6,18 @@ use uuid::Uuid;
 use crate::rbac::store::persistence::{PersistentSessionStore, SessionRow};
 
 #[derive(Debug, Clone)]
-pub struct PgSessionStore {
+pub struct DbSessionStore {
     conn: DatabaseConnection,
 }
 
-impl PgSessionStore {
+impl DbSessionStore {
     pub fn new(conn: DatabaseConnection) -> Self {
         Self { conn }
     }
 }
 
 #[async_trait]
-impl PersistentSessionStore for PgSessionStore {
+impl PersistentSessionStore for DbSessionStore {
     async fn save_session(&self, row: &SessionRow) -> Result<()> {
         let roles_json = serde_json::to_string(&row.active_roles)?;
         let context_str = row
@@ -177,7 +177,7 @@ impl PersistentSessionStore for PgSessionStore {
 
 #[cfg(test)]
 mod tests {
-    //! PostgreSQL integration tests for [`PgSessionStore`].
+    //! PostgreSQL integration tests for [`DbSessionStore`].
     //!
     //! These require a live PostgreSQL instance. They are `#[ignore]`'d so the
     //! normal `cargo test` run does not need a database. Run them explicitly:
@@ -197,7 +197,7 @@ mod tests {
     use sea_orm::{ConnectionTrait, Database, DatabaseConnection, Statement};
     use uuid::Uuid;
 
-    use super::PgSessionStore;
+    use super::DbSessionStore;
     use crate::rbac::store::persistence::{PersistentSessionStore, SessionRow};
 
     /// Default connection string used when `DATABASE_URL` is unset. Matches the
@@ -213,12 +213,12 @@ mod tests {
 
     /// Creates the `rbac_sessions` table if it does not exist, and truncates it
     /// so each test starts from a clean slate. The DDL mirrors the queries in
-    /// `PgSessionStore` and is emitted directly (no sea-orm entity) so the tests
+    /// `DbSessionStore` and is emitted directly (no sea-orm entity) so the tests
     /// stay independent of any migration tooling the host application might use.
     async fn setup_schema(conn: &DatabaseConnection) {
         // Build the CREATE TABLE from the model. `Schema::create_table_from_entity`
         // is not available because there is no sea-orm entity here, so emit the
-        // DDL directly to stay aligned with the queries in `PgSessionStore`.
+        // DDL directly to stay aligned with the queries in `DbSessionStore`.
         let backend = conn.get_database_backend();
         conn.execute_raw(Statement::from_string(
             backend,
@@ -260,7 +260,7 @@ mod tests {
         let conn = connect().await;
         setup_schema(&conn).await;
 
-        let store = PgSessionStore::new(conn);
+        let store = DbSessionStore::new(conn);
         let id = Uuid::now_v7();
         let row = sample_row(id);
 
@@ -283,7 +283,7 @@ mod tests {
         let conn = connect().await;
         setup_schema(&conn).await;
 
-        let store = PgSessionStore::new(conn);
+        let store = DbSessionStore::new(conn);
         let loaded = store
             .load_session(Uuid::now_v7())
             .await
@@ -297,7 +297,7 @@ mod tests {
         let conn = connect().await;
         setup_schema(&conn).await;
 
-        let store = PgSessionStore::new(conn);
+        let store = DbSessionStore::new(conn);
         let id = Uuid::now_v7();
         store
             .save_session(&sample_row(id))
@@ -318,7 +318,7 @@ mod tests {
         let conn = connect().await;
         setup_schema(&conn).await;
 
-        let store = PgSessionStore::new(conn);
+        let store = DbSessionStore::new(conn);
         let id = Uuid::now_v7();
         store
             .save_session(&sample_row(id))
@@ -341,7 +341,7 @@ mod tests {
         let conn = connect().await;
         setup_schema(&conn).await;
 
-        let store = PgSessionStore::new(conn);
+        let store = DbSessionStore::new(conn);
         let result = store.update_roles(Uuid::now_v7(), &["x".to_string()]).await;
         assert!(
             result.is_err(),
@@ -355,7 +355,7 @@ mod tests {
         let conn = connect().await;
         setup_schema(&conn).await;
 
-        let store = PgSessionStore::new(conn);
+        let store = DbSessionStore::new(conn);
         let now = chrono::Utc::now();
 
         // expired
