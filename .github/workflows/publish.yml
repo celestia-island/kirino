@@ -13,8 +13,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
-      - name: Clone yuuka (workspace dep)
-        run: git clone --depth 1 https://github.com/celestia-island/yuuka.git ../yuuka
       - uses: Swatinem/rust-cache@v2
       - run: cargo check -p kirino-session -p kirino -p kirino-macro --lib
       - name: Install celestia-devtools
