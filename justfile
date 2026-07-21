@@ -106,6 +106,7 @@ clippy:
 
 # Format all code
 fmt:
+    just fmt-toml
 <<<<<<< HEAD
 <<<<<<< HEAD
     @echo "Formatting all code..."

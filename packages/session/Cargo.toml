@@ -10,22 +10,22 @@ documentation = "https://docs.rs/kirino-session"
 keywords = ["session", "jwt", "authentication", "kirino"]
 
 [dependencies]
-serde = { version = "^1", features = ["derive"] }
-serde_json = "^1"
-jsonwebtoken = "^9"
-uuid = { version = "^1", features = ["v4", "v7", "serde"] }
-chrono = { version = "^0.4", features = ["serde"] }
-tokio = { version = "^1", features = ["sync", "rt"] }
-tracing = { version = "^0.1" }
-thiserror = "^2"
-sea-orm = { version = "^1", optional = true, features = ["sqlx-postgres", "runtime-tokio-rustls"] }
-zeroize = { version = "^1", features = ["zeroize_derive"] }
+
+actix-rt = { version = "^2", optional = true }
+actix-web = { version = "^4", optional = true }
 axum = { version = "^0.8", optional = true }
 axum-core = { version = "^0.5", optional = true }
-actix-web = { version = "^4", optional = true }
-actix-rt = { version = "^2", optional = true }
+chrono = { version = "^0.4", features = ["serde"] }
 futures-util = { version = "^0.3", optional = true }
-
+jsonwebtoken = "^9"
+sea-orm = { version = "^1", optional = true, features = ["sqlx-postgres", "runtime-tokio-rustls"] }
+serde = { version = "^1", features = ["derive"] }
+serde_json = "^1"
+thiserror = "^2"
+tokio = { version = "^1", features = ["sync", "rt"] }
+tracing = { version = "^0.1" }
+uuid = { version = "^1", features = ["v4", "v7", "serde"] }
+zeroize = { version = "^1", features = ["zeroize_derive"] }
 [features]
 default = ["axum"]
 postgres = ["sea-orm"]
@@ -33,12 +33,12 @@ axum = ["dep:axum", "dep:axum-core"]
 actix = ["dep:actix-web", "dep:actix-rt", "dep:futures-util"]
 
 [dev-dependencies]
-tokio = { version = "^1", features = ["full"] }
+
 axum = { version = "^0.8", features = ["ws"] }
 serde = { version = "^1", features = ["derive"] }
 serde_json = "^1"
+tokio = { version = "^1", features = ["full"] }
 uuid = { version = "^1", features = ["v4"] }
-
 [[example]]
 name = "axum_ws_one_shot"
 path = "examples/axum_ws_one_shot.rs"
