@@ -1,6 +1,6 @@
 use kirino::{
     database::memory::InMemoryUserDatabase,
-    rbac::permission::Permission as KirinoPermission,
+    rbac::permission::Permission,
     service::login::{build_default_engine, AuthService},
 };
 
@@ -38,17 +38,17 @@ async fn main() {
     println!("  Token verified for subject: {}", claims.sub);
 
     let can_manage = service
-        .check_permission(&alice.id.to_string(), &KirinoPermission::SystemWrite)
+        .check_permission(&alice.id.to_string(), &Permission::from_path("system.write").unwrap())
         .await;
     println!("\nAlice can manage system: {can_manage}");
 
     let can_manage = service
-        .check_permission(&bob.id.to_string(), &KirinoPermission::SystemWrite)
+        .check_permission(&bob.id.to_string(), &Permission::from_path("system.write").unwrap())
         .await;
     println!("Bob can manage system:   {can_manage}");
 
     let can_read = service
-        .check_permission(&bob.id.to_string(), &KirinoPermission::AgentRead)
+        .check_permission(&bob.id.to_string(), &Permission::from_path("agent.read").unwrap())
         .await;
     println!("Bob can read agents:     {can_read}");
 
