@@ -97,7 +97,7 @@ mod tests {
     use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
     use std::time::Duration;
 
-    #[tokio::test]
+    #[tokio::test(flavor = "current_thread")]
     async fn test_add_and_check_ip() {
         let wl = WhitelistVerifier::new();
         let ip = ClientSource::Ip(IpAddr::V4(Ipv4Addr::new(192, 168, 1, 1)));
@@ -105,14 +105,14 @@ mod tests {
         assert!(wl.is_whitelisted(&ip).await.unwrap());
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "current_thread")]
     async fn test_not_whitelisted() {
         let wl = WhitelistVerifier::new();
         let ip = ClientSource::Ip(IpAddr::V4(Ipv4Addr::new(10, 0, 0, 1)));
         assert!(!wl.is_whitelisted(&ip).await.unwrap());
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "current_thread")]
     async fn test_ttl_expiry() {
         let wl = WhitelistVerifier::new();
         let ip = ClientSource::Ip(IpAddr::V4(Ipv4Addr::new(10, 0, 0, 1)));
@@ -121,7 +121,7 @@ mod tests {
         assert!(!wl.is_whitelisted(&ip).await.unwrap());
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "current_thread")]
     async fn test_remove() {
         let wl = WhitelistVerifier::new();
         let ip = ClientSource::Ip(IpAddr::V4(Ipv4Addr::new(10, 0, 0, 1)));
@@ -132,7 +132,7 @@ mod tests {
         assert!(wl.is_empty().await);
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "current_thread")]
     async fn test_mac_address() {
         let wl = WhitelistVerifier::new();
         let mac = ClientSource::Mac("AA:BB:CC:DD:EE:FF".to_string());
@@ -140,7 +140,7 @@ mod tests {
         assert!(wl.is_whitelisted(&mac).await.unwrap());
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "current_thread")]
     async fn test_remove_nonexistent() {
         let wl = WhitelistVerifier::new();
         let ip = ClientSource::Ip(IpAddr::V4(Ipv4Addr::new(10, 0, 0, 1)));
@@ -148,7 +148,7 @@ mod tests {
         assert!(wl.is_empty().await);
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "current_thread")]
     async fn test_multiple_entries() {
         let wl = WhitelistVerifier::new();
         let ip1 = ClientSource::Ip(IpAddr::V4(Ipv4Addr::new(10, 0, 0, 1)));
@@ -163,7 +163,7 @@ mod tests {
         assert!(wl.is_whitelisted(&mac).await.unwrap());
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "current_thread")]
     async fn test_ipv6_whitelist() {
         let wl = WhitelistVerifier::new();
         let ip = ClientSource::Ip(IpAddr::V6(Ipv6Addr::LOCALHOST));
@@ -171,7 +171,7 @@ mod tests {
         assert!(wl.is_whitelisted(&ip).await.unwrap());
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "current_thread")]
     async fn test_cleanup_expired() {
         let wl = WhitelistVerifier::new();
         let ip1 = ClientSource::Ip(IpAddr::V4(Ipv4Addr::new(10, 0, 0, 1)));
@@ -192,7 +192,7 @@ mod tests {
         assert!(wl.is_whitelisted(&ip2).await.unwrap());
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "current_thread")]
     async fn test_cleanup_no_expired() {
         let wl = WhitelistVerifier::new();
         let ip = ClientSource::Ip(IpAddr::V4(Ipv4Addr::new(10, 0, 0, 1)));
@@ -201,7 +201,7 @@ mod tests {
         assert_eq!(wl.len().await, 1);
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "current_thread")]
     async fn test_re_add_replaces() {
         let wl = WhitelistVerifier::new();
         let ip = ClientSource::Ip(IpAddr::V4(Ipv4Addr::new(10, 0, 0, 1)));
@@ -210,7 +210,7 @@ mod tests {
         assert_eq!(wl.len().await, 1);
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "current_thread")]
     async fn test_empty_verifier() {
         let wl = WhitelistVerifier::new();
         assert!(wl.is_empty().await);
