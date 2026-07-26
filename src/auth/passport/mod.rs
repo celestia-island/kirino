@@ -5,3 +5,5 @@ pub mod key_pair;
 #[cfg(feature = "auth-password")]
 pub mod static_password;
 pub mod temporary_whitelist;
+#[cfg(feature = "auth-webauthn")]
+pub mod webauthn;
