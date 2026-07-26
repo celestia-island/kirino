@@ -1,6 +1,6 @@
 [package]
 name = "kirino"
-version = "0.6.0"
+version = "0.6.1"
 edition = "2021"
 description = "Zero-trust authentication and authorization framework with RBAC and dynamic risk assessment."
 license-file = "LICENSE"
@@ -28,9 +28,10 @@ rbac-hierarchy = ["rbac-core"]
 rbac-constraints = ["rbac-core"]
 rbac-db-session = ["rbac-core", "dep:sea-orm"]
 rbac-dynamic = ["rbac-core"]
-rbac-full = ["rbac-inmemory", "rbac-hierarchy", "rbac-constraints", "rbac-dynamic", "auth-password", "auth-jwt"]
+rbac-full = ["rbac-inmemory", "rbac-hierarchy", "rbac-constraints", "rbac-dynamic", "auth-password", "auth-jwt", "auth-webauthn"]
 auth-password = ["dep:argon2"]
 auth-jwt = ["dep:jsonwebtoken"]
+auth-webauthn = ["dep:coset", "dep:p256"]
 
 [dependencies]
 anyhow = "^1"
@@ -43,7 +44,7 @@ futures = "^0.3"
 serde = { version = "^1", features = ["derive"] }
 serde_json = "^1"
 yuuka = { path = "../yuuka", version = "^0.6" }
-kirino-macro = { path = "packages/kirino-macro", version = "0.6.0" }
+kirino-macro = { path = "packages/kirino-macro", version = "0.6.1" }
 argon2 = { version = "^0.5", optional = true }
 hmac = "^0.12"
 jsonwebtoken = { version = "^9", optional = true }
@@ -51,6 +52,8 @@ rand = "^0.8"
 sha1 = "^0.10"
 zeroize = { version = "^1", features = ["zeroize_derive"] }
 sha2 = "^0.10"
+coset = { version = "^0.3", optional = true }
+p256 = { version = "^0.13", features = ["ecdsa"], optional = true }
 tracing = { version = "^0.1", features = ["log"] }
 sea-orm = { version = "^2.0.0-rc", features = ["sqlx-postgres", "runtime-tokio-rustls"], optional = true }
 

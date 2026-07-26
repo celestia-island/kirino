@@ -64,6 +64,11 @@ derive_enum!(
             template: Uuid,
             provider_ai: Uuid,
         },
+        WebAuthn {
+            credential_id: Vec<u8>,
+            public_key_cose: Vec<u8>,
+            sign_count: u32,
+        },
         TemporaryWhitelist(enum {
             ClientSource(enum {
                 IPv4(Ipv4Addr),
