@@ -143,8 +143,8 @@ Multilingual documentation is available:
 | Language | Index |
 |----------|-------|
 | English | [docs/en/guides/index.md](docs/en/guides/index.md) |
-| 简体中文 (Simplified Chinese) | [docs/zhs/guides/index.md](docs/zhs/guides/index.md) |
-| 繁體中文 (Traditional Chinese) | [docs/zht/guides/index.md](docs/zht/guides/index.md) |
+| 简体中文 (Simplified Chinese) | [docs/zh-Hans/guides/index.md](docs/zh-Hans/guides/index.md) |
+| 繁體中文 (Traditional Chinese) | [docs/zh-Hant/guides/index.md](docs/zh-Hant/guides/index.md) |
 | 日本語 (Japanese) | [docs/ja/guides/index.md](docs/ja/guides/index.md) |
 | 한국어 (Korean) | [docs/ko/guides/index.md](docs/ko/guides/index.md) |
 | Русский (Russian) | [docs/ru/guides/index.md](docs/ru/guides/index.md) |
