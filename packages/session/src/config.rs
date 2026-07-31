@@ -11,6 +11,8 @@ pub struct SessionConfig {
     pub refresh_ttl_secs: u64,
     /// Token issuer claim.
     pub issuer: String,
+    /// Optional audience validation. If set, tokens must have this audience.
+    pub audience: Option<String>,
 }
 
 impl SessionConfig {
@@ -20,6 +22,7 @@ impl SessionConfig {
             access_ttl_secs: 900,
             refresh_ttl_secs: 604_800,
             issuer: "kirino".into(),
+            audience: None,
         }
     }
 
@@ -31,6 +34,11 @@ impl SessionConfig {
 
     pub fn with_issuer(mut self, issuer: impl Into<String>) -> Self {
         self.issuer = issuer.into();
+        self
+    }
+
+    pub fn with_audience(mut self, aud: impl Into<String>) -> Self {
+        self.audience = Some(aud.into());
         self
     }
 }
