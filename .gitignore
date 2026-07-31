@@ -2,6 +2,7 @@ target
 Cargo.lock
 
 dist/
+node_modules/
 
 # Editor / OS cruft
 *.swp
