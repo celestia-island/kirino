@@ -16,7 +16,11 @@ impl TokenManager {
     pub fn new(config: SessionConfig) -> Self {
         let encoding_key = EncodingKey::from_secret(config.secret.as_bytes());
         let decoding_key = DecodingKey::from_secret(config.secret.as_bytes());
-        Self { config, encoding_key, decoding_key }
+        Self {
+            config,
+            encoding_key,
+            decoding_key,
+        }
     }
 
     /// Issue an access + refresh token pair for a user.
@@ -27,10 +31,26 @@ impl TokenManager {
         _roles: Vec<String>,
     ) -> SessionResult<TokenPair> {
         let sid = Uuid::new_v4().to_string();
-        let access = self.sign(&TokenClaims::new(user_id, username.clone(), TokenType::Access, self.config.access_ttl_secs, &self.config.issuer)
-                .with_session(&sid))?;
-        let refresh = self.sign(&TokenClaims::new(user_id, username, TokenType::Refresh, self.config.refresh_ttl_secs, &self.config.issuer)
-                .with_session(&sid))?;
+        let access = self.sign(
+            &TokenClaims::new(
+                user_id,
+                username.clone(),
+                TokenType::Access,
+                self.config.access_ttl_secs,
+                &self.config.issuer,
+            )
+            .with_session(&sid),
+        )?;
+        let refresh = self.sign(
+            &TokenClaims::new(
+                user_id,
+                username,
+                TokenType::Refresh,
+                self.config.refresh_ttl_secs,
+                &self.config.issuer,
+            )
+            .with_session(&sid),
+        )?;
         Ok(TokenPair {
             access_token: access,
             refresh_token: refresh,
@@ -49,6 +69,9 @@ impl TokenManager {
         let mut validation = Validation::default();
         validation.set_issuer(&[&self.config.issuer]);
         validation.validate_exp = true;
+        if let Some(ref aud) = self.config.audience {
+            validation.set_audience(&[aud]);
+        }
         let data = decode::<TokenClaims>(token, &self.decoding_key, &validation)?;
         Ok(data.claims)
     }
@@ -63,6 +86,9 @@ impl TokenManager {
         let mut validation = Validation::default();
         validation.set_issuer(&[&self.config.issuer]);
         validation.validate_exp = false;
+        if let Some(ref aud) = self.config.audience {
+            validation.set_audience(&[aud]);
+        }
         let data = decode::<TokenClaims>(token, &self.decoding_key, &validation)?;
         Ok(data.claims)
     }
@@ -98,7 +124,9 @@ mod tests {
         let config = SessionConfig::new("test-secret-key-for-unit-tests");
         let manager = TokenManager::new(config);
         let user_id = Uuid::new_v4();
-        let pair = manager.issue_pair(user_id, "testuser".into(), vec![]).unwrap();
+        let pair = manager
+            .issue_pair(user_id, "testuser".into(), vec![])
+            .unwrap();
 
         let claims = manager.verify(&pair.access_token).unwrap();
         assert_eq!(claims.sub, user_id.to_string());
@@ -123,14 +151,21 @@ mod tests {
             &token,
             &jsonwebtoken::DecodingKey::from_secret(b"test-secret"),
             &validation,
-        ).is_err());
+        )
+        .is_err());
     }
 
     #[test]
     fn wrong_secret_fails() {
         let m1 = TokenManager::new(SessionConfig::new("secret-a"));
         let m2 = TokenManager::new(SessionConfig::new("secret-b"));
-        let claims = TokenClaims::new(Uuid::new_v4(), "u".into(), TokenType::Access, 3600, "kirino");
+        let claims = TokenClaims::new(
+            Uuid::new_v4(),
+            "u".into(),
+            TokenType::Access,
+            3600,
+            "kirino",
+        );
         let token = m1.sign(&claims).unwrap();
         assert!(m2.verify(&token).is_err());
     }
@@ -138,7 +173,9 @@ mod tests {
     #[test]
     fn refresh_token_flow() {
         let manager = TokenManager::new(SessionConfig::new("secret"));
-        let pair = manager.issue_pair(Uuid::new_v4(), "u".into(), vec![]).unwrap();
+        let pair = manager
+            .issue_pair(Uuid::new_v4(), "u".into(), vec![])
+            .unwrap();
         let new_pair = manager.refresh(&pair.refresh_token).unwrap();
         assert_ne!(new_pair.access_token, pair.access_token);
     }
@@ -158,7 +195,13 @@ mod tests {
     fn verify_lenient_rejects_wrong_secret() {
         let m1 = TokenManager::new(SessionConfig::new("secret-a"));
         let m2 = TokenManager::new(SessionConfig::new("secret-b"));
-        let claims = TokenClaims::new(Uuid::new_v4(), "u".into(), TokenType::Access, 3600, "kirino");
+        let claims = TokenClaims::new(
+            Uuid::new_v4(),
+            "u".into(),
+            TokenType::Access,
+            3600,
+            "kirino",
+        );
         let token = m1.sign(&claims).unwrap();
         assert!(m2.verify_lenient(&token).is_err());
     }
@@ -166,8 +209,90 @@ mod tests {
     #[test]
     fn verify_lenient_rejects_invalid_type_for_refresh() {
         let manager = TokenManager::new(SessionConfig::new("secret"));
-        let pair = manager.issue_pair(Uuid::new_v4(), "u".into(), vec![]).unwrap();
+        let pair = manager
+            .issue_pair(Uuid::new_v4(), "u".into(), vec![])
+            .unwrap();
         // Using access token where refresh token is expected
         assert!(manager.refresh(&pair.access_token).is_err());
+    }
+
+    #[test]
+    fn permissions_and_aud_roundtrip() {
+        let config = SessionConfig::new("secret").with_audience("entelecheia-api");
+        let manager = TokenManager::new(config);
+        let perms = vec!["read:foo".to_string(), "write:bar".to_string()];
+        let claims = TokenClaims::new(
+            Uuid::new_v4(),
+            "u".into(),
+            TokenType::Access,
+            3600,
+            "kirino",
+        )
+        .with_permissions(perms.clone())
+        .with_audience("entelecheia-api");
+        let token = manager.sign(&claims).unwrap();
+        let verified = manager.verify(&token).unwrap();
+        assert_eq!(verified.permissions, perms);
+        assert_eq!(verified.aud.as_deref(), Some("entelecheia-api"));
+    }
+
+    #[test]
+    fn verify_rejects_wrong_audience_when_configured() {
+        let config = SessionConfig::new("secret").with_audience("entelecheia-api");
+        let manager = TokenManager::new(config);
+        // Token minted for a different audience.
+        let claims = TokenClaims::new(
+            Uuid::new_v4(),
+            "u".into(),
+            TokenType::Access,
+            3600,
+            "kirino",
+        )
+        .with_audience("other-api");
+        let token = manager.sign(&claims).unwrap();
+        assert!(manager.verify(&token).is_err());
+    }
+
+    #[test]
+    fn verify_accepts_matching_audience_when_configured() {
+        let config = SessionConfig::new("secret").with_audience("entelecheia-api");
+        let manager = TokenManager::new(config);
+        let claims = TokenClaims::new(
+            Uuid::new_v4(),
+            "u".into(),
+            TokenType::Access,
+            3600,
+            "kirino",
+        )
+        .with_audience("entelecheia-api");
+        let token = manager.sign(&claims).unwrap();
+        let verified = manager.verify(&token).unwrap();
+        assert_eq!(verified.aud.as_deref(), Some("entelecheia-api"));
+    }
+
+    #[test]
+    fn verify_accepts_token_without_audience_when_not_configured() {
+        let manager = TokenManager::new(SessionConfig::new("secret"));
+        // No audience on either side — backward compatible path.
+        let claims = TokenClaims::new(
+            Uuid::new_v4(),
+            "u".into(),
+            TokenType::Access,
+            3600,
+            "kirino",
+        );
+        let token = manager.sign(&claims).unwrap();
+        assert!(manager.verify(&token).is_ok());
+    }
+
+    #[test]
+    fn verify_lenient_validates_audience_when_configured() {
+        let config = SessionConfig::new("secret").with_audience("entelecheia-api");
+        let manager = TokenManager::new(config);
+        let claims = TokenClaims::new(Uuid::new_v4(), "u".into(), TokenType::Access, 0, "kirino")
+            .with_audience("other-api");
+        let token = manager.sign(&claims).unwrap();
+        // Even lenient verify must enforce audience when configured.
+        assert!(manager.verify_lenient(&token).is_err());
     }
 }

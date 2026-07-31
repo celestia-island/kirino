@@ -41,6 +41,12 @@ pub struct TokenClaims {
     /// Cross-auth relay ID (UUIDv7, permanent).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub relay_id: Option<String>,
+    /// Permissions carried in the token for authorization.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub permissions: Vec<String>,
+    /// Audience (who the token is intended for).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub aud: Option<String>,
 }
 
 impl TokenClaims {
@@ -67,6 +73,8 @@ impl TokenClaims {
             user_id: None,
             tenant_id: None,
             relay_id: None,
+            permissions: Vec::new(),
+            aud: None,
         }
     }
 
@@ -92,6 +100,16 @@ impl TokenClaims {
 
     pub fn with_relay(mut self, relay_id: impl Into<String>) -> Self {
         self.relay_id = Some(relay_id.into());
+        self
+    }
+
+    pub fn with_permissions(mut self, permissions: Vec<String>) -> Self {
+        self.permissions = permissions;
+        self
+    }
+
+    pub fn with_audience(mut self, aud: impl Into<String>) -> Self {
+        self.aud = Some(aud.into());
         self
     }
 
