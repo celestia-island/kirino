@@ -1,0 +1,58 @@
+name: Lint
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [master, dev]
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  lint:
+    name: fmt + clippy
+    runs-on: [self-hosted, linux, x64, local]
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Clone yuuka (workspace dep)
+        run: git clone --depth 1 https://github.com/celestia-island/yuuka.git ../yuuka
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Check formatting
+        run: cargo fmt --all --check
+
+      - name: Clippy lints
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+  deny:
+    name: cargo-deny
+    runs-on: [self-hosted, linux, x64, local]
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Clone yuuka (workspace dep)
+        run: git clone --depth 1 https://github.com/celestia-island/yuuka.git ../yuuka
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Check advisories, licenses and sources
+        uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          command: check advisories licenses sources

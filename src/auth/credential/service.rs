@@ -63,7 +63,7 @@ fn hmac_sha256_hex(key: &[u8], data: &[u8]) -> Result<String> {
     mac.update(data);
     let result = mac.finalize().into_bytes();
     let mut hex = String::with_capacity(result.len() * 2);
-    for byte in result.as_slice() {
+    for byte in result.iter() {
         let _ = write!(hex, "{byte:02x}");
     }
     Ok(hex)

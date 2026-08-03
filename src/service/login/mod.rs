@@ -1,6 +1,5 @@
 use anyhow::Result;
 use chrono::Utc;
-use serde::{Deserialize, Serialize};
 use std::{
     collections::{HashMap, HashSet},
     sync::Arc,
@@ -563,10 +562,6 @@ where
             .check_and_record_failure(username_trimmed)
             .await?;
 
-        let user = self
-            .authenticate_user(username_trimmed, password)
-            .await?;
-
         let user = self.authenticate_user(username_trimmed, password).await?;
 
         let user_id = user.id.to_string();
@@ -610,20 +605,25 @@ where
 
 /// Build an RBAC engine using the hierarchical `Permission` enum.
 #[must_use]
-pub fn build_default_engine(
-) -> Shared<RbacEngine<StringSubject, crate::rbac::permission::Permission, InMemoryAssignmentStore<StringSubject, crate::rbac::permission::Permission>>>
-{
+pub fn build_default_engine() -> Shared<
+    RbacEngine<
+        StringSubject,
+        crate::rbac::permission::Permission,
+        InMemoryAssignmentStore<StringSubject, crate::rbac::permission::Permission>,
+    >,
+> {
     use crate::rbac::permission::Permission;
 
     let mut role_reg = StaticRoleRegistry::new();
-    role_reg.register(SimpleRole::new("admin", Permission::all().into_iter().collect()));
+    role_reg.register(SimpleRole::new(
+        "admin",
+        Permission::all().into_iter().collect(),
+    ));
     role_reg.register(SimpleRole::new(
         "operator",
         Permission::all()
             .into_iter()
-            .filter(|p: &Permission| {
-                p.domain() != "system" && p.domain() != "rbac"
-            })
+            .filter(|p: &Permission| p.domain() != "system" && p.domain() != "rbac")
             .collect(),
     ));
     role_reg.register(SimpleRole::new(
@@ -633,12 +633,18 @@ pub fn build_default_engine(
             .filter(|p: &Permission| {
                 matches!(
                     p.name(),
-                    "provider.list" | "provider.use"
-                        | "mcp.list" | "mcp.use"
-                        | "agent.list" | "agent.use"
-                        | "channel.list" | "channel.use"
-                        | "workspace.list" | "workspace.create"
-                        | "device.list" | "device.connect"
+                    "provider.list"
+                        | "provider.use"
+                        | "mcp.list"
+                        | "mcp.use"
+                        | "agent.list"
+                        | "agent.use"
+                        | "channel.list"
+                        | "channel.use"
+                        | "workspace.list"
+                        | "workspace.create"
+                        | "device.list"
+                        | "device.connect"
                 )
             })
             .collect(),
@@ -647,9 +653,7 @@ pub fn build_default_engine(
         "viewer",
         Permission::all()
             .into_iter()
-            .filter(|p| {
-                p.name().ends_with(".list") || p.name() == "deploy.read"
-            })
+            .filter(|p| p.name().ends_with(".list") || p.name() == "deploy.read")
             .collect(),
     ));
 
@@ -884,7 +888,7 @@ mod tests {
         assert!(reg.get_role_permissions("admin").is_some());
         assert!(reg.get_role_permissions("operator").is_some());
         assert!(reg.get_role_permissions("viewer").is_some());
-        assert!(reg.get_role_permissions("agent").is_some());
+        assert!(reg.get_role_permissions("member").is_some());
         assert!(reg.get_role_permissions("nonexistent").is_none());
     }
 
@@ -895,7 +899,10 @@ mod tests {
             .role_registry()
             .get_role_permissions("admin")
             .unwrap();
-        assert_eq!(admin.len(), crate::rbac::permission::Permission::all().len());
+        assert_eq!(
+            admin.len(),
+            crate::rbac::permission::Permission::all().len()
+        );
     }
 
     #[test]

@@ -43,11 +43,6 @@ impl WhitelistVerifier {
     }
 
     pub async fn add(&self, source: ClientSource, ttl: Option<std::time::Duration>) {
-        let expires_at = ttl.map(|d| Instant::now() + d);
-        let mut entries = self.entries.write().await;
-        let now = Instant::now();
-        entries.retain(|e| e.expires_at.map_or(true, |exp| now < exp));
-
         let mut entries = self.entries.write().await;
         let expires_at = ttl.map(|d| Instant::now() + d);
 
