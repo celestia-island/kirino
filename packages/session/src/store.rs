@@ -118,10 +118,7 @@ impl SessionStore {
     }
 
     /// Look up a session's user_id and token_hash by session_id.
-    pub async fn find_session(
-        &self,
-        session_id: &Uuid,
-    ) -> SessionResult<Option<(Uuid, String)>> {
+    pub async fn find_session(&self, session_id: &Uuid) -> SessionResult<Option<(Uuid, String)>> {
         let stmt = Statement::from_sql_and_values(
             DbBackend::Postgres,
             "SELECT user_id, token_hash FROM kirino_sessions
@@ -137,20 +134,21 @@ impl SessionStore {
             .map_err(|e| SessionError::Other(format!("session find: {e}")))?;
         match result {
             Some(row) => {
-                let uid: Uuid = row.try_get_by_index(0).map_err(|e| SessionError::Other(format!("get user_id: {e}")))?;
-                let hash: String = row.try_get_by_index(1).map_err(|e| SessionError::Other(format!("get token_hash: {e}")))?;
+                let uid: Uuid = row
+                    .try_get_by_index(0)
+                    .map_err(|e| SessionError::Other(format!("get user_id: {e}")))?;
+                let hash: String = row
+                    .try_get_by_index(1)
+                    .map_err(|e| SessionError::Other(format!("get token_hash: {e}")))?;
                 Ok(Some((uid, hash)))
-            },
+            }
             None => Ok(None),
         }
     }
 
     /// Prune sessions that expired more than `older_than` ago.
     /// Returns the number of deleted rows.
-    pub async fn prune_expired(
-        &self,
-        older_than: chrono::Duration,
-    ) -> SessionResult<u64> {
+    pub async fn prune_expired(&self, older_than: chrono::Duration) -> SessionResult<u64> {
         let cutoff = chrono::Utc::now() - older_than;
         let stmt = Statement::from_sql_and_values(
             DbBackend::Postgres,

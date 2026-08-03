@@ -290,7 +290,6 @@ mod tests {
             !admins.iter().any(|s| s == "ghost"),
             "revoking a nonexistent subject must not register that subject under any role"
         );
-
     }
 
     #[tokio::test]

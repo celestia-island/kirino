@@ -17,8 +17,8 @@ use std::sync::Arc;
 
 use axum::{
     extract::{
-        Query, State, WebSocketUpgrade,
         ws::{Message, WebSocket},
+        Query, State, WebSocketUpgrade,
     },
     http::StatusCode,
     response::{IntoResponse, Json},
@@ -133,7 +133,10 @@ async fn ws_handler(
         .map_err(|_| (StatusCode::UNAUTHORIZED, "invalid token".into()))?;
 
     // One-shot check — reject if JTI already used.
-    if state.one_shot.check_and_mark(&claims.jti, claims.exp as i64) {
+    if state
+        .one_shot
+        .check_and_mark(&claims.jti, claims.exp as i64)
+    {
         return Err((StatusCode::UNAUTHORIZED, "token already used".into()));
     }
 
@@ -157,7 +160,9 @@ async fn handle_ws(mut socket: WebSocket, username: String) {
 #[tokio::main]
 async fn main() {
     let state = AppState {
-        token_manager: Arc::new(TokenManager::new(SessionConfig::new("example-secret-do-not-use-in-prod"))),
+        token_manager: Arc::new(TokenManager::new(SessionConfig::new(
+            "example-secret-do-not-use-in-prod",
+        ))),
         one_shot: OneShotStore::new(),
     };
 

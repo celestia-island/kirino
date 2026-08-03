@@ -154,10 +154,7 @@ where
 
         let version = {
             let versions = self.subject_versions.read().await;
-            versions
-                .get(subject.subject_id())
-                .copied()
-                .unwrap_or(0)
+            versions.get(subject.subject_id()).copied().unwrap_or(0)
         };
 
         let session = Session {
@@ -243,18 +240,12 @@ where
 
     async fn current_version(&self, subject: &S) -> Result<u64> {
         let versions = self.subject_versions.read().await;
-        Ok(versions
-            .get(subject.subject_id())
-            .copied()
-            .unwrap_or(0))
+        Ok(versions.get(subject.subject_id()).copied().unwrap_or(0))
     }
 
     async fn bump_version_for_subject(&self, subject: &S) -> Result<u64> {
         let mut versions = self.subject_versions.write().await;
-        let current = versions
-            .get(subject.subject_id())
-            .copied()
-            .unwrap_or(0);
+        let current = versions.get(subject.subject_id()).copied().unwrap_or(0);
         let next = current.wrapping_add(1);
         versions.insert(subject.subject_id().to_string(), next);
         Ok(next)
@@ -577,7 +568,6 @@ mod tests {
             mgr.get_session(keeper.id).await.unwrap().is_some(),
             "destroying an unrelated session id must not evict other sessions"
         );
-
     }
 }
 

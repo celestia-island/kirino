@@ -6,8 +6,8 @@ use uuid::Uuid;
 
 use super::token::generate_token;
 use super::types::{
-    AcceptInvitationParams, CreateInvitationParams, Invitation, InvitationMode,
-    InvitationStatus, OpenInvitationResult,
+    AcceptInvitationParams, CreateInvitationParams, Invitation, InvitationMode, InvitationStatus,
+    OpenInvitationResult,
 };
 
 /// Storage and lifecycle for invitations.
@@ -25,10 +25,7 @@ pub trait InvitationStore: Send + Sync {
         client_ua: Option<&str>,
     ) -> Result<OpenInvitationResult, InvitationError>;
 
-    fn accept(
-        &self,
-        params: AcceptInvitationParams,
-    ) -> Result<(Uuid, String), InvitationError>;
+    fn accept(&self, params: AcceptInvitationParams) -> Result<(Uuid, String), InvitationError>;
 
     fn find_by_token(&self, token: &str) -> Result<Option<Invitation>, InvitationError>;
 
@@ -170,7 +167,7 @@ impl InvitationStore for InMemoryInvitationStore {
                 inv.opened_ua = client_ua.map(|s| s.to_string());
                 inv.status = InvitationStatus::Opened;
                 t
-            },
+            }
         };
 
         let window_secs = 300i64;
@@ -191,16 +188,15 @@ impl InvitationStore for InMemoryInvitationStore {
         })
     }
 
-    fn accept(
-        &self,
-        params: AcceptInvitationParams,
-    ) -> Result<(Uuid, String), InvitationError> {
+    fn accept(&self, params: AcceptInvitationParams) -> Result<(Uuid, String), InvitationError> {
         let id = {
             let idx = self
                 .token_index
                 .lock()
                 .map_err(|e| InvitationError::Other(e.to_string()))?;
-            idx.get(&params.token).cloned().ok_or(InvitationError::NotFound)?
+            idx.get(&params.token)
+                .cloned()
+                .ok_or(InvitationError::NotFound)?
         };
 
         let mut map = self
@@ -212,7 +208,7 @@ impl InvitationStore for InMemoryInvitationStore {
         let now = Utc::now();
 
         match inv.status {
-            InvitationStatus::Pending | InvitationStatus::Opened => {},
+            InvitationStatus::Pending | InvitationStatus::Opened => {}
             InvitationStatus::Accepted => return Err(InvitationError::AlreadyUsed),
             InvitationStatus::Expired => return Err(InvitationError::Expired),
             InvitationStatus::Revoked => return Err(InvitationError::AlreadyUsed),
@@ -232,9 +228,7 @@ impl InvitationStore for InMemoryInvitationStore {
                     return Err(InvitationError::OpenWindowExpired(0));
                 }
             }
-            if let (Some(ref stored_ip), Some(ref req_ip)) =
-                (&inv.opened_ip, &params.client_ip)
-            {
+            if let (Some(ref stored_ip), Some(ref req_ip)) = (&inv.opened_ip, &params.client_ip) {
                 if stored_ip != req_ip {
                     return Err(InvitationError::IpMismatch);
                 }
@@ -311,8 +305,10 @@ impl InvitationStore for InMemoryInvitationStore {
             .map_err(|e| InvitationError::Other(e.to_string()))?;
         let mut count = 0u64;
         for inv in map.values_mut() {
-            if matches!(inv.status, InvitationStatus::Pending | InvitationStatus::Opened)
-                && now > inv.expires_at
+            if matches!(
+                inv.status,
+                InvitationStatus::Pending | InvitationStatus::Opened
+            ) && now > inv.expires_at
             {
                 inv.status = InvitationStatus::Expired;
                 count += 1;
