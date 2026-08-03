@@ -177,8 +177,8 @@ mod tests {
                 totp.verify(&prev_code).unwrap(),
                 "TOTP must accept the previous time-step code (window tolerance ≥ 1)"
             );
-}
-}
+        }
+    }
 
     #[test]
     fn test_hotp_generate_and_verify() {

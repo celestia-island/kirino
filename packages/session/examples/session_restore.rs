@@ -5,7 +5,7 @@
 //!  2. Page refresh → browser sends cookie (may be expired)
 //!  3. Server uses `verify_lenient()` to decode even an expired token
 //!     (note: `jsonwebtoken` has a default 60s leeway; `verify_lenient`
-//!      disables expiry validation entirely, not just the leeway).
+//!     disables expiry validation entirely, not just the leeway).
 //!  4. After identity is confirmed, issue a fresh token pair.
 
 use std::sync::Arc;
@@ -59,7 +59,7 @@ async fn main() {
                 let fresh = manager.sign(&new_claims).unwrap();
                 println!("4. Issued fresh token (1h TTL): {}...", &fresh[..40]);
             }
-        },
+        }
         Err(e) => println!("3. verify_lenient() rejected: {e}"),
     }
 }

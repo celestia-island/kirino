@@ -88,7 +88,7 @@ enum MyPermission {
     UserManage,
 }
 
-impl Permission for MyPermission {
+impl PermissionTrait for MyPermission {
     fn name(&self) -> &str {
         match self {
             Self::DocumentRead => "document:read",

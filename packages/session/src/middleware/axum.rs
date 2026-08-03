@@ -171,17 +171,11 @@ pub enum AuthRejection {
 impl IntoResponse for AuthRejection {
     fn into_response(self) -> Response {
         let (status, msg) = match self {
-            Self::MissingHeader => {
-                (StatusCode::UNAUTHORIZED, "missing credentials")
-            },
-            Self::InvalidFormat => {
-                (StatusCode::UNAUTHORIZED, "invalid credential format")
-            },
+            Self::MissingHeader => (StatusCode::UNAUTHORIZED, "missing credentials"),
+            Self::InvalidFormat => (StatusCode::UNAUTHORIZED, "invalid credential format"),
             Self::Invalid => (StatusCode::UNAUTHORIZED, "invalid token"),
             Self::Expired => (StatusCode::UNAUTHORIZED, "token expired"),
-            Self::MissingManager => {
-                (StatusCode::INTERNAL_SERVER_ERROR, "auth not configured")
-            },
+            Self::MissingManager => (StatusCode::INTERNAL_SERVER_ERROR, "auth not configured"),
         };
         (status, msg).into_response()
     }

@@ -92,8 +92,8 @@ impl WebAuthnVerifier {
         signed_data.extend_from_slice(authenticator_data);
         signed_data.extend_from_slice(&client_data_hash);
 
-        let sig = Signature::from_der(signature)
-            .map_err(|e| anyhow!("invalid DER signature: {}", e))?;
+        let sig =
+            Signature::from_der(signature).map_err(|e| anyhow!("invalid DER signature: {}", e))?;
 
         verifying_key
             .verify(&signed_data, &sig)
@@ -173,8 +173,7 @@ fn cose_to_verifying_key(cose_key_bytes: &[u8]) -> Result<VerifyingKey> {
     encoded.extend_from_slice(&x);
     encoded.extend_from_slice(&y);
 
-    VerifyingKey::from_sec1_bytes(&encoded)
-        .map_err(|e| anyhow!("invalid EC public key: {}", e))
+    VerifyingKey::from_sec1_bytes(&encoded).map_err(|e| anyhow!("invalid EC public key: {}", e))
 }
 
 #[cfg(test)]
@@ -312,7 +311,13 @@ mod tests {
         let client_data = b"{\"type\":\"webauthn.get\"}";
         let sig = make_signed_assertion(&signing_key, auth_data, client_data);
 
-        let result = verifier.verify(b"cred", auth_data, client_data, &sig, MAX_SIGN_COUNT_GAP + 1);
+        let result = verifier.verify(
+            b"cred",
+            auth_data,
+            client_data,
+            &sig,
+            MAX_SIGN_COUNT_GAP + 1,
+        );
         assert!(result.is_err());
     }
 
