@@ -51,26 +51,24 @@ impl PersistentSessionStore for DbSessionStore {
             [id.to_string().into()],
         );
         if let Some(row) = self.conn.query_one_raw(stmt).await? {
-
             let active_roles: Vec<String> = {
                 let raw: String = row.try_get("rbac_sessions", "active_roles")?;
                 serde_json::from_str(&raw).map_err(|e| {
                     anyhow::anyhow!("corrupted active_roles JSON for session {}: {e}", id)
                 })?
             };
-            let context: Option<serde_json::Value> = match row
-                .try_get::<Option<String>>("rbac_sessions", "context")
-            {
-                Ok(Some(s)) => Some(serde_json::from_str(&s).map_err(|e| {
-                    anyhow::anyhow!("corrupted context JSON for session {}: {e}", id)
-                })?),
-                Ok(None) => None,
-                Err(e) => {
-                    tracing::warn!(target: "kirino::database::pg_session",
+            let context: Option<serde_json::Value> =
+                match row.try_get::<Option<String>>("rbac_sessions", "context") {
+                    Ok(Some(s)) => Some(serde_json::from_str(&s).map_err(|e| {
+                        anyhow::anyhow!("corrupted context JSON for session {}: {e}", id)
+                    })?),
+                    Ok(None) => None,
+                    Err(e) => {
+                        tracing::warn!(target: "kirino::database::pg_session",
                         "failed to read context for session {}: {e}", id);
-                    None
-                }
-            };
+                        None
+                    }
+                };
             let expires_at_str = row.try_get::<String>("rbac_sessions", "expires_at")?;
             let expires_at =
                 chrono::DateTime::parse_from_rfc3339(&expires_at_str)?.with_timezone(&chrono::Utc);
@@ -387,5 +385,3 @@ mod tests {
         assert!(store.load_session(expired.id).await.unwrap().is_none());
     }
 }
-
-

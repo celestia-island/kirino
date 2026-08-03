@@ -5,6 +5,6 @@ pub mod types;
 pub use store::{InMemoryInvitationStore, InvitationError, InvitationStore};
 pub use token::generate_token;
 pub use types::{
-    AcceptInvitationParams, CreateInvitationParams, Invitation, InvitationMode,
-    InvitationStatus, OpenInvitationResult,
+    AcceptInvitationParams, CreateInvitationParams, Invitation, InvitationMode, InvitationStatus,
+    OpenInvitationResult,
 };

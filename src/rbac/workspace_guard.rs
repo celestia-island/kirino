@@ -1,4 +1,5 @@
 use anyhow::Result;
+use async_trait::async_trait;
 use std::collections::HashMap;
 use std::fmt::Debug;
 use std::hash::Hash;
@@ -53,6 +54,7 @@ pub trait ScopedPermission: Debug + Clone + Send + Sync + 'static {
 /// The effective permission set is the intersection of:
 /// - Global role permissions (from `Subject::roles()`)
 /// - Workspace role permissions (from the resolution above)
+#[async_trait]
 pub trait WorkspaceStore<S, W>
 where
     S: Debug + Send + Sync,
@@ -60,19 +62,11 @@ where
 {
     /// Direct user → workspace member check.  Returns the workspace role
     /// if the user is a direct member, or `None`.
-    async fn direct_membership(
-        &self,
-        subject: &S,
-        workspace: &W,
-    ) -> Result<Option<WorkspaceRole>>;
+    async fn direct_membership(&self, subject: &S, workspace: &W) -> Result<Option<WorkspaceRole>>;
 
     /// Group → workspace grant check.  Returns the workspace role if any
     /// of the subject's groups has a grant on this workspace.
-    async fn group_grants(
-        &self,
-        subject: &S,
-        workspace: &W,
-    ) -> Result<Option<WorkspaceRole>>;
+    async fn group_grants(&self, subject: &S, workspace: &W) -> Result<Option<WorkspaceRole>>;
 
     /// List all workspace IDs the subject has access to (via direct
     /// membership OR group grants).
@@ -152,11 +146,11 @@ fn role_can<P: ScopedPermission>(role: WorkspaceRole, perm: &P) -> bool {
         WorkspaceRole::Operator => {
             let name = perm.name();
             !name.starts_with("workspace.manage") && !name.starts_with("rbac.")
-        },
+        }
         WorkspaceRole::Viewer => {
             let name = perm.name();
             name.ends_with(".list") || name.ends_with(".read") || name.starts_with("device.list")
-        },
+        }
     }
 }
 
@@ -195,27 +189,20 @@ where
     }
 }
 
+#[async_trait]
 impl<S, W> WorkspaceStore<S, W> for InMemoryWorkspaceStore<S, W>
 where
     S: Debug + Clone + PartialEq + Eq + Hash + Send + Sync,
     W: Debug + Clone + PartialEq + Eq + Hash + Send + Sync,
 {
-    async fn direct_membership(
-        &self,
-        subject: &S,
-        workspace: &W,
-    ) -> Result<Option<WorkspaceRole>> {
+    async fn direct_membership(&self, subject: &S, workspace: &W) -> Result<Option<WorkspaceRole>> {
         Ok(self
             .members
             .get(&(subject.clone(), workspace.clone()))
             .copied())
     }
 
-    async fn group_grants(
-        &self,
-        subject: &S,
-        workspace: &W,
-    ) -> Result<Option<WorkspaceRole>> {
+    async fn group_grants(&self, subject: &S, workspace: &W) -> Result<Option<WorkspaceRole>> {
         Ok(self
             .group_grants
             .get(&(subject.clone(), workspace.clone()))
@@ -224,7 +211,7 @@ where
 
     async fn accessible_workspaces(&self, subject: &S) -> Result<Vec<W>> {
         let mut workspaces = Vec::new();
-        for ((s, w), _) in &self.members {
+        for (s, w) in self.members.keys() {
             if s == subject {
                 workspaces.push(w.clone());
             }
@@ -277,7 +264,10 @@ mod tests {
 
     #[test]
     fn operator_cannot_manage() {
-        assert!(!role_can(WorkspaceRole::Operator, &TestPerm::WorkspaceManage));
+        assert!(!role_can(
+            WorkspaceRole::Operator,
+            &TestPerm::WorkspaceManage
+        ));
     }
 
     #[test]
@@ -297,7 +287,12 @@ mod tests {
 
         let guard = WorkspaceGuard::new(store);
         let has_access = guard
-            .check(&"alice", &TestPerm::AgentCreate, &"ws-1", &["agent.create".into()])
+            .check(
+                &"alice",
+                &TestPerm::AgentCreate,
+                &"ws-1",
+                &["agent.create".into()],
+            )
             .await
             .unwrap();
         assert!(has_access);
@@ -308,7 +303,12 @@ mod tests {
         let store = InMemoryWorkspaceStore::<&str, &str>::new();
         let guard = WorkspaceGuard::new(store);
         let has_access = guard
-            .check(&"bob", &TestPerm::AgentList, &"ws-1", &["agent.list".into()])
+            .check(
+                &"bob",
+                &TestPerm::AgentList,
+                &"ws-1",
+                &["agent.list".into()],
+            )
             .await
             .unwrap();
         assert!(!has_access);

@@ -3,9 +3,9 @@ use chrono::{Duration, Utc};
 use std::collections::HashSet;
 use uuid::Uuid;
 
-use super::{Session, SessionManager};
 #[cfg(feature = "rbac-constraints")]
 use super::validate_dsd_with_store;
+use super::{Session, SessionManager};
 #[cfg(feature = "rbac-constraints")]
 use crate::rbac::constraints::store::ConstraintStore;
 
@@ -216,7 +216,10 @@ where
     }
 
     async fn current_version(&self, subject: &S) -> Result<u64> {
-        let session = self.store.load_session_metadata(subject.subject_id()).await?;
+        let session = self
+            .store
+            .load_session_metadata(subject.subject_id())
+            .await?;
         Ok(session.map(|s| s.version).unwrap_or(0))
     }
 

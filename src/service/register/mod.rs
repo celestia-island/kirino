@@ -4,8 +4,8 @@ mod tests {
     use crate::{
         database::memory::InMemoryUserDatabase,
         rbac::{
-            permission::Permission,
-            store::memory::InMemoryAssignmentStore, subject::StringSubject, traits::AssignmentStore,
+            permission::Permission, store::memory::InMemoryAssignmentStore, subject::StringSubject,
+            traits::AssignmentStore,
         },
         service::login::{build_default_engine, AuthService, LoginRateLimiter},
     };
@@ -106,18 +106,12 @@ mod tests {
 
         let viewer_id = auth.login("viewer", "Password123!").await.unwrap().user_id;
         assert!(
-            auth.check_permission(
-                &viewer_id,
-                &Permission::from_path("agent.read").unwrap(),
-            )
-            .await
+            auth.check_permission(&viewer_id, &Permission::from_path("device.list").unwrap(),)
+                .await
         );
         assert!(
             !auth
-                .check_permission(
-                    &viewer_id,
-                    &Permission::from_path("system.write").unwrap(),
-                )
+                .check_permission(&viewer_id, &Permission::from_path("system.write").unwrap(),)
                 .await
         );
     }
@@ -243,18 +237,12 @@ mod tests {
 
         let uid = user.id.to_string();
         assert!(
-            auth.check_permission(
-                &uid,
-                &Permission::from_path("agent.write").unwrap(),
-            )
-            .await
+            auth.check_permission(&uid, &Permission::from_path("agent.write").unwrap(),)
+                .await
         );
         assert!(
             !auth
-                .check_permission(
-                    &uid,
-                    &Permission::from_path("system.write").unwrap(),
-                )
+                .check_permission(&uid, &Permission::from_path("system.write").unwrap(),)
                 .await
         );
     }
