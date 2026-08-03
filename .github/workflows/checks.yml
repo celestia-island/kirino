@@ -9,6 +9,7 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
+  CARGO_NET_GIT_FETCH_WITH_CLI: true
 
 jobs:
   check:
@@ -19,9 +20,6 @@ jobs:
       contents: read
     steps:
       - uses: actions/checkout@v7
-
-      - name: Clone yuuka (workspace dep)
-        run: git clone --depth 1 https://github.com/celestia-island/yuuka.git ../yuuka
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable

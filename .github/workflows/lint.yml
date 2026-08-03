@@ -8,6 +8,7 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
+  CARGO_NET_GIT_FETCH_WITH_CLI: true
 
 jobs:
   lint:
@@ -18,9 +19,6 @@ jobs:
       contents: read
     steps:
       - uses: actions/checkout@v7
-
-      - name: Clone yuuka (workspace dep)
-        run: git clone --depth 1 https://github.com/celestia-island/yuuka.git ../yuuka
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -44,15 +42,21 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - name: Clone yuuka (workspace dep)
-        run: git clone --depth 1 https://github.com/celestia-island/yuuka.git ../yuuka
-
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
 
       - uses: Swatinem/rust-cache@v2
 
-      - name: Check advisories, licenses and sources
-        uses: EmbarkStudios/cargo-deny-action@v2
-        with:
-          command: check advisories licenses sources
+      # Native cargo-deny on the host: the dockerized action cannot fetch the
+      # git dependencies (no credentials in its container). On the host the
+      # gh credential helper applies.
+      - name: Install cargo-deny
+        run: |
+          curl -fsSL https://github.com/EmbarkStudios/cargo-deny/releases/download/0.20.2/cargo-deny-0.20.2-x86_64-unknown-linux-musl.tar.gz | tar xz -C /tmp
+          echo "/tmp/cargo-deny-0.20.2-x86_64-unknown-linux-musl" >> "$GITHUB_PATH"
+      - name: cargo-deny (advisories)
+        run: cargo deny check advisories
+      - name: cargo-deny (licenses)
+        run: cargo deny check licenses
+      - name: cargo-deny (sources)
+        run: cargo deny check sources
