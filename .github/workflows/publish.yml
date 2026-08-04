@@ -15,7 +15,14 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - name: Clone yuuka (workspace dep)
         run: git clone --depth 1 https://github.com/celestia-island/yuuka.git ../yuuka
-      - uses: Swatinem/rust-cache@v2
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ${{ env.CARGO_HOME }}
+            target/
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.toml') }}
+          restore-keys: ${{ runner.os }}-cargo-
       - run: cargo check -p kirino-session -p kirino -p kirino-macro --lib
       - name: Install celestia-devtools
         run: pip install git+https://github.com/celestia-island/celestia-devtools.git
