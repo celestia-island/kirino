@@ -178,21 +178,6 @@ pub fn leading_zero_bits(hash: &[u8]) -> u32 {
 mod tests {
     use super::*;
 
-    fn solution_seed_passes(challenge: &PowChallenge, seed: &str, bits: u8) -> bool {
-        // Brute-force a counter synchronously against the same contract.
-        let mut counter: u64 = 0;
-        loop {
-            let mut hasher = Sha256::new();
-            hasher.update(seed.as_bytes());
-            hasher.update(counter.to_string().as_bytes());
-            let hash = hasher.finalize();
-            if leading_zero_bits(&hash) >= u32::from(bits) {
-                return counter != u64::MAX;
-            }
-            counter += 1;
-        }
-    }
-
     #[tokio::test]
     async fn issue_and_verify_roundtrip() {
         let challenge = PowChallenge::new();
