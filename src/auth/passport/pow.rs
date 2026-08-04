@@ -110,7 +110,12 @@ impl PowChallenge {
             entries.sort_by_key(|(_, e)| e.issued_at);
             store.extend(entries.into_iter().rev().take(self.cap));
         }
-        store.insert(seed.clone(), SeedEntry { issued_at: Instant::now() });
+        store.insert(
+            seed.clone(),
+            SeedEntry {
+                issued_at: Instant::now(),
+            },
+        );
         Ok(PowChallengeIssued { seed, bits })
     }
 
@@ -210,7 +215,10 @@ mod tests {
             counter += 1;
         }
         let counter = solution.expect("a valid counter within 100k attempts");
-        assert!(challenge.verify(&issued.seed, counter, issued.bits).await.is_ok());
+        assert!(challenge
+            .verify(&issued.seed, counter, issued.bits)
+            .await
+            .is_ok());
 
         // Single-use: the same seed must fail on replay.
         assert_eq!(
@@ -223,7 +231,10 @@ mod tests {
     async fn insufficient_work_is_rejected_and_consumed() {
         let challenge = PowChallenge::new();
         let issued = challenge.issue(DEFAULT_POW_BITS).await.unwrap();
-        let err = challenge.verify(&issued.seed, 0, issued.bits).await.unwrap_err();
+        let err = challenge
+            .verify(&issued.seed, 0, issued.bits)
+            .await
+            .unwrap_err();
         assert_eq!(err, PowError::InsufficientWork);
         // Consumed even on failure.
         assert_eq!(
@@ -237,7 +248,10 @@ mod tests {
         let challenge = PowChallenge::with_limits(Duration::from_millis(1), 100);
         let issued = challenge.issue(8).await.unwrap();
         tokio::time::sleep(Duration::from_millis(5)).await;
-        assert_eq!(challenge.verify(&issued.seed, 0, 8).await, Err(PowError::Expired));
+        assert_eq!(
+            challenge.verify(&issued.seed, 0, 8).await,
+            Err(PowError::Expired)
+        );
     }
 
     #[tokio::test]
