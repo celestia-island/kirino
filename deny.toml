@@ -114,22 +114,28 @@ exceptions = [
 # adding a clarification entry for it allows you to manually specify the
 # licensing information
 [[licenses.clarify]]
-crate = "kirino"
+name = "kirino"
 expression = "LicenseRef-sysl-1.0"
 license-files = [
     { path = "LICENSE", hash = 0x629cea03 },
 ]
 [[licenses.clarify]]
-crate = "kirino-macro"
+name = "kirino-macro"
 expression = "LicenseRef-sysl-1.0"
 license-files = [
     { path = "../../LICENSE", hash = 0x629cea03 },
 ]
 [[licenses.clarify]]
-crate = "yuuka"
+name = "yuuka"
 expression = "LicenseRef-sysl-1.0"
 license-files = [
     { path = "LICENSE", hash = 0x17f544af },
+]
+[[licenses.clarify]]
+name = "kirino-session"
+expression = "LicenseRef-sysl-1.0"
+license-files = [
+    { path = "LICENSE", hash = 0x629cea03 },
 ]
 # The package spec the clarification applies to
 #crate = "ring"
