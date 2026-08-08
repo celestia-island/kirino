@@ -165,7 +165,7 @@ mod tests {
 
     fn make_domain() -> TaskDomain {
         TaskDomain::new(
-            "hydrogen-control",
+            "process-control",
             [ActionCategory::ReadOnly, ActionCategory::StateWrite].into(),
             vec!["/tank/".to_string(), "/valve/".to_string()],
             0.5,
