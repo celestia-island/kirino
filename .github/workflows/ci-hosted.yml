@@ -3,8 +3,9 @@ name: CI (GitHub-hosted)
 on:
   workflow_dispatch:
   push:
-    branches: [master, dev]
+    branches: [master]
   pull_request:
+    types: [opened, reopened, ready_for_review]
 
 env:
   CARGO_TERM_COLOR: always
