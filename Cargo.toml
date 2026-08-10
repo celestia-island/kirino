@@ -54,7 +54,7 @@ zeroize = { version = "^1", features = ["zeroize_derive"] }
 sha2 = "^0.11"
 hex = "^0.4"
 coset = { version = "^0.4", optional = true }
-p256 = { version = "^0.14", features = ["ecdsa"], optional = true }
+p256 = { version = "^0.14", features = ["ecdsa", "getrandom"], optional = true }
 tracing = { version = "^0.1", features = ["log"] }
 sea-orm = { version = "^2.0.0-rc", features = ["sqlx-postgres", "runtime-tokio-rustls"], optional = true }
 
