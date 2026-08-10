@@ -95,10 +95,7 @@ impl TokenManager {
 
     /// Decode a JWT without verifying signature (e.g. for client-side expiry check).
     pub fn decode_unverified(token: &str) -> SessionResult<TokenClaims> {
-        let mut validation = Validation::default();
-        validation.insecure_disable_signature_validation();
-        validation.validate_exp = false;
-        let data = decode::<TokenClaims>(token, &DecodingKey::from_secret(&[]), &validation)?;
+        let data = jsonwebtoken::dangerous::insecure_decode::<TokenClaims>(token)?;
         Ok(data.claims)
     }
 
