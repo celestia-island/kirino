@@ -1,6 +1,6 @@
 use anyhow::Result;
 
-use hmac::{Hmac, Mac};
+use hmac::{Hmac, KeyInit, Mac};
 
 use super::Credential;
 use crate::{error::KirinoError, utils::constant_time_eq};

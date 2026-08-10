@@ -1,7 +1,7 @@
 use anyhow::{anyhow, Result};
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use hmac::{Hmac, Mac};
+use hmac::{Hmac, KeyInit, Mac};
 use sha1::Sha1;
 use zeroize::Zeroizing;
 
