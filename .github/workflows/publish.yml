@@ -16,7 +16,7 @@ jobs:
       - name: Clone yuuka (workspace dep)
         run: git clone --depth 1 https://github.com/celestia-island/yuuka.git ../yuuka
       - name: Cache cargo
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: |
             ~/.cargo
