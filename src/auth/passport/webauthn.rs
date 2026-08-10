@@ -180,10 +180,10 @@ fn cose_to_verifying_key(cose_key_bytes: &[u8]) -> Result<VerifyingKey> {
 mod tests {
     use super::*;
     use p256::ecdsa::{signature::Signer, SigningKey};
-    use rand::rngs::OsRng;
+    use p256::elliptic_curve::Generate;
 
     fn make_real_keypair() -> (SigningKey, Vec<u8>) {
-        let signing_key = SigningKey::random(&mut OsRng);
+        let signing_key = SigningKey::generate();
         let verifying_key_bytes = signing_key.verifying_key().to_sec1_bytes().to_vec();
 
         let x = &verifying_key_bytes[1..33];
