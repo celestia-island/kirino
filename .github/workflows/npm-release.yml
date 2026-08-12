@@ -25,9 +25,20 @@ jobs:
           registry-url: https://registry.npmjs.org/
       - name: Install and build
         run: |
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v6
+        with:
+          version: 11
+
+      - name: Install dependencies
+        run: |
           cd packages/web_ts
-          npm install
-          npm run build
+          pnpm install --frozen-lockfile
+
+      - name: Build
+        run: |
+          cd packages/web_ts
+          pnpm run build
       - name: Resolve version
         id: ver
         shell: bash
@@ -45,6 +56,6 @@ jobs:
       - name: Publish
         run: |
           cd packages/web_ts
-          npm publish --access public --provenance
+          pnpm publish --access public --provenance
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
