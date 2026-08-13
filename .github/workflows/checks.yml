@@ -41,3 +41,7 @@ jobs:
 
       - name: Run tests
         run: cargo test -p kirino-session -p kirino -p kirino-macro
+
+  verify-versions:
+    name: Verify version consistency
+    uses: celestia-island/celestia-devtools/.github/workflows/verify-versions.yml@master
