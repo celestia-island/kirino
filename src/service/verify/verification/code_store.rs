@@ -1,5 +1,5 @@
 use anyhow::Result;
-use rand::Rng;
+use rand::RngExt;
 use std::{collections::HashMap, sync::Arc, time::Duration};
 use tokio::sync::RwLock;
 
@@ -69,8 +69,8 @@ impl VerificationCodeStore {
 }
 
 pub(crate) fn generate_numeric_code(len: usize) -> String {
-    let mut rng = rand::thread_rng();
+    let mut rng = rand::rng();
     (0..len)
-        .map(|_| rng.gen_range(b'0'..=b'9') as char)
+        .map(|_| rng.random_range(b'0'..=b'9') as char)
         .collect()
 }

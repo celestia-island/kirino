@@ -1,5 +1,5 @@
 use anyhow::Result;
-use rand::Rng;
+use rand::RngExt;
 use std::{
     collections::HashMap,
     sync::{
@@ -51,10 +51,10 @@ impl OneTimeCredential {
 
     fn generate_token(len: usize) -> String {
         const CHARSET: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
-        let mut rng = rand::thread_rng();
+        let mut rng = rand::rng();
         (0..len)
             .map(|_| {
-                let idx = rng.gen_range(0..CHARSET.len());
+                let idx = rng.random_range(0..CHARSET.len());
                 char::from(CHARSET[idx])
             })
             .collect()
