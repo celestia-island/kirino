@@ -56,7 +56,7 @@ impl SessionStore {
             ],
         );
         self.db
-            .execute(stmt)
+            .execute_raw(stmt)
             .await
             .map_err(|e| SessionError::Other(format!("session insert: {e}")))?;
         tracing::info!(%session_id, %user_id, "session created");
@@ -72,7 +72,7 @@ impl SessionStore {
         );
         let result = self
             .db
-            .execute(stmt)
+            .execute_raw(stmt)
             .await
             .map_err(|e| SessionError::Other(format!("session revoke: {e}")))?;
         let affected = result.rows_affected() > 0;
@@ -91,7 +91,7 @@ impl SessionStore {
         );
         let result = self
             .db
-            .execute(stmt)
+            .execute_raw(stmt)
             .await
             .map_err(|e| SessionError::Other(format!("session revoke all: {e}")))?;
         let affected = result.rows_affected();
@@ -111,7 +111,7 @@ impl SessionStore {
         );
         let result = self
             .db
-            .query_one(stmt)
+            .query_one_raw(stmt)
             .await
             .map_err(|e| SessionError::Other(format!("session check: {e}")))?;
         Ok(result.is_some())
@@ -129,7 +129,7 @@ impl SessionStore {
         );
         let result = self
             .db
-            .query_one(stmt)
+            .query_one_raw(stmt)
             .await
             .map_err(|e| SessionError::Other(format!("session find: {e}")))?;
         match result {
@@ -157,7 +157,7 @@ impl SessionStore {
         );
         let result = self
             .db
-            .execute(stmt)
+            .execute_raw(stmt)
             .await
             .map_err(|e| SessionError::Other(format!("session prune: {e}")))?;
         let count = result.rows_affected();
