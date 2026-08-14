@@ -1,5 +1,5 @@
 use anyhow::{anyhow, Result};
-use rand::Rng;
+use rand::RngExt;
 use std::{
     collections::HashMap,
     sync::Arc,
@@ -106,9 +106,9 @@ impl CaptchaVerifier {
     }
 
     pub async fn generate_challenge(&self) -> Result<CaptchaChallenge> {
-        let mut rng = rand::thread_rng();
-        let a: u32 = rng.gen_range(1..100);
-        let b: u32 = rng.gen_range(1..100);
+        let mut rng = rand::rng();
+        let a: u32 = rng.random_range(1..100);
+        let b: u32 = rng.random_range(1..100);
         let answer = (a + b).to_string();
         let id = uuid::Uuid::now_v7().to_string();
         let challenge_text = format!("{a} + {b} = ?");

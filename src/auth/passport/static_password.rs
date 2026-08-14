@@ -1,5 +1,5 @@
 use anyhow::{anyhow, Result};
-use rand::rngs::OsRng;
+use rand::RngExt;
 use std::sync::OnceLock;
 
 use argon2::{
@@ -27,7 +27,10 @@ fn argon2_instance() -> &'static Argon2<'static> {
 /// Returns an error if the Argon2 hashing fails (e.g. password exceeds
 /// Argon2's internal limits, which is unlikely in practice).
 pub fn hash_password(password: &str) -> Result<String> {
-    let salt = SaltString::generate(&mut OsRng);
+    let mut salt_bytes = [0u8; 16];
+    rand::rng().fill(&mut salt_bytes);
+    let salt = SaltString::encode_b64(&salt_bytes)
+        .map_err(|e| anyhow!("salt encoding failed: {e}"))?;
     let hash = argon2_instance()
         .hash_password(password.as_bytes(), &salt)
         .map_err(|e| anyhow!("password hash failed: {e}"))?;

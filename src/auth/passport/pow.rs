@@ -15,7 +15,7 @@
 //! typical client solvers) — enough to blunt blind scripting without
 //! affecting real users. Clamp to [4, 32].
 
-use rand::Rng;
+use rand::RngExt;
 use sha2::{Digest, Sha256};
 use std::{
     collections::HashMap,
@@ -99,8 +99,8 @@ impl PowChallenge {
         }
         self.prune().await;
         let seed = {
-            let mut rng = rand::thread_rng();
-            let raw: [u8; 32] = rng.gen();
+            let mut rng = rand::rng();
+            let raw: [u8; 32] = rng.random();
             hex::encode(Sha256::digest(raw))
         };
         let mut store = self.seeds.write().await;

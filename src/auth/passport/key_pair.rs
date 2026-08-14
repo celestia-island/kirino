@@ -1,6 +1,6 @@
 use anyhow::{anyhow, Result};
 use hmac::{Hmac, KeyInit, Mac};
-use rand::Rng;
+use rand::RngExt;
 use zeroize::Zeroizing;
 
 use crate::utils::constant_time_eq;
@@ -26,7 +26,7 @@ pub struct KeyPairVerifier {
 impl KeyPairVerifier {
     #[must_use]
     pub fn new() -> Self {
-        let mut rng = rand::thread_rng();
+        let mut rng = rand::rng();
         let mut key = vec![0u8; SECRET_KEY_LENGTH];
         rng.fill(&mut key[..]);
         Self {
@@ -53,7 +53,7 @@ impl KeyPairVerifier {
     }
 
     pub fn generate_keypair(&self) -> Result<(Vec<u8>, zeroize::Zeroizing<Vec<u8>>)> {
-        let mut rng = rand::thread_rng();
+        let mut rng = rand::rng();
         let mut private_key = zeroize::Zeroizing::new(vec![0u8; PRIVATE_KEY_LENGTH]);
         rng.fill(&mut private_key[..]);
         let public_key = self.derive_public(&private_key)?;
