@@ -23,8 +23,6 @@ jobs:
         with:
           node-version: "22"
           registry-url: https://registry.npmjs.org/
-      - name: Install and build
-        run: |
       - name: Set up pnpm
         uses: pnpm/action-setup@v6
         with:
