@@ -5,4 +5,4 @@ description = "A customizable, zero-trust authentication and authorization frame
 cname = "kirino.docs.celestia.world"
 [languages]
 default = "en"
-order = ["en", "zhs", "zht", "ja", "ko", "fr", "es", "ru", "ar"]
+order = ["en", "zh-Hans", "zh-Hant", "ja", "ko", "fr", "es", "ru", "ar"]
