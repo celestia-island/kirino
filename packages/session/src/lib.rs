@@ -5,6 +5,8 @@
 //! - Session persistence via PostgreSQL (optional `postgres` feature)
 //! - Token refresh mechanism
 //! - Revocation list support
+//! - Accurate online-presence counting for live connections
+//!   ([`presence::PresenceRegistry`])
 //!
 //! # Semantic boundary
 //!
@@ -12,7 +14,9 @@
 //! lifecycle, refresh and revocation. It is deliberately unrelated to the
 //! transport sessions used by JSON-RPC SSE streaming (an id mapped to a
 //! push channel, no identity state) — those live in plana's
-//! `plana::jsonrpc::session`. Do not conflate the two concepts.
+//! `plana::jsonrpc::session`. Do not conflate the two concepts. The
+//! presence registry is likewise transport-owned bookkeeping (which
+//! connections are alive *right now*), not identity state.
 //!
 //! # Example
 //! ```ignore
@@ -30,6 +34,7 @@ mod error;
 mod manager;
 pub mod middleware;
 mod one_shot;
+pub mod presence;
 mod token;
 
 #[cfg(feature = "postgres")]
@@ -39,4 +44,5 @@ pub use config::SessionConfig;
 pub use error::{SessionError, SessionResult};
 pub use manager::TokenManager;
 pub use one_shot::OneShotStore;
+pub use presence::{PresenceLease, PresenceRecord, PresenceRegistry, DEFAULT_IDLE_TIMEOUT};
 pub use token::{TokenClaims, TokenPair, TokenType};
