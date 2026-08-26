@@ -117,9 +117,14 @@ impl WebAuthnChallengeStore {
         user_id: Option<&str>,
     ) -> Result<String, WebAuthnChallengeError> {
         self.prune().await;
-        let mut rng = rand::rng();
-        let raw: [u8; 32] = rng.random();
-        let encoded = base64url_encode(&Sha256::digest(raw));
+        // Scope the thread RNG (ThreadRng is !Send) so it never lives
+        // across an await point — keeps the returned future Send, which
+        // axum-style handlers require.
+        let encoded = {
+            let mut rng = rand::rng();
+            let raw: [u8; 32] = rng.random();
+            base64url_encode(&Sha256::digest(raw))
+        };
         let mut store = self.entries.write().await;
         if store.len() >= self.cap {
             // Evict oldest by issuance.
