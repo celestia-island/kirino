@@ -19,7 +19,10 @@ pub struct ClientData {
     pub typ: String,
     pub challenge: String,
     pub origin: String,
-    #[serde(default)]
+    /// Browsers emit camelCase `crossOrigin`; without the rename serde's
+    /// snake_case matching would silently default this to `false` and make
+    /// the cross-origin rejection dead code on every real payload.
+    #[serde(default, rename = "crossOrigin", alias = "cross_origin")]
     pub cross_origin: bool,
 }
 
@@ -98,6 +101,20 @@ mod tests {
         assert_eq!(cd.challenge, "abc");
         assert_eq!(cd.origin, "https://a.example");
         assert!(!cd.cross_origin);
+    }
+
+    #[test]
+    fn cross_origin_camel_case_is_deserialized() {
+        // Regression: browsers emit camelCase `crossOrigin`; before the
+        // serde rename this silently parsed as false and made the
+        // cross-origin rejection dead code.
+        let bytes = br#"{"type":"webauthn.get","challenge":"abc","origin":"https://a.example","crossOrigin":true}"#;
+        let cd = ClientData::parse(bytes).unwrap();
+        assert!(cd.cross_origin);
+        let err = cd
+            .verify_expectations(TYPE_GET, "abc", &["https://a.example".into()])
+            .unwrap_err();
+        assert!(format!("{err:#}").contains("cross_origin"));
     }
 
     #[test]

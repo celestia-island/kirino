@@ -32,24 +32,41 @@ pub struct AttestedCredential {
     pub backup_state: bool,
 }
 
+impl RegistrationOutputs {
+    /// Initial signCount as embedded in the registration authData (§6.4.1:
+    /// platforms may already use a nonzero counter). Persisting this —
+    /// instead of assuming 0 — keeps roaming authenticators with high
+    /// counters from tripping the assertion gap check.
+    #[must_use]
+    pub fn initial_sign_count(&self) -> u32 {
+        self.sign_count
+    }
+}
+
 /// Outcome of a full registration check. Owns its data — safe to store or
 /// ship across await points / threads by the HTTP layer above kirino.
 pub struct RegistrationOutputs {
-    /// SHA-256 of the RP ID as embedded in the (already validated) authData;
-    /// returned so callers can double-check policy without re-parsing.
+    /// SHA-256 of the RP ID as embedded in the (already validated) authData.
     pub rp_id_hash: [u8; 32],
     pub credential: AttestedCredential,
+    /// Sign counter embedded in the registration authData. Store it —
+    /// starting from 0 is only valid when the authenticator reported 0.
+    pub sign_count: u32,
 }
 
 /// Verify an `attestationObject` under none-policy.
 ///
-/// `client_data` must already have passed
+/// `client_data` must have passed
 /// [`super::client_data::ClientData::verify_expectations`] with
-/// `webauthn.create`; this function only asserts what lives inside the
-/// attestation object itself. `rp_id` is the RP ID this ceremony was issued
-/// for — its SHA-256 **must** equal the authData rpIdHash (§7.1 step 9) or
-/// registration is rejected, so credentials can never be stored under a
-/// foreign RP binding.
+/// `webauthn.create`; its challenge is re-checked here against the
+/// attestation's own authData when extensions bind it, and the pair must
+/// come from the same ceremony response. With `fmt=none` nothing but
+/// authData is signed, so challenge/origin policy remains the caller's —
+/// enforced in kirino only through [`wa::WebAuthnChallengeStore`] wiring.
+///
+/// `rp_id` is the RP ID this ceremony was issued for — its SHA-256 **must**
+/// equal the authData rpIdHash (§7.1 step 9) or registration is rejected,
+/// so credentials can never be stored under a foreign RP binding.
 ///
 /// # Errors
 ///
@@ -97,6 +114,7 @@ pub fn verify_attestation_none(
 
     Ok(RegistrationOutputs {
         rp_id_hash,
+        sign_count: ad.sign_count(),
         credential: AttestedCredential {
             credential_id: attested.credential_id.to_vec(),
             public_key_cose: attested.credential_public_key_cbor.to_vec(),
