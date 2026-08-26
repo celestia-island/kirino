@@ -1,3 +1,16 @@
+//! Legacy standalone assertion verifier (ES256 signature + counter only).
+//!
+//! **Deprecated for new code.** This type predates the full ceremony
+//! verification in [`super::assertion`] and performs a *subset* of the W3C
+//! steps: it does not parse `clientDataJSON`, does not check `rpIdHash`,
+//! flags or authData structure, and trusts the caller-supplied counter.
+//! It is kept because it was part of kirino's published 0.6 surface; new
+//! integrations should use [`super::assertion::verify_assertion`].
+//!
+//! Shared helpers used by the rest of the module (`key_from_cose`,
+//! `validate_supported_key`) live here as well and are re-exported from
+//! the module root.
+
 use anyhow::{anyhow, Result};
 use coset::{CborSerializable, KeyType};
 use p256::ecdsa::{signature::Verifier, Signature, VerifyingKey};
@@ -104,6 +117,36 @@ impl WebAuthnVerifier {
 }
 
 fn cose_to_verifying_key(cose_key_bytes: &[u8]) -> Result<VerifyingKey> {
+    key_from_cose(cose_key_bytes)
+}
+
+/// Parse and policy-check a stored COSE public key (EC2 / ES256 / P-256
+/// only). Shared with the full assertion verifier.
+pub fn key_from_cose(cose_key_bytes: &[u8]) -> Result<VerifyingKey> {
+    cose_to_verifying_key_impl(cose_key_bytes)
+}
+
+/// Reject COSE keys whose algorithms kirino cannot verify during a later
+/// assertion. Called at registration time so bad keys never get stored.
+pub fn validate_supported_key(key: &coset::CoseKey) -> Result<()> {
+    let alg = key
+        .alg
+        .as_ref()
+        .and_then(|a| match a {
+            coset::Algorithm::Assigned(a) => Some(*a),
+            _ => None,
+        })
+        .ok_or_else(|| anyhow!("missing or unassigned algorithm"))?;
+    if alg != coset::iana::Algorithm::ES256 {
+        return Err(anyhow!(
+            "unsupported algorithm: expected ES256, got {}",
+            alg as i64
+        ));
+    }
+    Ok(())
+}
+
+fn cose_to_verifying_key_impl(cose_key_bytes: &[u8]) -> Result<VerifyingKey> {
     let cose_key = coset::CoseKey::from_slice(cose_key_bytes)
         .map_err(|e| anyhow!("invalid COSE key: {}", e))?;
 
