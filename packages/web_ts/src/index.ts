@@ -27,3 +27,5 @@ export function restoreToken(): string | null {
 export function clearToken(): void {
   try { sessionStorage.removeItem(TOKEN_KEY); } catch {}
 }
+
+export * from "./passkey";
