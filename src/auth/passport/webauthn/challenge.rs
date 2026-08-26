@@ -67,6 +67,25 @@ impl Default for WebAuthnChallengeStore {
     }
 }
 
+/// Process-wide challenge store.
+///
+/// HTTP layers typically issue a challenge in one request and consume it in
+/// the next; a shared instance is required for that, and per-`AppState`
+/// storage would force every consumer to plumb another field. Constructing
+/// a private store remains possible (tests do), but embedders should use
+/// this default via [`WebAuthnChallengeStore::shared`].
+static SHARED_CHALLENGES: tokio::sync::OnceCell<WebAuthnChallengeStore> =
+    tokio::sync::OnceCell::const_new();
+
+impl WebAuthnChallengeStore {
+    /// The process-wide store, lazily initialized with default limits.
+    pub async fn shared() -> &'static Self {
+        SHARED_CHALLENGES
+            .get_or_init(|| async { Self::new() })
+            .await
+    }
+}
+
 impl WebAuthnChallengeStore {
     #[must_use]
     pub fn new() -> Self {
