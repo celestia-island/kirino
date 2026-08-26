@@ -178,9 +178,8 @@ impl WebAuthnChallengeStore {
 
 /// RFC 4648 base64url without padding.
 ///
-/// Dependency-free because kirino's `auth-webauthn` feature deliberately
-/// avoids pulling the full `base64` stack just for challenge strings and
-/// short binary fields in JSON payloads.
+/// RFC 4648 base64url **without** padding, exactly the encoding WebAuthn
+/// §4.2 prescribes for `clientDataJSON.challenge` (browsers emit unpadded).
 #[must_use]
 pub fn base64url_encode(bytes: &[u8]) -> String {
     const TABLE: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
@@ -192,25 +191,23 @@ pub fn base64url_encode(bytes: &[u8]) -> String {
         let n = (b0 << 16) | (b1 << 8) | b2;
         out.push(TABLE[(n >> 18 & 63) as usize] as char);
         out.push(TABLE[(n >> 12 & 63) as usize] as char);
-        out.push(if chunk.len() > 1 {
-            TABLE[(n >> 6 & 63) as usize] as char
-        } else {
-            '='
-        });
-        out.push(if chunk.len() > 2 {
-            TABLE[(n & 63) as usize] as char
-        } else {
-            '='
-        });
+        if chunk.len() > 1 {
+            out.push(TABLE[(n >> 6 & 63) as usize] as char);
+        }
+        if chunk.len() > 2 {
+            out.push(TABLE[(n & 63) as usize] as char);
+        }
     }
     out
 }
 
-/// Decode RFC 4648 base64url; padding tolerated but not required.
+/// Decode RFC 4648 base64url; trailing `=` tolerated but never required,
+/// impossible lengths (`len % 4 == 1`) and non-canonical trailing bits
+/// rejected so bytes decoded from equal-length encodings stay unique.
 ///
 /// # Errors
 ///
-/// Errors on non-alphabet characters or impossible lengths.
+/// [`WebAuthnChallengeError::NotFound`] on any malformed input.
 pub fn base64url_decode(s: &str) -> Result<Vec<u8>, WebAuthnChallengeError> {
     fn val(c: u8) -> Option<u32> {
         match c {
@@ -222,17 +219,24 @@ pub fn base64url_decode(s: &str) -> Result<Vec<u8>, WebAuthnChallengeError> {
             _ => None,
         }
     }
+    if s.len() % 4 == 1 {
+        return Err(WebAuthnChallengeError::NotFound);
+    }
     let s = s.trim_end_matches('=');
     let mut out = Vec::with_capacity(s.len() * 3 / 4 + 3);
     let mut acc: u32 = 0;
     let mut bits: u32 = 0;
-    for &c in s.as_bytes() {
+    for (i, &c) in s.as_bytes().iter().enumerate() {
         let v = val(c).ok_or(WebAuthnChallengeError::NotFound)?;
         acc = (acc << 6) | v;
         bits += 6;
         if bits >= 8 {
             bits -= 8;
             out.push(((acc >> bits) & 0xff) as u8);
+        }
+        // Canonical tail: leftover pad bits after the final byte must be 0.
+        if i == s.len() - 1 && bits > 0 && (acc & ((1 << bits) - 1)) != 0 {
+            return Err(WebAuthnChallengeError::NotFound);
         }
     }
     Ok(out)
@@ -311,12 +315,13 @@ mod tests {
 
     #[test]
     fn base64url_roundtrip_known_vectors() {
+        // Unpadded per WebAuthn §4.2.
         assert_eq!(base64url_encode(b""), "");
-        assert_eq!(base64url_encode(b"f"), "Zg==");
-        assert_eq!(base64url_encode(b"fo"), "Zm8=");
+        assert_eq!(base64url_encode(b"f"), "Zg");
+        assert_eq!(base64url_encode(b"fo"), "Zm8");
         assert_eq!(base64url_encode(b"foo"), "Zm9v");
-        assert_eq!(base64url_encode(b"foob"), "Zm9vYg==");
-        assert_eq!(base64url_encode(&[0xfb, 0xff]), "-_8=");
+        assert_eq!(base64url_encode(b"foob"), "Zm9vYg");
+        assert_eq!(base64url_encode(&[0xfb, 0xff]), "-_8");
         for case in [b"".as_slice(), b"a", b"ab", b"abc", b"\x00\xff\x10\x20"] {
             assert_eq!(
                 base64url_decode(&base64url_encode(case)).unwrap(),
@@ -327,8 +332,33 @@ mod tests {
     }
 
     #[test]
-    fn base64url_decode_without_padding() {
-        assert_eq!(base64url_decode("Zm9v").unwrap(), b"foo");
-        assert_eq!(base64url_decode("Zm8=").unwrap(), b"fo");
+    fn issued_challenges_are_unpadded_and_urlsafe() {
+        // Regression: a padded challenge can never match the browser's
+        // unpadded clientDataJSON.challenge string.
+        for _ in 0..8 {
+            let c = futures_lite_block_on(
+                WebAuthnChallengeStore::new().issue(ChallengePurpose::Authenticate, None),
+            )
+            .unwrap();
+            assert!(!c.contains('='), "challenge {c} must be unpadded");
+            assert!(!c.contains('+') && !c.contains('/'), "{c} not url-safe");
+        }
+    }
+
+    #[test]
+    fn base64url_decode_rejects_malformed() {
+        assert!(base64url_decode("A").is_err()); // len % 4 == 1
+        assert!(base64url_decode("Zm9=").is_err()); // non-canonical trailing bits
+        assert!(base64url_decode("Zm$v").is_err()); // alphabet violation
+        assert_eq!(base64url_decode("Zg==").unwrap(), b"f"); // padding tolerated
+    }
+
+    /// Tiny block-on helper so codec tests don't need the tokio runtime.
+    fn futures_lite_block_on<F: std::future::Future>(fut: F) -> F::Output {
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("test runtime")
+            .block_on(fut)
     }
 }

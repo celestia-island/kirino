@@ -93,6 +93,10 @@ impl<'a> AuthenticatorData<'a> {
             cursor += AAGUID_LEN;
 
             let cred_len = usize::from(u16::from_be_bytes([raw[cursor], raw[cursor + 1]]));
+            // L2 §6.4.1: length must be 1..=1023; 2048 is our policy bound.
+            if cred_len == 0 {
+                return Err(anyhow!("credential id must not be empty"));
+            }
             if cred_len > MAX_CREDENTIAL_ID_LEN {
                 return Err(anyhow!("credential id length {cred_len} exceeds limit"));
             }
@@ -127,9 +131,8 @@ impl<'a> AuthenticatorData<'a> {
         if flags & FLAG_ED != 0 {
             // Extensions are a CBOR map; require it to be well-formed so we
             // never mistake trailing padding for signed content.
-            let _ = cbor_item_slice(&raw[cursor..])
+            cursor += cbor_item_len(&raw[cursor..])
                 .ok_or_else(|| anyhow!("extension data CBOR truncated"))?;
-            cursor += cbor_item_len(&raw[cursor..]).unwrap_or(raw.len() - cursor);
         }
 
         if cursor != raw.len() {
@@ -204,18 +207,24 @@ impl<'a> AuthenticatorData<'a> {
     }
 }
 
-/// Return the byte slice occupied by the first complete CBOR item in `input`.
-fn cbor_item_slice(input: &[u8]) -> Option<&[u8]> {
-    let len = cbor_item_len(input)?;
-    input.get(..len)
-}
+/// Maximum CBOR nesting depth we walk. Real COSE keys are flat maps; the
+/// cap turns crafted deeply-nested payloads into a clean parse error
+/// instead of a stack overflow on attacker-controlled input.
+const MAX_CBOR_DEPTH: usize = 32;
 
 /// Measure the first CBOR item's encoded length, header included.
 ///
 /// Supports exactly what COSE keys use: unsigned/negative ints, byte/text
 /// strings, arrays and maps (definite lengths only — indefinite encoding is
-/// not allowed inside COSE_KEY structures).
+/// not allowed inside COSE_KEY structures), plus tags wrapping one item.
 pub(crate) fn cbor_item_len(input: &[u8]) -> Option<usize> {
+    cbor_item_len_depth(input, 0)
+}
+
+fn cbor_item_len_depth(input: &[u8], depth: usize) -> Option<usize> {
+    if depth > MAX_CBOR_DEPTH {
+        return None;
+    }
     let (&first, rest) = input.split_first()?;
     let major = first >> 5;
     let info = first & 0b0001_1111;
@@ -239,30 +248,42 @@ pub(crate) fn cbor_item_len(input: &[u8]) -> Option<usize> {
     };
 
     let (hdr_extra, value) = arg(info, rest)?;
-    let payload_start = 1 + hdr_extra;
+    let payload_start = 1usize + hdr_extra;
+    // Reject claimed sizes that overrun the input outright (also guards the
+    // usize cast of a u64 length below).
+    if value > input.len() as u64 && matches!(major, 2 | 3) {
+        return None;
+    }
 
     let total = match major {
         0 | 1 | 7 => payload_start, // ints / simple values carry no payload
-        2 | 3 => payload_start + value as usize, // byte / text strings
-        4 | 6 => {
-            // Arrays / tags: sum of contained items.
+        2 | 3 => payload_start.checked_add(value as usize)?, // byte / text strings
+        4 => {
+            // Arrays: sum of contained items.
             let mut consumed = payload_start;
             for _ in 0..value {
-                consumed += cbor_item_len(input.get(consumed..)?)?;
+                consumed += cbor_item_len_depth(input.get(consumed..)?, depth + 1)?;
             }
             consumed
+        }
+        6 => {
+            // Tags wrap exactly one item.
+            payload_start + cbor_item_len_depth(rest.get(hdr_extra..)?, depth + 1)?
         }
         5 => {
             // Map: each pair contributes two items.
             let mut consumed = payload_start;
             for _ in 0..value {
-                consumed += cbor_item_len(input.get(consumed..)?)?;
-                consumed += cbor_item_len(input.get(consumed..)?)?;
+                consumed += cbor_item_len_depth(input.get(consumed..)?, depth + 1)?;
+                consumed += cbor_item_len_depth(input.get(consumed..)?, depth + 1)?;
             }
             consumed
         }
         _ => return None,
     };
+    if total > input.len() {
+        return None;
+    }
     Some(total)
 }
 
@@ -319,5 +340,28 @@ mod tests {
     fn cbor_len_rejects_indefinite() {
         // Indefinite-length map start byte 0xBF.
         assert_eq!(cbor_item_len(&[0xbf]), None);
+    }
+
+    #[test]
+    fn cbor_len_survives_deep_nesting() {
+        // 100k nested arrays (0x81 0x00...) used to recurse unbounded and
+        // smash the stack on attacker input; must now be a clean None.
+        let mut deep = vec![0x81u8; 100_000];
+        deep.push(0x00);
+        assert_eq!(cbor_item_len(&deep), None);
+    }
+
+    #[test]
+    fn cbor_len_rejects_overruning_string_lengths() {
+        // bstr claiming u32::MAX bytes in a 4-byte buffer.
+        assert_eq!(cbor_item_len(&[0x5a, 0xff, 0xff, 0xff, 0xff, 0x00]), None);
+    }
+
+    #[test]
+    fn zero_length_credential_id_rejected() {
+        let mut raw = header_bytes(FLAG_UP | FLAG_AT, 0, "celestia.world");
+        raw.extend_from_slice(&[0u8; 16]); // AAGUID
+        raw.extend_from_slice(&0u16.to_be_bytes()); // credLen = 0
+        assert!(AuthenticatorData::parse(&raw).is_err());
     }
 }

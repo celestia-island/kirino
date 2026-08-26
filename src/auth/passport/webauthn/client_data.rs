@@ -34,7 +34,8 @@ impl ClientData {
     }
 
     /// Enforce ceremony expectations: exact type match, challenge equality
-    /// (base64url, case-sensitive), same-origin, no cross-origin flag.
+    /// (decoded-byte compare, padding-tolerant), same-origin (ASCII
+    /// case-insensitive per RFC 6454 serialization), no cross-origin flag.
     ///
     /// # Errors
     ///
@@ -45,19 +46,34 @@ impl ClientData {
         expected_challenge_b64: &str,
         allowed_origins: &[String],
     ) -> Result<()> {
+        use super::challenge::base64url_decode;
+
         if self.typ != expected_type {
             return Err(anyhow!(
                 "clientData type mismatch: expected {expected_type}, got {}",
                 self.typ
             ));
         }
-        if self.challenge != expected_challenge_b64 {
+        // Byte-wise compare so unpadded/padded serializations of the same
+        // challenge bytes both match; browsers emit unpadded per §4.2.
+        let issued = base64url_decode(expected_challenge_b64)
+            .map_err(|_| anyhow!("issued challenge is not valid base64url"))?;
+        let presented = base64url_decode(&self.challenge)
+            .map_err(|_| anyhow!("presented challenge is not valid base64url"))?;
+        if !crate::utils::constant_time_eq(&issued, &presented) {
             return Err(anyhow!("clientData challenge mismatch"));
         }
         if self.cross_origin {
             return Err(anyhow!("cross_origin ceremonies are not accepted"));
         }
-        if !allowed_origins.iter().any(|o| o == &self.origin) {
+        // Origins serialize lowercase; normalize both sides to stay
+        // forgiving of uppercase config entries (the values are public —
+        // a non-constant-time compare is fine).
+        let origin = self.origin.to_ascii_lowercase();
+        if !allowed_origins
+            .iter()
+            .any(|o| o.to_ascii_lowercase() == origin)
+        {
             return Err(anyhow!("origin {:?} not in allowlist", self.origin));
         }
         Ok(())

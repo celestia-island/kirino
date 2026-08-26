@@ -17,17 +17,16 @@
 
 pub mod assertion;
 pub mod assertion_legacy;
+pub mod attestation;
 pub mod auth_data;
 pub mod challenge;
 pub mod client_data;
 
-#[cfg(feature = "auth-webauthn")]
-pub mod attestation;
-
+// The parent module (`passport::webauthn`) is already gated on the
+// `auth-webauthn` feature, so everything below is uniformly feature-gated
+// from there — no per-item cfg attributes.
 pub use assertion::{verify_assertion, AssertionExpectations, AssertionOutcome};
-#[cfg(feature = "auth-webauthn")]
 pub use assertion_legacy::{key_from_cose, validate_supported_key, WebAuthnVerifier};
-#[cfg(feature = "auth-webauthn")]
 pub use attestation::{verify_attestation_none, AttestedCredential, RegistrationOutputs};
 pub use auth_data::AuthenticatorData;
 pub use challenge::{
@@ -108,13 +107,18 @@ mod tests {
         }
         let att_obj = serialize_cbor_value(&map);
 
-        let outputs = attestation::verify_attestation_none(&att_obj, &cd_create)
+        let outputs = attestation::verify_attestation_none(&att_obj, &cd_create, rp_id)
             .expect("registration verifies");
         assert_eq!(outputs.credential.credential_id, credential_id);
         assert_eq!(outputs.credential.public_key_cose, cose_bytes);
         assert_eq!(
             outputs.rp_id_hash,
             Sha256::digest(rp_id.as_bytes()).as_slice()
+        );
+
+        // Registration bound to a foreign RP ID must be rejected outright.
+        assert!(
+            attestation::verify_attestation_none(&att_obj, &cd_create, "evil.example").is_err()
         );
 
         // --- assertion (login) ------------------------------------------
@@ -129,6 +133,7 @@ mod tests {
         let signature: p256::ecdsa::Signature = signing_key.sign(&sig_input);
 
         let expectations = AssertionExpectations {
+            rp_id: rp_id.to_string(),
             challenge_b64: challenge.to_string(),
             allowed_origins: vec![origin.to_string()],
             require_user_verification: false,

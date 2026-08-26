@@ -46,16 +46,23 @@ pub struct RegistrationOutputs {
 /// `client_data` must already have passed
 /// [`super::client_data::ClientData::verify_expectations`] with
 /// `webauthn.create`; this function only asserts what lives inside the
-/// attestation object itself.
+/// attestation object itself. `rp_id` is the RP ID this ceremony was issued
+/// for — its SHA-256 **must** equal the authData rpIdHash (§7.1 step 9) or
+/// registration is rejected, so credentials can never be stored under a
+/// foreign RP binding.
 ///
 /// # Errors
 ///
 /// Errors on malformed CBOR, non-`none` formats, non-empty statements,
-/// missing AT flag/credential data, or unsupported key material.
+/// rpIdHash mismatch, missing AT flag/credential data, or unsupported key
+/// material.
 pub fn verify_attestation_none(
     attestation_object: &[u8],
     _client_data: &super::client_data::ClientData,
+    rp_id: &str,
 ) -> Result<RegistrationOutputs> {
+    use sha2::{Digest, Sha256};
+
     let (fmt, auth_data_bytes) = parse_attestation_object(attestation_object)?;
     if fmt != "none" {
         return Err(anyhow!(
@@ -66,6 +73,11 @@ pub fn verify_attestation_none(
     let ad = AuthenticatorData::parse(&auth_data_bytes)?;
     if !ad.user_present() {
         return Err(anyhow!("UP flag not set at registration"));
+    }
+    // §7.1 step 9 — enforced, not merely returned.
+    let expected_hash = Sha256::digest(rp_id.as_bytes());
+    if ad.rp_id_hash() != expected_hash.as_slice() {
+        return Err(anyhow!("rpIdHash mismatch for RP {rp_id:?}"));
     }
     if ad.flags() & FLAG_AT == 0 || ad.attested_credential_data().is_none() {
         return Err(anyhow!("AT flag not set or credential data missing"));
