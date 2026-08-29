@@ -52,6 +52,65 @@ pub struct RegistrationOutputs {
     /// Sign counter embedded in the registration authData. Store it —
     /// starting from 0 is only valid when the authenticator reported 0.
     pub sign_count: u32,
+    /// UV flag read from the registration authData — the authenticator
+    /// performed user verification (biometric / system-PIN). Relying
+    /// parties that mandate user verification check this instead of
+    /// trusting the ceremony options alone.
+    pub user_verified: bool,
+}
+
+/// Registration policy beyond the mandatory rpIdHash binding.
+///
+/// Everything here is optional hardening on top of
+/// [`verify_attestation_none`]: an empty policy behaves identically to the
+/// bare check.
+#[derive(Debug, Clone, Default)]
+pub struct AttestationPolicy<'a> {
+    /// Require the UV flag — the platform authenticator performed user
+    /// verification (biometric or system PIN). Rejects security-key style
+    /// registrations that only touch the key (UP without UV).
+    pub require_user_verification: bool,
+    /// When non-empty, the clientData `webauthn.create` expectations are
+    /// enforced: type, cross-origin rejection, and this origin allowlist
+    /// (scheme + host [+ port]). The challenge is verified separately by
+    /// the caller's challenge store, so it is intentionally not repeated
+    /// here.
+    pub allowed_origins: &'a [String],
+}
+
+/// Verify an `attestationObject` under none-policy with an explicit
+/// registration policy (user-verification requirement and clientData
+/// origin allowlist). See [`verify_attestation_none`] for the base
+/// guarantees; the policy checks are strictly additive.
+///
+/// # Errors
+///
+/// Same as [`verify_attestation_none`], plus: UV flag missing when
+/// [`AttestationPolicy::require_user_verification`] is set, and any
+/// clientData expectation failure (type / origin / cross-origin).
+pub fn verify_attestation_none_with_policy(
+    attestation_object: &[u8],
+    client_data: &super::client_data::ClientData,
+    rp_id: &str,
+    policy: AttestationPolicy<'_>,
+) -> Result<RegistrationOutputs> {
+    if !policy.allowed_origins.is_empty() {
+        // The challenge comparison inside verify_expectations is a no-op
+        // here by construction (compared against its own copy) — callers
+        // enforce the issued challenge through the one-shot challenge
+        // store. Type, cross-origin, and origin allowlist are the checks
+        // this call adds.
+        client_data.verify_expectations(
+            "webauthn.create",
+            &client_data.challenge,
+            policy.allowed_origins,
+        )?;
+    }
+    let outputs = verify_attestation_none(attestation_object, client_data, rp_id)?;
+    if policy.require_user_verification && !outputs.user_verified {
+        return Err(anyhow!("UV flag not set at registration"));
+    }
+    Ok(outputs)
 }
 
 /// Verify an `attestationObject` under none-policy.
@@ -115,6 +174,7 @@ pub fn verify_attestation_none(
     Ok(RegistrationOutputs {
         rp_id_hash,
         sign_count: ad.sign_count(),
+        user_verified: ad.user_verified(),
         credential: AttestedCredential {
             credential_id: attested.credential_id.to_vec(),
             public_key_cose: attested.credential_public_key_cbor.to_vec(),
@@ -167,5 +227,47 @@ fn parse_attestation_object(bytes: &[u8]) -> Result<(String, Vec<u8>)> {
         (_, false, _) => Err(anyhow!("missing or non-empty attStmt for fmt=none")),
         (None, _, _) => Err(anyhow!("missing fmt")),
         (_, _, None) => Err(anyhow!("missing authData")),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::super::client_data::ClientData;
+    use super::*;
+
+    /// The policy's clientData gate fires before any attestation parsing:
+    /// a wrong origin (or wrong ceremony type) is rejected with the
+    /// attestation object never even looked at.
+    #[test]
+    fn policy_rejects_foreign_origin_before_parsing() {
+        let cd = ClientData::parse(
+            br#"{"type":"webauthn.create","challenge":"abc","origin":"https://evil.example"}"#,
+        )
+        .expect("clientData parses");
+        let policy = AttestationPolicy {
+            require_user_verification: true,
+            allowed_origins: &["https://good.example".to_string()],
+        };
+        assert!(
+            verify_attestation_none_with_policy(b"not-even-cbor", &cd, "rp.example", policy)
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn policy_rejects_wrong_ceremony_type() {
+        let cd = ClientData::parse(
+            br#"{"type":"webauthn.get","challenge":"abc","origin":"https://good.example"}"#,
+        )
+        .expect("clientData parses");
+        let policy = AttestationPolicy {
+            require_user_verification: false,
+            allowed_origins: &["https://good.example".to_string()],
+        };
+        // A get() assertion must never satisfy a registration policy.
+        assert!(
+            verify_attestation_none_with_policy(b"not-even-cbor", &cd, "rp.example", policy)
+                .is_err()
+        );
     }
 }

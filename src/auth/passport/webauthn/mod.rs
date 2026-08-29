@@ -27,7 +27,10 @@ pub mod client_data;
 // from there — no per-item cfg attributes.
 pub use assertion::{verify_assertion, AssertionExpectations, AssertionOutcome};
 pub use assertion_legacy::{key_from_cose, validate_supported_key, WebAuthnVerifier};
-pub use attestation::{verify_attestation_none, AttestedCredential, RegistrationOutputs};
+pub use attestation::{
+    verify_attestation_none, verify_attestation_none_with_policy, AttestationPolicy,
+    AttestedCredential, RegistrationOutputs,
+};
 pub use auth_data::AuthenticatorData;
 pub use challenge::{
     base64url_decode, base64url_encode, ChallengePurpose, WebAuthnChallengeError,
