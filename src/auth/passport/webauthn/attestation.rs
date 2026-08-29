@@ -248,8 +248,10 @@ mod tests {
             require_user_verification: true,
             allowed_origins: &["https://good.example".to_string()],
         };
-        assert!(verify_attestation_none_with_policy(b"not-even-cbor", &cd, "rp.example", policy)
-            .is_err());
+        assert!(
+            verify_attestation_none_with_policy(b"not-even-cbor", &cd, "rp.example", policy)
+                .is_err()
+        );
     }
 
     #[test]
@@ -263,7 +265,9 @@ mod tests {
             allowed_origins: &["https://good.example".to_string()],
         };
         // A get() assertion must never satisfy a registration policy.
-        assert!(verify_attestation_none_with_policy(b"not-even-cbor", &cd, "rp.example", policy)
-            .is_err());
+        assert!(
+            verify_attestation_none_with_policy(b"not-even-cbor", &cd, "rp.example", policy)
+                .is_err()
+        );
     }
 }
