@@ -3,6 +3,10 @@ Cargo.lock
 
 dist/
 node_modules/
+# Worktree post-checkout hooks link node_modules as a SYMLINK; the
+# trailing-slash form above only matches real directories, so this
+# extensionless form keeps the linked dirs out of `git add .` too.
+node_modules
 
 # Editor / OS cruft
 *.swp
