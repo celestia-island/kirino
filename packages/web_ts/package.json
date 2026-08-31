@@ -1,6 +1,6 @@
 {
   "name": "@celestia-island/kirino",
-  "version": "0.6.4",
+  "version": "0.6.5",
   "description": "Client-side auth utilities for kirino \u2014 JWT validation, session storage fallback, auth-lost handling",
   "type": "module",
   "main": "./dist/index.js",
@@ -15,7 +15,7 @@
     "dist"
   ],
   "scripts": {
-    "build": "tsc",
+    "build": "tsc && node scripts/fix-esm-extensions.mjs",
     "prepublishOnly": "npm run build",
     "test": "vitest run"
   },
