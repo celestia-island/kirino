@@ -35,7 +35,6 @@ jobs:
         uses: actions/cache@v6
         with:
           path: |
-            ~/.cargo
             target/
           key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.toml') }}
           restore-keys: ${{ runner.os }}-cargo-
