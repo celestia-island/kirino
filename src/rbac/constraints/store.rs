@@ -8,43 +8,34 @@ use super::policies::{
 
 #[async_trait]
 pub trait ConstraintStore: Send + Sync {
-    #[must_use]
     async fn list_ssd_policies(&self) -> Result<Vec<SsdPolicy>>;
     async fn add_ssd_policy(&self, policy: SsdPolicy) -> Result<()>;
     async fn remove_ssd_policy(&self, name: &str) -> Result<bool>;
 
-    #[must_use]
     async fn list_dsd_policies(&self) -> Result<Vec<DsdPolicy>>;
     async fn add_dsd_policy(&self, policy: DsdPolicy) -> Result<()>;
     async fn remove_dsd_policy(&self, name: &str) -> Result<bool>;
 
-    #[must_use]
     async fn list_cardinality_constraints(&self) -> Result<Vec<CardinalityConstraint>>;
     async fn add_cardinality_constraint(&self, constraint: CardinalityConstraint) -> Result<()>;
     async fn remove_cardinality_constraint(&self, role_name: &str) -> Result<bool>;
 
-    #[must_use]
     async fn list_prerequisite_constraints(&self) -> Result<Vec<PrerequisiteConstraint>>;
     async fn add_prerequisite_constraint(&self, constraint: PrerequisiteConstraint) -> Result<()>;
     /// Removes **all** prerequisite constraints for the given role.
-    #[must_use]
     async fn remove_prerequisite_constraint(&self, role_name: &str) -> Result<bool>;
     /// Removes a specific prerequisite constraint matching `(role_name, requires)`.
-    #[must_use]
     async fn remove_prerequisite_constraint_for(
         &self,
         role_name: &str,
         requires: &str,
     ) -> Result<bool>;
 
-    #[must_use]
     async fn list_temporal_constraints(&self) -> Result<Vec<TemporalConstraint>>;
     async fn add_temporal_constraint(&self, constraint: TemporalConstraint) -> Result<()>;
     /// Removes **all** temporal constraints for the given role.
-    #[must_use]
     async fn remove_temporal_constraint(&self, role_name: &str) -> Result<bool>;
     /// Removes a specific temporal constraint by index position.
-    #[must_use]
     async fn remove_temporal_constraint_for(
         &self,
         role_name: &str,
