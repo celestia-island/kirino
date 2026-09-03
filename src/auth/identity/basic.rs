@@ -20,13 +20,9 @@ fn identity_id(identity: &Identity) -> Uuid {
 #[async_trait]
 pub trait IdentityProvider: Send + Sync {
     async fn create(&self, record: IdentityRecord) -> Result<()>;
-    #[must_use]
     async fn get(&self, id: Uuid) -> Result<Option<IdentityRecord>>;
-    #[must_use]
     async fn find_by_username(&self, username: &str) -> Result<Option<IdentityRecord>>;
-    #[must_use]
     async fn delete(&self, id: Uuid) -> Result<bool>;
-    #[must_use]
     async fn list(&self) -> Result<Vec<IdentityRecord>>;
 }
 

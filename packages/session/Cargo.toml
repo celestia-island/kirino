@@ -9,6 +9,9 @@ repository = "https://github.com/celestia-island/kirino"
 documentation = "https://docs.rs/kirino-session"
 keywords = ["session", "jwt", "authentication", "kirino"]
 
+[lints]
+workspace = true
+
 [dependencies]
 serde = { version = "^1", features = ["derive"] }
 serde_json = "^1"

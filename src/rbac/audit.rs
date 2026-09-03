@@ -163,9 +163,7 @@ pub struct AuditAlert {
 #[async_trait::async_trait]
 pub trait AuditSink: Send + Sync {
     async fn append(&self, entry: AuditEntry);
-    #[must_use]
     async fn query(&self, filter: &AuditFilter) -> Vec<AuditEntry>;
-    #[must_use]
     async fn count(&self, filter: &AuditFilter) -> u64;
 }
 
@@ -182,18 +180,14 @@ pub struct AuditFilter {
 
 #[async_trait::async_trait]
 pub trait AuditPolicyEngine: Send + Sync {
-    #[must_use]
     async fn evaluate(&self, entry: &AuditEntry) -> Vec<AuditAlert>;
     async fn add_rule(&self, rule: AuditRule);
-    #[must_use]
     async fn remove_rule(&self, rule_id: &str) -> Result<bool>;
-    #[must_use]
     async fn list_rules(&self) -> Vec<AuditRule>;
 }
 
 #[async_trait::async_trait]
 pub trait AuditAnalyzer: Send + Sync {
-    #[must_use]
     async fn analyze(&self, entries: &[AuditEntry]) -> AuditAnalysisResult;
 }
 

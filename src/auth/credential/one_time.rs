@@ -115,9 +115,7 @@ impl Default for InMemoryOneTimeStore {
 
 #[async_trait]
 pub trait OneTimeStore: Send + Sync {
-    #[must_use]
     async fn claim(&self, token: &str) -> Result<bool>;
-    #[must_use]
     async fn issue(&self, ttl_secs: u64) -> Result<String>;
 }
 
