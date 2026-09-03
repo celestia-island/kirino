@@ -3,6 +3,7 @@ use uuid::Uuid;
 
 use crate::config::SessionConfig;
 use crate::error::{SessionError, SessionResult};
+use crate::revocation::RefreshRevocationStore;
 use crate::token::{TokenClaims, TokenPair, TokenType};
 
 /// Core JWT token manager — stateless sign/verify with shared secret.
@@ -99,15 +100,70 @@ impl TokenManager {
         Ok(data.claims)
     }
 
-    /// Refresh an access token using a valid refresh token.
-    /// Returns a new token pair and invalidates the old refresh token.
-    pub fn refresh(&self, refresh_token: &str) -> SessionResult<TokenPair> {
+    /// Validate a refresh token: signature check, expected token type, and
+    /// a parseable user id in `sub`. Returns the user id and the full claims.
+    fn verify_refresh_claims(&self, refresh_token: &str) -> SessionResult<(Uuid, TokenClaims)> {
         let claims = self.verify(refresh_token)?;
         if claims.token_type != TokenType::Refresh {
             return Err(SessionError::InvalidToken("expected refresh token".into()));
         }
         let user_id = Uuid::parse_str(&claims.sub)
             .map_err(|_| SessionError::InvalidToken("invalid user id in token".into()))?;
+        Ok((user_id, claims))
+    }
+
+    /// Refresh an access token using a valid refresh token.
+    ///
+    /// Returns a new token pair for the same user. **This method does not
+    /// revoke the old refresh token**: the presented token stays valid until
+    /// it expires naturally, so the same refresh token may be used more than
+    /// once. Callers that need one-time-use rotation semantics (replay
+    /// detection) must use [`TokenManager::refresh_rotating`] together with
+    /// a [`RefreshRevocationStore`]. Do not mix the two paths on the same
+    /// token population: every refresh that goes through this method
+    /// bypasses the store's reuse detection entirely.
+    pub fn refresh(&self, refresh_token: &str) -> SessionResult<TokenPair> {
+        let (user_id, claims) = self.verify_refresh_claims(refresh_token)?;
+        self.issue_pair(user_id, claims.username, claims.roles)
+    }
+
+    /// Refresh with one-time-use rotation backed by a revocation store.
+    ///
+    /// Semantics:
+    /// - The presented refresh token must verify and carry a session id
+    ///   (`sid`, set by `TokenClaims::with_session` when the pair was
+    ///   issued); a refresh token without one is rejected.
+    /// - If the store already records the `sid` inside the rejection
+    ///   window (refresh TTL plus verify leeway — see
+    ///   [`RefreshRevocationStore`]), the token was used for rotation
+    ///   before and is rejected with [`SessionError::Revoked`]. That is
+    ///   the reuse-detection signal: a refresh token must only ever be
+    ///   presented once, so a second presentation means the token was
+    ///   copied/stolen and both holders should be forced back to full
+    ///   re-authentication.
+    /// - The reuse check and the revocation bookkeeping happen in one
+    ///   atomic step (`RefreshRevocationStore::check_and_revoke`), and the
+    ///   `sid` is recorded **before** the new pair is issued. If issuance
+    ///   then fails, the old refresh token is already dead and the user
+    ///   must log in again; this deliberately trades a re-login for
+    ///   closing the window in which the same token could be replayed.
+    ///
+    /// Revocation entries only need to live for the refresh-TTL window
+    /// plus the verify-leeway grace — see [`RefreshRevocationStore`] for
+    /// why, and for the in-memory (single-process) scope of the store.
+    pub async fn refresh_rotating(
+        &self,
+        refresh_token: &str,
+        revocations: &RefreshRevocationStore,
+    ) -> SessionResult<TokenPair> {
+        let (user_id, claims) = self.verify_refresh_claims(refresh_token)?;
+        let sid = claims
+            .sid
+            .ok_or_else(|| SessionError::InvalidToken("refresh token has no session id".into()))?;
+        let now = chrono::Utc::now().timestamp();
+        if !revocations.check_and_revoke(&sid, now).await {
+            return Err(SessionError::Revoked);
+        }
         self.issue_pair(user_id, claims.username, claims.roles)
     }
 }
@@ -291,5 +347,96 @@ mod tests {
         let token = manager.sign(&claims).unwrap();
         // Even lenient verify must enforce audience when configured.
         assert!(manager.verify_lenient(&token).is_err());
+    }
+
+    #[tokio::test]
+    async fn refresh_rotating_revokes_old_refresh_token() {
+        let manager = TokenManager::new(SessionConfig::new("secret"));
+        let store = RefreshRevocationStore::new(3_600);
+        let pair = manager
+            .issue_pair(Uuid::new_v4(), "u".into(), vec![])
+            .unwrap();
+        let rotated = manager
+            .refresh_rotating(&pair.refresh_token, &store)
+            .await
+            .unwrap();
+        assert_ne!(rotated.refresh_token, pair.refresh_token);
+        // Replaying the old refresh token must hit the revocation store.
+        let err = manager
+            .refresh_rotating(&pair.refresh_token, &store)
+            .await
+            .unwrap_err();
+        assert!(matches!(err, SessionError::Revoked));
+    }
+
+    #[tokio::test]
+    async fn refresh_rotating_chain() {
+        let manager = TokenManager::new(SessionConfig::new("secret"));
+        let store = RefreshRevocationStore::new(3_600);
+        let pair0 = manager
+            .issue_pair(Uuid::new_v4(), "u".into(), vec![])
+            .unwrap();
+        let pair1 = manager
+            .refresh_rotating(&pair0.refresh_token, &store)
+            .await
+            .unwrap();
+        let pair2 = manager
+            .refresh_rotating(&pair1.refresh_token, &store)
+            .await
+            .unwrap();
+        assert_ne!(pair1.refresh_token, pair2.refresh_token);
+        assert_ne!(pair1.access_token, pair2.access_token);
+        // The latest refresh token of the chain is still usable.
+        assert!(manager
+            .refresh_rotating(&pair2.refresh_token, &store)
+            .await
+            .is_ok());
+    }
+
+    #[test]
+    fn refresh_without_rotation_keeps_old_token_usable() {
+        // Regression: the non-rotating refresh() keeps accepting the same
+        // refresh token until it expires (no implicit revocation).
+        let manager = TokenManager::new(SessionConfig::new("secret"));
+        let pair = manager
+            .issue_pair(Uuid::new_v4(), "u".into(), vec![])
+            .unwrap();
+        let first = manager.refresh(&pair.refresh_token).unwrap();
+        let second = manager.refresh(&pair.refresh_token).unwrap();
+        assert_ne!(first.access_token, second.access_token);
+    }
+
+    #[tokio::test]
+    async fn refresh_rotating_does_not_affect_access_tokens() {
+        let manager = TokenManager::new(SessionConfig::new("secret"));
+        let store = RefreshRevocationStore::new(3_600);
+        let old_pair = manager
+            .issue_pair(Uuid::new_v4(), "u".into(), vec![])
+            .unwrap();
+        let new_pair = manager
+            .refresh_rotating(&old_pair.refresh_token, &store)
+            .await
+            .unwrap();
+        // Revocation only guards the refresh path: both the old and the new
+        // access token still verify normally.
+        assert!(manager.verify(&old_pair.access_token).is_ok());
+        assert!(manager.verify(&new_pair.access_token).is_ok());
+    }
+
+    #[tokio::test]
+    async fn refresh_rotating_rejects_refresh_token_without_sid() {
+        let manager = TokenManager::new(SessionConfig::new("secret"));
+        let store = RefreshRevocationStore::new(3_600);
+        // Minted without `with_session`, so no sid is present.
+        let claims = TokenClaims::new(
+            Uuid::new_v4(),
+            "u".into(),
+            TokenType::Refresh,
+            3_600,
+            "kirino",
+        );
+        let token = manager.sign(&claims).unwrap();
+        let err = manager.refresh_rotating(&token, &store).await.unwrap_err();
+        assert!(matches!(err, SessionError::InvalidToken(_)));
     }
 }
