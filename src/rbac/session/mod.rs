@@ -56,20 +56,15 @@ impl<S: Subject> Session<S> {
 
 #[async_trait::async_trait]
 pub trait SessionManager<S: Subject>: Send + Sync {
-    #[must_use]
     async fn create_session(
         &self,
         subject: &S,
         active_roles: HashSet<String>,
         ttl: Duration,
     ) -> Result<Session<S>>;
-    #[must_use]
     async fn activate_role(&self, session_id: Uuid, role_name: &str) -> Result<()>;
-    #[must_use]
     async fn deactivate_role(&self, session_id: Uuid, role_name: &str) -> Result<()>;
-    #[must_use]
     async fn get_session(&self, session_id: Uuid) -> Result<Option<Session<S>>>;
-    #[must_use]
     async fn destroy_session(&self, session_id: Uuid) -> Result<()>;
 
     /// Revoke all active sessions for a subject (e.g., after role/grant change).

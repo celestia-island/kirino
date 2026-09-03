@@ -666,16 +666,11 @@ pub fn build_default_engine() -> Shared<
 #[async_trait::async_trait]
 pub trait UserDatabase: Send + Sync + Clone + 'static {
     async fn create_user(&self, user: &UserRecord) -> Result<()>;
-    #[must_use]
     async fn find_by_username(&self, username: &str) -> Result<Option<UserRecord>>;
-    #[must_use]
     async fn find_by_id(&self, id: &Uuid) -> Result<Option<UserRecord>>;
     async fn update_password(&self, id: &Uuid, new_hash: &str) -> Result<()>;
-    #[must_use]
     async fn delete_user(&self, id: &Uuid) -> Result<bool>;
-    #[must_use]
     async fn list_users(&self) -> Result<Vec<UserRecord>>;
-    #[must_use]
     async fn count_users(&self) -> Result<u64>;
 }
 

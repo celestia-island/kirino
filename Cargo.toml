@@ -11,6 +11,9 @@ categories = ["authentication"]
 keywords = ["rbac", "authentication", "authorization", "zero-trust", "anomaly-detection"]
 rust-version = "1.75"
 
+[lints]
+workspace = true
+
 [workspace]
 members = [
     "packages/session",
@@ -65,3 +68,9 @@ tokio = { version = "^1", features = ["rt", "macros", "time", "sync"] }
 [[bench]]
 name = "rbac"
 harness = false
+
+[workspace.lints.rust]
+warnings = "deny"
+
+[workspace.lints.clippy]
+all = "deny"
