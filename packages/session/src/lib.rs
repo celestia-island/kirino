@@ -3,8 +3,12 @@
 //! Provides:
 //! - JWT token signing and verification with shared secret
 //! - Session persistence via PostgreSQL (optional `postgres` feature)
-//! - Token refresh mechanism
-//! - Revocation list support
+//! - Token refresh mechanism (plain, or one-time-use rotation with replay
+//!   detection via [`TokenManager::refresh_rotating`])
+//! - Refresh-token rotation revocation: an in-memory store bounded by the
+//!   refresh TTL plus the verify-leeway grace ([`RefreshRevocationStore`])
+//!   that rejects reuse of an already rotated refresh token — no persistent
+//!   revocation list (yet)
 //! - Accurate online-presence counting for live connections
 //!   ([`presence::PresenceRegistry`])
 //!
@@ -35,6 +39,7 @@ mod manager;
 pub mod middleware;
 mod one_shot;
 pub mod presence;
+mod revocation;
 mod token;
 
 #[cfg(feature = "postgres")]
@@ -45,4 +50,5 @@ pub use error::{SessionError, SessionResult};
 pub use manager::TokenManager;
 pub use one_shot::OneShotStore;
 pub use presence::{PresenceLease, PresenceRecord, PresenceRegistry, DEFAULT_IDLE_TIMEOUT};
+pub use revocation::RefreshRevocationStore;
 pub use token::{TokenClaims, TokenPair, TokenType};
