@@ -73,13 +73,10 @@ impl TrustScore {
 
 #[async_trait]
 pub trait TrustScoreStore: Send + Sync {
-    #[must_use]
     async fn get(&self, delegator_id: &str) -> Result<Option<TrustScore>>;
     async fn set(&self, delegator_id: &str, score: TrustScore) -> Result<()>;
     async fn delete(&self, delegator_id: &str) -> Result<()>;
-    #[must_use]
     async fn sweep_stale(&self, max_age: Duration) -> Result<Vec<String>>;
-    #[must_use]
     async fn list_ids(&self) -> Result<Vec<String>>;
 }
 
