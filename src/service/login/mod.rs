@@ -237,6 +237,31 @@ pub struct LoginResult {
     pub session_id: Option<uuid::Uuid>,
 }
 
+/// Authentication service: registration, login, JWT issuance and password change.
+///
+/// # First user and the invitation-only model
+///
+/// The deployment model is invitation-only: accounts are created by an administrator who
+/// already holds `rbac.manage`, so a fresh install normally has nobody who can administer it.
+/// The **first** account is therefore a deliberate, narrow exemption from that model — it is
+/// created without an invitation and it must be able to administer the install, otherwise the
+/// install cannot be operated at all. This is an exemption, not a change of the model: the
+/// second and every later account goes through the normal invitation path.
+///
+/// The exemption is opt-in, because the kernel cannot know whether an install bootstraps
+/// itself or is seeded by an operator out of band:
+///
+/// * [`AuthService::new`] starts with the exemption **off** (`auto_admin_first_user = false`),
+///   so the first account gets `default_role`.
+/// * [`AuthService::with_auto_admin_first_user(true)`](AuthService::with_auto_admin_first_user)
+///   turns it on: the first account that is registered against an empty user table receives
+///   `first_user_role` (conventionally `"admin"`) instead of `default_role`.
+///
+/// A consumer that wants the forced behaviour must therefore set the switch explicitly; the
+/// opt-in is visible in `examples/auth_service.rs` of this repository and in the workspace
+/// services. The grant is guarded by both an in-process latch and an empty-table check, so it
+/// can only ever hand out one first-user role, and it is applied to registration only: logging
+/// in never changes a role.
 #[cfg(all(feature = "auth-password", feature = "auth-jwt"))]
 pub struct AuthService<DB, P, A>
 where
@@ -292,6 +317,13 @@ where
         self
     }
 
+    /// Enables the first-user exemption from the invitation-only model.
+    ///
+    /// With `enabled = true`, the first account registered against an empty user table is
+    /// assigned `first_user_role` (conventionally `"admin"`) instead of `default_role`, so a
+    /// fresh install has an administrator without an invitation. This is the only exemption:
+    /// every later account goes through the normal invitation path. The default is `false`
+    /// (opt-in), see the [`AuthService`] type docs for the rationale.
     #[must_use]
     pub fn with_auto_admin_first_user(mut self, enabled: bool) -> Self {
         self.auto_admin_first_user = enabled;
