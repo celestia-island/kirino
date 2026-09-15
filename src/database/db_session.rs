@@ -112,8 +112,6 @@ impl PersistentSessionStore for DbSessionStore {
         );
         let result = self.conn.execute_raw(stmt.clone()).await?;
 
-        let result = self.conn.execute_raw(stmt.clone()).await?;
-
         if result.rows_affected() == 0 {
             return Err(anyhow::anyhow!("session {} not found", id));
         }

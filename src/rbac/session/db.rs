@@ -207,7 +207,6 @@ where
     }
 
     async fn revoke_all_for_subject(&self, subject: &S) -> Result<usize> {
-        let subject_id = subject.subject_id();
         let assignments = self.assignment_store.roles_of(subject).await?;
         for role in &assignments {
             self.assignment_store.revoke_role(subject, role).await?;
