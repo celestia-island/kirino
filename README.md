@@ -49,6 +49,7 @@ The name `kirino` comes from the character [Kirino](https://bluearchive.wiki/wik
 - 🔑 **Multi-Credential Support**: One-time tokens, JWT, service tokens, and more
 - 🎫 **Passport Challenges**: Static password, key pair, OAuth, TOTP/HOTP, captcha, biometric
 - 🔒 **Argon2 Password Hashing**: Secure password verification out of the box
+- 🔐 **Password Policy**: Bootstrap temporary passwords, forced first-login change and max-age rotation as one kernel rule
 - 🎯 **Full RBAC System**: RBAC0 (base), RBAC1 (hierarchy), RBAC2 (constraints)
 - 🔄 **Role Inheritance**: Multi-level role hierarchies with cycle detection
 - ⛓️ **Separation of Duty**: SSD (static) and DSD (dynamic) constraint enforcement
@@ -260,6 +261,44 @@ flowchart TD
 ```
 
 **Deny-override semantics**: Denied permissions always take precedence over granted ones — even over role-based or extra permissions.
+
+### Password Policy
+
+Credential hygiene is part of access control, so it lives in the same surface as the permission catalog (`rbac::policy`) instead of in per-service configuration. `PasswordPolicy` carries two rules — *the bootstrap password must be changed on first login* and *a password must be changed after N days* — behind one master switch, and `PasswordPolicy::change_requirement(&state, now)` is a pure decision function with the clock injected:
+
+```mermaid
+flowchart TD
+    STATE["PasswordState<br/>(is_initial, changed_at)"] --> POLICY{"PasswordPolicy<br/>enabled?"}
+    POLICY -->|no| OK(["None — continue"])
+    POLICY -->|yes| FIRST{"initial password<br/>and switch on?"}
+    FIRST -->|yes| REASON1(["InitialPassword"])
+    FIRST -->|no| AGE{"age ≥ max_age_days?"}
+    AGE -->|yes| REASON2(["Expired"])
+    AGE -->|no| OK
+```
+
+The expiry rule is inclusive: a password that has reached exactly `max_age_days` is already stale. Callers get a reason enum, not a boolean, so a first-login change (a one-time operator secret) is distinguishable from a routine rotation in API responses and audit records.
+
+First-run bootstrap is one kernel helper — a random temporary password (never a fixed literal, paste-safe in a shell or a URL, always strong enough for `validate_password`) plus the initial-password state and the one-time operator log line:
+
+```rust,no_run
+use chrono::Utc;
+use kirino::rbac::policy::{PasswordPolicy, bootstrap_credential};
+
+let credential = bootstrap_credential("admin", Utc::now());
+// hash credential.password() into the account, persist credential.state() ...
+credential.emit_log(); // temporary password, printed once on the bootstrap terminal
+
+let policy = PasswordPolicy::new(true, Some(90));
+assert_eq!(
+    policy.change_requirement(&credential.state(), Utc::now()).unwrap().as_str(),
+    "initial_password",
+);
+```
+
+A service persists the pair (`is_initial`, `changed_at`) next to the password hash — see `PasswordStateStore` — and writes `PasswordState::rotated(now)` when the user changes it. Accounts that predate the tracking are adopted by the service, not guessed by the kernel.
+
+**First user**: the deployment model is invitation-only, with one deliberate exemption — the first account on an empty install may become an administrator without an invitation, because an empty install cannot otherwise be operated. It is opt-in (`AuthService::with_auto_admin_first_user(true)`, off by default) and applies to the first account only; every later account goes through the invitation path.
 
 ### Dynamic Authorization
 

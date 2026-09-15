@@ -9,6 +9,7 @@ pub mod engine;
 pub mod hierarchy;
 pub mod identity_subject;
 pub mod permission;
+pub mod policy;
 pub mod session;
 pub mod shared;
 pub mod store;
@@ -49,6 +50,11 @@ pub mod prelude {
         AssignmentRow, AuditRow, ConstraintRow, PersistentAssignmentStore, PersistentAuditStore,
         PersistentConstraintStore, PersistentRoleStore, PersistentStore, RoleRow,
     };
+
+    /// Only available with `auth-password`: minting a bootstrap credential needs the
+    /// password generator.
+    #[cfg(feature = "auth-password")]
+    pub use crate::rbac::policy::bootstrap_credential;
     pub use crate::rbac::{
         audit::{
             AuditAction, AuditAlert, AuditAnalyzer, AuditCondition, AuditEntry, AuditFilter,
@@ -59,6 +65,10 @@ pub mod prelude {
         engine::RbacEngine,
         identity_subject::{Delegatable, IdentitySubject},
         permission::Permission,
+        policy::{
+            BootstrapCredential, InMemoryPasswordStateStore, PasswordChangeReason, PasswordPolicy,
+            PasswordState, PasswordStateStore,
+        },
         session::{InMemorySessionManager, Session, SessionManager},
         shared::Shared,
         store::{
