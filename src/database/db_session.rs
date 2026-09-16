@@ -39,8 +39,6 @@ impl PersistentSessionStore for DbSessionStore {
         );
         self.conn.execute_raw(stmt.clone()).await?;
 
-        self.conn.execute_raw(stmt.clone()).await?;
-
         Ok(())
     }
 
@@ -96,8 +94,6 @@ impl PersistentSessionStore for DbSessionStore {
             "DELETE FROM rbac_sessions WHERE id = $1",
             [id.to_string().into()],
         );
-        self.conn.execute_raw(stmt.clone()).await?;
-
         self.conn.execute_raw(stmt.clone()).await?;
 
         Ok(())
