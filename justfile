@@ -14,7 +14,11 @@
 #   just ci              - Run all CI checks
 
 set shell := ["bash", "-c"]
-set windows-shell := ["pwsh.exe", "-NoLogo", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", "[Console]::OutputEncoding = [System.Text.Encoding]::UTF8; $PSDefaultParameterValues['*:Encoding'] = 'utf8';"]
+# Windows: PowerShell (the 5.1 floor ships with every Windows; pwsh 7 is
+# NOT assumed). Linewise recipes must stay PS-5.1-safe: no `&&` chains,
+# `cd X; cmd` instead of `cd X && cmd`. Bash-only recipes use
+# [script('bash')] and need Git Bash (or WSL) when actually run.
+set windows-shell := ["powershell.exe", "-NoLogo", "-NoProfile", "-Command", "[Console]::OutputEncoding=[System.Text.Encoding]::UTF8; $PSDefaultParameterValues['*:Encoding']='utf8';"]
 set unstable
 set lists
 
