@@ -31,14 +31,6 @@ jobs:
         with:
           components: rustfmt, clippy
 
-      - name: Cache cargo
-        uses: actions/cache@v6
-        with:
-          path: |
-            target/
-          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.toml') }}
-          restore-keys: ${{ runner.os }}-cargo-
-
       - name: Check compilation
         run: cargo check -p kirino-session -p kirino -p kirino-macro --lib
 
