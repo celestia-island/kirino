@@ -1,93 +1,58 @@
 # Security Policy
 
-## Reporting a Vulnerability
+## Reporting a vulnerability
 
-kirino is a security-critical authorization library: a single incorrect
-authorization decision is a privilege-escalation vulnerability. We take security
-reports seriously and welcome responsible disclosure.
+**Do not open a public issue for a security vulnerability.**
 
-**Please do NOT open a public GitHub issue for security vulnerabilities.**
+Report it privately through GitHub Security Advisories:
 
-Instead, report vulnerabilities privately using **GitHub's private vulnerability
-reporting**:
+> https://github.com/celestia-island/kirino/security/advisories/new
 
-1. Go to <https://github.com/celestia-island/kirino/security/advisories/new>
-2. Fill in the advisory form with a description, reproduction steps, and impact.
-3. Submit the report — it is visible only to the repository maintainers.
-
-If GitHub private reporting is unavailable, contact the maintainers directly via
-the contact listed on the celestia-island organization profile.
-
-Please include the following when possible:
-
-- A clear description of the vulnerability and its security impact.
-- The version of kirino affected (and the feature flags in use).
-- A minimal reproduction (code sample, role graph, or input that triggers it).
-- Any suggested mitigations.
-
-### Response Expectations
-
-- **Acknowledgement**: within **3 business days**.
-- **Initial assessment**: within **14 days**, including a severity rating and a
-  planned remediation timeline.
-- **Coordinated disclosure**: we will work with you on a public advisory once a
-  fix is available. Please refrain from public disclosure until a patch is
-  released, or until we mutually agree otherwise.
-
-## Supported Versions
-
-Only the latest released minor line receives security fixes. Pre-1.0 versions
-allow breaking changes between minor versions per SemVer, so older lines are not
-maintained.
-
-| Version | Supported          |
-|---------|--------------------|
-| 0.5.x   | :white_check_mark: |
-| < 0.5   | :x:                |
+If advisories are unavailable to you, email security@celestia.world with a clear description
+and reproduction steps. Include (1) the affected component and version, (2) the attack
+vector and impact, (3) reproduction steps, (4) suggested mitigations, and whether you
+intend to publish.
 
 ## Scope
 
-### In Scope
+In scope, across the organization:
 
-- kirino's RBAC engine (`src/rbac/`) — permission resolution, deny-override
-  semantics, role-hierarchy resolution and cycle handling.
-- The dynamic authorization arbiter (`rbac-dynamic` feature) — risk scoring,
-  trust decay, anomaly detection, lockdown/restore.
-- Constraint enforcement (RBAC2: SSD/DSD/cardinality/prerequisite/temporal).
-- Authentication helpers shipped with the crate (Argon2 verification under
-  `auth-password`, JWT issuance/verification under `auth-jwt`).
-- Fail-closed behavior on store errors at the engine boundary.
+- authentication bypass, JWT/OAuth weaknesses, session handling flaws;
+- API key or credential disclosure, or improper storage;
+- authorization and RBAC enforcement gaps, cross-tenant or cross-workspace access;
+- injection (SQL, command, SSRF, XSS), insecure deserialization, path traversal;
+- anything that lets a network peer reach a hardware command path, a safety interlock,
+  or a write whitelist without an explicit operator grant;
+- billing-ledger integrity: minting, double spending, or unbalanced entries;
+- supply chain: build scripts, CI workflows, dependency confusion, artefact substitution.
 
-### Out of Scope
+Out of scope:
 
-The following are explicitly **out of scope** and documented as such in
-[docs/THREAT_MODEL.md](docs/THREAT_MODEL.md). Reports about them will be closed;
-see the threat model for the responsibilities that fall on the host application:
+- vulnerabilities in upstream dependencies that are not exploitable through this project;
+- self-hosted deployments configured against documented guidance;
+- denial of service against public model-provider endpoints.
 
-- Transport security (TLS/mTLS) — kirino performs none; the host owns channels.
-- Secret and key management — JWT keys, Argon2 parameters, and DB credentials
-  are owned and provisioned by the host.
-- Identity proofing / authentication strength — a `Subject` reaching the engine
-  is assumed already authenticated by the host.
-- Timing / side-channel resistance of permission checks — decision paths use
-  `HashSet`/`HashMap` membership tests that are **not** constant-time.
-- Durability or tamper-resistance of audit logs — the in-memory audit sink is
-  volatile; durable/append-only audit storage is the host's responsibility.
-- Correctness, concurrency, and schema migration of host-provided persistence
-  backends (including the PostgreSQL-backed stores). kirino only guarantees that
-  store *errors* fail closed at the engine boundary.
+## Response targets
 
-## Security Audit Status
+| Stage | Target |
+|---|---|
+| Agent acknowledgment | 10 minutes |
+| Human acknowledgment | 1 calendar day |
+| Initial assessment | 3 calendar days |
+| Fix or mitigation | 30 calendar days, severity-dependent |
 
-**kirino has not undergone a formal third-party security audit.**
+## What we will not accept
 
-It is authorization-critical infrastructure, and an external review is strongly
-recommended before production deployment. See
-[docs/THREAT_MODEL.md §5 External Audit](docs/THREAT_MODEL.md#5-external-audit)
-for the recommended review focus areas (fuzzing the hierarchy resolver, the
-dynamic arbiter, the policy validator, the fail-closed store-error paths, and
-the timing characteristics noted above) and the open audit items tracked in
-[PLAN.md](PLAN.md).
+Bulk, machine-generated reports that were never verified against a running build, and
+reports that consist only of scanner output. They will be closed without review. This
+is a deliberate policy against report flooding, not a dismissal of genuine findings.
 
-Until such an audit is completed and published here, integrators should perform
-their own review appropriate to their threat model.
+## Supported versions
+
+Only the current default branch (`master`; a few repositories use `main`) receives
+security fixes. The retired `dev` branch model is not supported — do not report against
+it and do not open pull requests against it.
+
+---
+*Canonical file maintained in the organization metadata repository; changes apply to
+every repository that adopts it.*
