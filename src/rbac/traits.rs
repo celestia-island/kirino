@@ -231,6 +231,10 @@ pub enum GrantSource {
     GroupGrant,
     UserGrant,
     WorkspaceRole,
+    /// A grant that applies inside one workspace only (scoped grants,
+    /// `rbac::scope`). Distinct from `WorkspaceRole`, which is the
+    /// coarse viewer/operator/owner role map.
+    WorkspaceGrant,
     AdminBypass,
 }
 
