@@ -25,11 +25,28 @@ impl TokenManager {
     }
 
     /// Issue an access + refresh token pair for a user.
+    ///
+    /// `roles` is embedded into **both** tokens via
+    /// [`TokenClaims::with_roles`]: the access token needs it for
+    /// authorization decisions, and the refresh token carries it so
+    /// [`TokenManager::refresh`] / [`TokenManager::refresh_rotating`]
+    /// can re-issue an equally privileged pair without a user-store
+    /// round-trip. The parameter is wired rather than removed because
+    /// the only in-crate callers are those refresh paths, which pass
+    /// the presented token's `claims.roles` — dropping the parameter
+    /// would silently downgrade every refreshed credential to an
+    /// empty role set (the bug this signature once hid).
+    ///
+    /// Unlike `roles`, `permissions` are deliberately **not**
+    /// propagated: the pair API has no permissions parameter, and a
+    /// refreshed pair keeps only roles. Callers that mint
+    /// permission-bearing tokens must sign [`TokenClaims`] directly
+    /// via [`TokenManager::sign`].
     pub fn issue_pair(
         &self,
         user_id: Uuid,
         username: String,
-        _roles: Vec<String>,
+        roles: Vec<String>,
     ) -> SessionResult<TokenPair> {
         let sid = Uuid::new_v4().to_string();
         let access = self.sign(
@@ -40,7 +57,8 @@ impl TokenManager {
                 self.config.access_ttl_secs,
                 &self.config.issuer,
             )
-            .with_session(&sid),
+            .with_session(&sid)
+            .with_roles(roles.clone()),
         )?;
         let refresh = self.sign(
             &TokenClaims::new(
@@ -50,7 +68,8 @@ impl TokenManager {
                 self.config.refresh_ttl_secs,
                 &self.config.issuer,
             )
-            .with_session(&sid),
+            .with_session(&sid)
+            .with_roles(roles),
         )?;
         Ok(TokenPair {
             access_token: access,
@@ -185,7 +204,24 @@ mod tests {
         assert_eq!(claims.sub, user_id.to_string());
         assert_eq!(claims.username, "testuser");
         // roles deserialization known issue with serde(default)
+        assert_eq!(claims.roles, Vec::<String>::new());
         assert_eq!(claims.token_type, TokenType::Access);
+    }
+
+    #[test]
+    fn issue_pair_embeds_roles_in_both_tokens() {
+        let manager = TokenManager::new(SessionConfig::new("secret"));
+        let roles = vec!["admin".to_string(), "operator".to_string()];
+        let pair = manager
+            .issue_pair(Uuid::new_v4(), "u".into(), roles.clone())
+            .unwrap();
+        let access = manager.verify(&pair.access_token).unwrap();
+        assert_eq!(access.roles, roles);
+        // The refresh token must carry the roles too: refresh paths
+        // re-issue from the presented token's claims.
+        let refresh = manager.verify(&pair.refresh_token).unwrap();
+        assert_eq!(refresh.roles, roles);
+        assert_eq!(refresh.token_type, TokenType::Refresh);
     }
 
     #[test]
@@ -231,6 +267,22 @@ mod tests {
             .unwrap();
         let new_pair = manager.refresh(&pair.refresh_token).unwrap();
         assert_ne!(new_pair.access_token, pair.access_token);
+    }
+
+    #[test]
+    fn refresh_preserves_roles() {
+        let manager = TokenManager::new(SessionConfig::new("secret"));
+        let roles = vec!["admin".to_string()];
+        let pair = manager
+            .issue_pair(Uuid::new_v4(), "u".into(), roles.clone())
+            .unwrap();
+        let refreshed = manager.refresh(&pair.refresh_token).unwrap();
+        let claims = manager.verify(&refreshed.access_token).unwrap();
+        assert_eq!(claims.roles, roles);
+        // The new refresh token stays role-bearing so further refreshes
+        // keep the chain privileged.
+        let refresh_claims = manager.verify(&refreshed.refresh_token).unwrap();
+        assert_eq!(refresh_claims.roles, roles);
     }
 
     #[test]
@@ -391,6 +443,24 @@ mod tests {
             .refresh_rotating(&pair2.refresh_token, &store)
             .await
             .is_ok());
+    }
+
+    #[tokio::test]
+    async fn refresh_rotating_preserves_roles() {
+        let manager = TokenManager::new(SessionConfig::new("secret"));
+        let store = RefreshRevocationStore::new(3_600);
+        let roles = vec!["auditor".to_string()];
+        let pair = manager
+            .issue_pair(Uuid::new_v4(), "u".into(), roles.clone())
+            .unwrap();
+        let rotated = manager
+            .refresh_rotating(&pair.refresh_token, &store)
+            .await
+            .unwrap();
+        let claims = manager.verify(&rotated.access_token).unwrap();
+        assert_eq!(claims.roles, roles);
+        let refresh_claims = manager.verify(&rotated.refresh_token).unwrap();
+        assert_eq!(refresh_claims.roles, roles);
     }
 
     #[test]
