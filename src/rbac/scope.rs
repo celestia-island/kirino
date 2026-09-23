@@ -35,6 +35,14 @@
 //! `PermissionContext` already carries the full scope context
 //! (`system_role`, `group_ids`, `workspace_id`) — the resolver reads it,
 //! never re-derives it.
+//!
+//! Two neighbouring mechanisms, deliberately distinct: this module is the
+//! fine-grained per-permission scope axis; [`crate::rbac::workspace_guard`]
+//! is the coarse Viewer/Operator/Owner workspace-role axis (which this
+//! resolver does not consult). Error contract: a store `Err` propagates
+//! from `resolve` as an uncertain outcome — callers MUST fail closed on
+//! it (the engine's `resolve_effective_permissions` already denies on
+//! error).
 
 use std::collections::HashSet;
 
@@ -81,14 +89,16 @@ impl GrantScope {
     }
 }
 
-/// One permission held at one scope.
+/// One permission held at one scope (a grant). Named `ScopedGrant` to
+/// stay distinct from `workspace_guard::ScopedPermission`, the trait for
+/// permissions that MAY require a workspace qualifier.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-pub struct ScopedPermission<P> {
+pub struct ScopedGrant<P> {
     pub permission: P,
     pub scope: GrantScope,
 }
 
-impl<P> ScopedPermission<P> {
+impl<P> ScopedGrant<P> {
     #[must_use]
     pub fn new(permission: P, scope: GrantScope) -> Self {
         Self { permission, scope }
@@ -107,11 +117,11 @@ fn grant_matches<P: Permission>(grant: &P, requested: &P) -> bool {
 #[async_trait]
 pub trait ScopedGrantStore<P: Permission>: Send + Sync {
     /// Grants attached directly to the resolving user (any scope).
-    async fn user_grants(&self, user_id: Uuid) -> anyhow::Result<Vec<ScopedPermission<P>>>;
+    async fn user_grants(&self, user_id: Uuid) -> anyhow::Result<Vec<ScopedGrant<P>>>;
 
     /// Grants attached to a group (any scope). The resolver asks once per
     /// group in the context.
-    async fn group_grants(&self, group_id: Uuid) -> anyhow::Result<Vec<ScopedPermission<P>>>;
+    async fn group_grants(&self, group_id: Uuid) -> anyhow::Result<Vec<ScopedGrant<P>>>;
 
     /// The subject's deny set — denies win over every grant except admin
     /// bypass.
@@ -122,8 +132,8 @@ pub trait ScopedGrantStore<P: Permission>: Send + Sync {
 /// double.
 #[derive(Clone)]
 pub struct MemoryScopedGrantStore<P: Permission> {
-    user: std::collections::HashMap<Uuid, Vec<ScopedPermission<P>>>,
-    group: std::collections::HashMap<Uuid, Vec<ScopedPermission<P>>>,
+    user: std::collections::HashMap<Uuid, Vec<ScopedGrant<P>>>,
+    group: std::collections::HashMap<Uuid, Vec<ScopedGrant<P>>>,
     denies: std::collections::HashMap<Uuid, HashSet<P>>,
 }
 
@@ -143,12 +153,12 @@ impl<P: Permission> MemoryScopedGrantStore<P> {
         Self::default()
     }
 
-    pub fn grant_user(&mut self, user: Uuid, grant: ScopedPermission<P>) -> &mut Self {
+    pub fn grant_user(&mut self, user: Uuid, grant: ScopedGrant<P>) -> &mut Self {
         self.user.entry(user).or_default().push(grant);
         self
     }
 
-    pub fn grant_group(&mut self, group: Uuid, grant: ScopedPermission<P>) -> &mut Self {
+    pub fn grant_group(&mut self, group: Uuid, grant: ScopedGrant<P>) -> &mut Self {
         self.group.entry(group).or_default().push(grant);
         self
     }
@@ -161,11 +171,11 @@ impl<P: Permission> MemoryScopedGrantStore<P> {
 
 #[async_trait]
 impl<P: Permission + Send + Sync> ScopedGrantStore<P> for MemoryScopedGrantStore<P> {
-    async fn user_grants(&self, user_id: Uuid) -> anyhow::Result<Vec<ScopedPermission<P>>> {
+    async fn user_grants(&self, user_id: Uuid) -> anyhow::Result<Vec<ScopedGrant<P>>> {
         Ok(self.user.get(&user_id).cloned().unwrap_or_default())
     }
 
-    async fn group_grants(&self, group_id: Uuid) -> anyhow::Result<Vec<ScopedPermission<P>>> {
+    async fn group_grants(&self, group_id: Uuid) -> anyhow::Result<Vec<ScopedGrant<P>>> {
         Ok(self.group.get(&group_id).cloned().unwrap_or_default())
     }
 
@@ -258,7 +268,7 @@ impl<P: Permission + Send + Sync> GrantResolver<P> for ScopedGrantResolver<P> {
 
         // Scoped grants — union; the most specific applicability labels
         // the decision (workspace > group attachment > user global).
-        let mut candidates: Vec<(Attachment, ScopedPermission<P>)> = self
+        let mut candidates: Vec<(Attachment, ScopedGrant<P>)> = self
             .store
             .user_grants(ctx.user_id)
             .await?
@@ -274,7 +284,7 @@ impl<P: Permission + Send + Sync> GrantResolver<P> for ScopedGrantResolver<P> {
                     .map(|g| (Attachment::Group, g)),
             );
         }
-        let mut best: Option<(Attachment, &ScopedPermission<P>)> = None;
+        let mut best: Option<(Attachment, &ScopedGrant<P>)> = None;
         for (attachment, grant) in &candidates {
             if grant.scope.applies_to(ctx) && grant_matches(&grant.permission, permission) {
                 let more_specific = best.map_or(true, |(_, b)| {
@@ -382,7 +392,7 @@ mod tests {
         let p = perm("config.read");
         let mut store = MemoryScopedGrantStore::new();
         store
-            .grant_user(u, ScopedPermission::new(p, GrantScope::Global))
+            .grant_user(u, ScopedGrant::new(p, GrantScope::Global))
             .deny(u, p);
         let d = decide(
             store.clone(),
@@ -405,7 +415,7 @@ mod tests {
         let ws_b = Uuid::new_v4();
         let p = perm("device.connect");
         let mut store = MemoryScopedGrantStore::new();
-        store.grant_user(u, ScopedPermission::new(p, GrantScope::Workspace(ws_a)));
+        store.grant_user(u, ScopedGrant::new(p, GrantScope::Workspace(ws_a)));
 
         let mut in_a = ctx(u, crate::rbac::traits::SystemRole::Member);
         in_a.workspace_id = Some(ws_a);
@@ -431,7 +441,7 @@ mod tests {
         let g = Uuid::new_v4();
         let p = perm("deploy.execute");
         let mut store = MemoryScopedGrantStore::new();
-        store.grant_group(g, ScopedPermission::new(p, GrantScope::Global));
+        store.grant_group(g, ScopedGrant::new(p, GrantScope::Global));
 
         let outsider = ctx(u, crate::rbac::traits::SystemRole::Member);
         let mut member = ctx(u, crate::rbac::traits::SystemRole::Member);
@@ -455,8 +465,8 @@ mod tests {
         let p = perm("channel.use");
         let mut store = MemoryScopedGrantStore::new();
         store
-            .grant_user(u, ScopedPermission::new(p, GrantScope::Global))
-            .grant_user(u, ScopedPermission::new(p, GrantScope::Workspace(ws)));
+            .grant_user(u, ScopedGrant::new(p, GrantScope::Global))
+            .grant_user(u, ScopedGrant::new(p, GrantScope::Workspace(ws)));
         let mut c = ctx(u, crate::rbac::traits::SystemRole::Member);
         c.group_ids = vec![g];
         c.workspace_id = Some(ws);
@@ -501,6 +511,27 @@ mod tests {
         c.current_user_version = 2;
         let d = decide(MemoryScopedGrantStore::new(), &c, &perm("system.read")).await;
         assert!(matches!(d, PermissionDecision::Denied { .. }));
+    }
+
+    #[tokio::test]
+    async fn equal_specificity_tie_labels_user_before_group() {
+        // Same permission granted globally by both the user attachment
+        // and a group attachment: equal scope specificity, and the
+        // user-attached grant labels the decision (first-seen wins —
+        // user candidates are collected before group candidates).
+        let u = Uuid::new_v4();
+        let g = Uuid::new_v4();
+        let p = perm("yolo.use");
+        let mut store = MemoryScopedGrantStore::new();
+        store
+            .grant_user(u, ScopedGrant::new(p, GrantScope::Global))
+            .grant_group(g, ScopedGrant::new(p, GrantScope::Global));
+        let mut c = ctx(u, crate::rbac::traits::SystemRole::Member);
+        c.group_ids = vec![g];
+        assert!(matches!(
+            granted(decide(store, &c, &p).await).await,
+            Some(GrantSource::UserGrant)
+        ));
     }
 
     #[test]
