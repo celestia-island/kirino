@@ -10,6 +10,7 @@ pub mod hierarchy;
 pub mod identity_subject;
 pub mod permission;
 pub mod policy;
+pub mod scope;
 pub mod session;
 pub mod shared;
 pub mod store;
