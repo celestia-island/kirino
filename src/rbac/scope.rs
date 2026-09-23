@@ -21,9 +21,10 @@
 //! 5. scoped grants apply when their scope matches the context — a group
 //!    grant for a group the subject is in, a workspace grant when the
 //!    context resolves inside that workspace; the most specific match
-//!    labels the decision ([`GrantSource::GroupGrant`] /
-//!    [`GrantSource::WorkspaceGrant`], global matches keep
-//!    [`GrantSource::GlobalGrant`]).
+//!    labels the decision (a workspace qualifier →
+//!    [`GrantSource::WorkspaceGrant`]; otherwise the attachment names the
+//!    source — [`GrantSource::GroupGrant`] for group-attached,
+//!    [`GrantSource::UserGrant`] for user-attached global grants).
 //!
 //! Grants UNION: a workspace grant adds to (never subtracts from) global
 //! and group grants — revocation is expressed by not granting, or by the
