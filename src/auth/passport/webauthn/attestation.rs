@@ -121,7 +121,8 @@ pub fn verify_attestation_none_with_policy(
 /// attestation's own authData when extensions bind it, and the pair must
 /// come from the same ceremony response. With `fmt=none` nothing but
 /// authData is signed, so challenge/origin policy remains the caller's —
-/// enforced in kirino only through [`wa::WebAuthnChallengeStore`] wiring.
+/// enforced in kirino only through [`super::challenge::WebAuthnChallengeStore`]
+/// wiring.
 ///
 /// `rp_id` is the RP ID this ceremony was issued for — its SHA-256 **must**
 /// equal the authData rpIdHash (§7.1 step 9) or registration is rejected,

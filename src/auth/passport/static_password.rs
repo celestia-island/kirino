@@ -7,6 +7,30 @@ use argon2::{
     Algorithm, Argon2, Params, Version,
 };
 
+// Argon2id cost parameters: m = 19456 KiB (19 MiB), t = 2, p = 1 - the OWASP
+// Password Storage Cheat Sheet's baseline Argon2id configuration.
+//
+// Why these values: memory is the parameter that makes GPU/ASIC cracking
+// expensive, so it is held at the OWASP-listed floor rather than lowered for
+// speed; t = 2 covers the time-memory tradeoff for that work area; p = 1 keeps a
+// single verification on one core, so login latency stays predictable when many
+// verifications run concurrently. Raising m is the intended future knob - it
+// costs latency and RAM per concurrent verification on the server, which is the
+// tradeoff to size against the deployment's hardware.
+//
+// Upgrade path: these constants only govern new hashes. `verify_password` verifies
+// against the parameters encoded in the stored PHC string (`$argon2id$v=19$m=...`),
+// because `PasswordVerifier` rebuilds the hasher from `Params::try_from(hash)`
+// rather than from `argon2_instance()`, so hashes written under older or
+// different parameters keep verifying after a change here. A raised baseline
+// therefore does not invalidate existing credentials and only applies to
+// credentials hashed afterwards; retiring an old baseline means re-hashing on the
+// next successful login.
+//
+// Changing these values changes both the encoded hash strings and the cost of a
+// verification. Every timing-equalization path in `service::login` depends on that
+// cost being the same everywhere, so keep the m/t/p in
+// `AuthService::DUMMY_HASH` in sync with these constants.
 const ARGON2_M_COST: u32 = 19456;
 const ARGON2_T_COST: u32 = 2;
 const ARGON2_P_COST: u32 = 1;

@@ -76,6 +76,12 @@ use crate::error::KirinoError;
 /// Callers get a reason rather than a boolean so the two cases can be told apart in an API
 /// response (a bootstrap password is a one-time operator secret, an expired password is a
 /// routine rotation), in audit records and in operator-facing messages.
+///
+/// Security direction: holding a reason is the restrictive outcome - the account may do nothing
+/// except change its password - while [`PasswordPolicy::change_requirement`] returning `None`
+/// is the permissive one. Both variants are therefore fail-closed; this type has no "unknown"
+/// or "allowed" variant, and an unrecognized variant string (or an `Expired` value missing
+/// either count) fails to deserialize instead of decaying into a permissive value.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum PasswordChangeReason {
@@ -103,6 +109,12 @@ impl PasswordChangeReason {
 }
 
 impl std::fmt::Display for PasswordChangeReason {
+    /// Renders the stable code from [`PasswordChangeReason::as_str`], with the observed and the
+    /// configured day counts appended for [`PasswordChangeReason::Expired`].
+    ///
+    /// Audit- and operator-facing: the output is a reason, never credential material, and the
+    /// two numbers are exactly the decision inputs, so a logged line can be replayed against
+    /// the policy that produced it.
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::InitialPassword => f.write_str(self.as_str()),
@@ -127,6 +139,13 @@ impl std::fmt::Display for PasswordChangeReason {
 /// no expiry rule is configured, so a service that wires the policy up but configures nothing
 /// still cannot leave a machine-generated password in place. Use [`PasswordPolicy::disabled`]
 /// to switch the surface off entirely.
+///
+/// Configuration caveat (serde): the container is `#[serde(default)]`, so a key that is absent
+/// from the config falls back to [`Default`] field by field - a missing `enabled` and a missing
+/// `force_change_on_first_login` are both `true`, a missing `max_age_days` is `None`, i.e. no
+/// expiry rule. An unrecognized key is ignored rather than rejected (the type does not use
+/// `deny_unknown_fields`), so a mistyped master switch leaves the policy enabled with the
+/// product-default rules instead of silently switching every rule off.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct PasswordPolicy {
@@ -275,6 +294,11 @@ impl PasswordPolicy {
 
 impl Default for PasswordPolicy {
     /// Product default: bootstrap passwords must be changed on first login, no expiry rule.
+    ///
+    /// Fail-open for password aging: with no `max_age_days` a user-chosen password is accepted
+    /// indefinitely, so this default closes the bootstrap case only, and a service that wants
+    /// aging to be enforced must configure it. This file carries no justification for "no
+    /// default maximum age" - basis to be confirmed with security review.
     fn default() -> Self {
         Self::new(true, None)
     }
@@ -365,6 +389,13 @@ pub trait PasswordStateStore: Send + Sync {
 
 /// In-memory [`PasswordStateStore`], the reference implementation for tests and single-node
 /// deployments; mirror it with a table-backed store in production like kirino's other stores.
+///
+/// Staleness caveat: nothing is persisted, so recorded state lives exactly as long as the
+/// process. After a restart every account reads back as `Ok(None)` - the "predates the
+/// tracking" case - and whatever adoption rule the consuming service applies to that case
+/// applies again, which is a fail-open bypass of the bootstrap rule for any account whose only
+/// record of `is_initial` was this map. Use a durable store wherever the rule must hold across
+/// restarts.
 #[derive(Clone, Default)]
 pub struct InMemoryPasswordStateStore {
     states: Arc<RwLock<HashMap<Uuid, PasswordState>>>,
@@ -380,10 +411,20 @@ impl InMemoryPasswordStateStore {
 
 #[async_trait]
 impl PasswordStateStore for InMemoryPasswordStateStore {
+    /// Reads the recorded state under a read lock.
+    ///
+    /// A miss is `Ok(None)` - the pre-tracking case the trait documents, never a store error -
+    /// so the caller's adoption rule decides, and [`PasswordPolicy::change_requirement`] cannot
+    /// be consulted at all without a state to pass it.
     async fn get(&self, account: &Uuid) -> Result<Option<PasswordState>> {
         Ok(self.states.read().await.get(account).copied())
     }
 
+    /// Inserts or replaces the state of one account under a write lock; last write wins.
+    ///
+    /// Nothing is validated here: recording `rotated` for an account that still holds its
+    /// bootstrap password drops the bootstrap rule for that account, so the caller owns the
+    /// invariant that the recorded state describes the hash that is actually stored.
     async fn put(&self, account: &Uuid, state: PasswordState) -> Result<()> {
         self.states.write().await.insert(*account, state);
         Ok(())
@@ -449,6 +490,12 @@ impl BootstrapCredential {
 }
 
 impl std::fmt::Debug for BootstrapCredential {
+    /// Manual redacting `Debug`: the temporary password is always rendered as `[redacted]`.
+    ///
+    /// This is what keeps a minted credential out of logs, `unwrap` panics and error contexts
+    /// that format the value with `{:?}`. The only intended disclosure channel is
+    /// [`BootstrapCredential::log_line`] or [`BootstrapCredential::emit_log`], called once on
+    /// the bootstrap run; a derived `Debug` would leak the password through them all.
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("BootstrapCredential")
             .field("username", &self.username)

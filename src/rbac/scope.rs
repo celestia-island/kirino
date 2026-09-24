@@ -15,16 +15,21 @@
 //!
 //! 1. a stale session denies;
 //! 2. the subject's deny set wins over every grant (except admin bypass);
-//! 3. `SystemRole::Admin` bypasses with [`GrantSource::AdminBypass`];
-//! 4. role defaults from the [`RoleRegistry`](crate::rbac::RoleRegistry)
-//!    grant with [`GrantSource::RoleDefault`];
+//! 3. `SystemRole::Admin` bypasses with
+//!    [`GrantSource::AdminBypass`](super::traits::GrantSource::AdminBypass);
+//! 4. role defaults from the [`RoleRegistry`]
+//!    grant with
+//!    [`GrantSource::RoleDefault`](super::traits::GrantSource::RoleDefault);
 //! 5. scoped grants apply when their scope matches the context — a group
 //!    grant for a group the subject is in, a workspace grant when the
 //!    context resolves inside that workspace; the most specific match
 //!    labels the decision (a workspace qualifier →
-//!    [`GrantSource::WorkspaceGrant`]; otherwise the attachment names the
-//!    source — [`GrantSource::GroupGrant`] for group-attached,
-//!    [`GrantSource::UserGrant`] for user-attached global grants).
+//!    [`GrantSource::WorkspaceGrant`](super::traits::GrantSource::WorkspaceGrant);
+//!    otherwise the attachment names the source —
+//!    [`GrantSource::GroupGrant`](super::traits::GrantSource::GroupGrant) for
+//!    group-attached,
+//!    [`GrantSource::UserGrant`](super::traits::GrantSource::UserGrant) for
+//!    user-attached global grants).
 //!
 //! Grants UNION: a workspace grant adds to (never subtracts from) global
 //! and group grants — revocation is expressed by not granting, or by the
@@ -69,6 +74,11 @@ pub enum GrantScope {
 impl GrantScope {
     /// Specificity for decision labelling — a wider scope never outranks a
     /// narrower one when both match. `Global(0) < Group(1) < Workspace(2)`.
+    ///
+    /// Only this ordering is load-bearing (the resolver compares ranks
+    /// with `>`); the numeric values themselves are arbitrary ordinals,
+    /// and the choice of these particular values is basis to be
+    /// confirmed with security review.
     #[must_use]
     pub fn specificity(&self) -> u8 {
         match self {
@@ -79,6 +89,12 @@ impl GrantScope {
     }
 
     /// Whether the scope applies to the given resolution context.
+    ///
+    /// `Global` applies everywhere; `Group` only when the context lists
+    /// that group id; `Workspace` only when the context's
+    /// `workspace_id` is exactly that workspace. A context with no
+    /// workspace id therefore matches no workspace grant -- the failure
+    /// mode is a silent no-match (deny), never a fallback to global.
     #[must_use]
     pub fn applies_to(&self, ctx: &PermissionContext) -> bool {
         match self {
@@ -94,11 +110,22 @@ impl GrantScope {
 /// permissions that MAY require a workspace qualifier.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct ScopedGrant<P> {
+    /// The permission this grant confers: either the exact name, or a
+    /// branch name that also satisfies every permission descending from
+    /// it (see `grant_matches` in this module).
     pub permission: P,
+    /// Where the grant applies. A scope that does not apply to the
+    /// resolution context makes the grant invisible, never wildcard: a
+    /// workspace grant outside its workspace cannot match.
     pub scope: GrantScope,
 }
 
 impl<P> ScopedGrant<P> {
+    /// Pair a permission with the scope it applies at.
+    ///
+    /// No validation happens here: a grant is data, and its effect is
+    /// decided only at resolution time, where a non-applicable scope
+    /// makes it a silent no-match (never an implicit global grant).
     #[must_use]
     pub fn new(permission: P, scope: GrantScope) -> Self {
         Self { permission, scope }
@@ -138,6 +165,8 @@ pub struct MemoryScopedGrantStore<P: Permission> {
 }
 
 impl<P: Permission> Default for MemoryScopedGrantStore<P> {
+    /// Equivalent to [`MemoryScopedGrantStore::new`]: an empty store
+    /// that grants nothing and denies nothing until rows are added.
     fn default() -> Self {
         Self {
             user: std::collections::HashMap::new(),
@@ -148,21 +177,37 @@ impl<P: Permission> Default for MemoryScopedGrantStore<P> {
 }
 
 impl<P: Permission> MemoryScopedGrantStore<P> {
+    /// Create an empty store (identical to `Default::default()`).
+    ///
+    /// An empty store grants nothing: resolution then falls through to
+    /// role defaults and finally to a deny, so a store that was never
+    /// populated fails closed.
     #[must_use]
     pub fn new() -> Self {
         Self::default()
     }
 
+    /// Add a grant attached to one user. Later rows are appended, and a
+    /// duplicate is harmless -- resolution is a union, and the first
+    /// matching row at the winning specificity only affects the label
+    /// (`GrantSource`), never the outcome.
     pub fn grant_user(&mut self, user: Uuid, grant: ScopedGrant<P>) -> &mut Self {
         self.user.entry(user).or_default().push(grant);
         self
     }
 
+    /// Add a grant attached to one group. It becomes effective only for
+    /// contexts that list this group id; for everyone else the row is
+    /// invisible (deny by absence, not an error).
     pub fn grant_group(&mut self, group: Uuid, grant: ScopedGrant<P>) -> &mut Self {
         self.group.entry(group).or_default().push(grant);
         self
     }
 
+    /// Add one permission to the user's explicit deny set. Denies are
+    /// additive and win over every grant shape except admin bypass, and
+    /// they match branches too (a deny on a branch denies its
+    /// descendants). There is no API here to remove a deny.
     pub fn deny(&mut self, user: Uuid, permission: P) -> &mut Self {
         self.denies.entry(user).or_default().insert(permission);
         self
@@ -171,14 +216,25 @@ impl<P: Permission> MemoryScopedGrantStore<P> {
 
 #[async_trait]
 impl<P: Permission + Send + Sync> ScopedGrantStore<P> for MemoryScopedGrantStore<P> {
+    /// In-memory lookup for one user. An unknown user id yields an empty
+    /// list instead of an error, so the absence of rows denies by
+    /// default; this implementation cannot fail.
     async fn user_grants(&self, user_id: Uuid) -> anyhow::Result<Vec<ScopedGrant<P>>> {
         Ok(self.user.get(&user_id).cloned().unwrap_or_default())
     }
 
+    /// In-memory lookup for one group. A group with no rows (or a group
+    /// id that was never granted) yields an empty list, which the
+    /// resolver reads as "no group grant" -- not as an error.
     async fn group_grants(&self, group_id: Uuid) -> anyhow::Result<Vec<ScopedGrant<P>>> {
         Ok(self.group.get(&group_id).cloned().unwrap_or_default())
     }
 
+    /// In-memory deny set for one user; empty when nothing was denied.
+    /// Consequence for the fail-closed contract: a user id that was
+    /// never populated here has an empty deny set, which only ever
+    /// weakens restriction, so the empty result must not be read as
+    /// "store unavailable".
     async fn denied(&self, user_id: Uuid) -> anyhow::Result<HashSet<P>> {
         Ok(self.denies.get(&user_id).cloned().unwrap_or_default())
     }
@@ -192,6 +248,14 @@ pub struct ScopedGrantResolver<P: Permission> {
 }
 
 impl<P: Permission> ScopedGrantResolver<P> {
+    /// Wire a grant store and a role registry into a resolver.
+    ///
+    /// Both are held as shared handles for the resolver's lifetime. The
+    /// resolver keeps no decision cache of its own: every `resolve` call
+    /// re-reads the deny set, the user grants and the group grants, so
+    /// revocation (and group removal) takes effect on the next call.
+    /// Any caching in front of this is the caller's, and it is the
+    /// caller's job to decide how stale a cached grant may be.
     #[must_use]
     pub fn new(
         store: std::sync::Arc<dyn ScopedGrantStore<P>>,
@@ -225,6 +289,42 @@ enum Attachment {
 
 #[async_trait]
 impl<P: Permission + Send + Sync> GrantResolver<P> for ScopedGrantResolver<P> {
+    /// Decide one permission for one subject context (the
+    /// [`GrantResolver`] entry point for scoped grants).
+    ///
+    /// Evaluation order, exactly as implemented:
+    ///
+    /// 1. a stale session denies first (`session_version` below
+    ///    `current_user_version`) -- this check runs before the admin
+    ///    check, so a stale session denies administrators too;
+    /// 2. `SystemRole::Admin` is granted with `AdminBypass` before the
+    ///    deny set is even read: the deny set is delegated control and
+    ///    must never be able to lock the administrator out;
+    /// 3. an explicit deny matching the request (by name, or as a branch
+    ///    the request descends from) denies, whatever grants exist;
+    /// 4. a role default for the system role grants (`RoleDefault`,
+    ///    global by definition);
+    /// 5. otherwise the union of matching scoped grants is searched.
+    ///
+    /// Grant selection invariant: a grant matches only when its
+    /// permission matches (exact name, or the grant is a branch the
+    /// request descends from) AND its scope applies to the context. The
+    /// matching grant with the highest scope specificity labels the
+    /// decision (`Workspace` > `Group` > `Global`); on equal specificity
+    /// the first candidate seen wins, and user-attached candidates are
+    /// collected before group-attached ones, so a user global grant
+    /// outranks a group global grant, and among groups the earliest
+    /// entry in `ctx.group_ids` wins. Grants only ever union across
+    /// scopes -- a workspace grant adds to a global one and never
+    /// subtracts. No applicable match at all denies ("no matching grant
+    /// at any applicable scope").
+    ///
+    /// Failure mode: a store error from `denied`, `user_grants` or
+    /// `group_grants` propagates via `?` as `Err` and is never converted
+    /// into a decision. Callers MUST treat that `Err` as a denial (fail
+    /// closed): the engine's `resolve_effective_permissions` already
+    /// denies on error, and swallowing it into `Ok(Denied { .. })` would
+    /// also lose the distinction between a real denial and an outage.
     async fn resolve(
         &self,
         ctx: &PermissionContext,

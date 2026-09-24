@@ -10,41 +10,86 @@ use tokio::sync::RwLock;
 type AlertHook = Box<dyn Fn(AuditAlert) + Send + Sync>;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+/// One recorded authorization decision - the unit of audit evidence.
+///
+/// Appended by [`AuditLogger::log`] before any rule runs, so a decision is on
+/// record even when no [`AuditRule`] matches. `granted == false` is the signal
+/// policy rules and analyzers key on. The sink, not the caller, owns identity:
+/// [`AuditSink::append`] assigns `id`, so treat any pre-set value as advisory.
 pub struct AuditEntry {
+    /// Sink-assigned identifier, unique within one [`AuditSink`] instance.
     pub id: u64,
+    /// Opaque id of the acting subject; the join key for per-subject queries.
     pub subject_id: String,
+    /// Subject kind (for example `user` or `agent`); attribution, not a trust claim.
     pub subject_type: String,
+    /// The permission that was checked, in the checker's own wire form.
     pub permission: String,
+    /// Entry point that requested the check; correlates a denial burst with one API surface.
     pub endpoint: String,
+    /// The decision. `false` (a denial) is the security-relevant case rules act on.
     pub granted: bool,
+    /// Decision time (UTC). Recency queries sort on this field, not on `id`.
     pub created_at: DateTime<Utc>,
+    /// Risk verdict when the entry was scored; `None` means unscored, never "safe".
     pub verdict: Option<AuditVerdict>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+/// Dynamic-authorization verdict attached to an [`AuditEntry`].
+///
+/// Produced by `rbac::dynamic` (risk score plus the autonomy level it mapped to).
+/// It is advisory evidence only and never grants anything by itself.
 pub struct AuditVerdict {
+    /// Autonomy level the risk score mapped to (see `rbac::dynamic::verdict`).
     pub autonomy_level: String,
+    /// Overall risk in `[0.0, 1.0]`; [`AuditEntry::is_high_risk`] cuts at 0.6.
     pub risk_score: f64,
+    /// Per-factor breakdown backing `risk_score`; kept so alerts stay explainable.
     pub sub_scores: AuditSubScores,
+    /// Human-readable reasons for the score. Never put credentials, tokens or
+    /// password material here: audit entries are persisted and exported.
     pub evidence: Vec<String>,
+    /// Mitigation applied to the decision, if any; `None` means it stood unmitigated.
     pub mitigation: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+/// The per-factor contributions that produced an [`AuditVerdict`] risk score.
+///
+/// Kept for attribution: an investigator needs to know whether risk came from
+/// trust decay, resource sensitivity, domain mismatch, delegation weight or
+/// anomaly - not just the total.
 pub struct AuditSubScores {
+    /// Risk contributed by the delegator's privilege level.
     pub delegator_weight: f64,
+    /// Risk contributed by trust decay; `1.0 - trust_penalty` is the trust score
+    /// compared by [`AuditCondition::TrustBelow`].
     pub trust_penalty: f64,
+    /// Risk contributed by the target resource's sensitivity category.
     pub sensitivity: f64,
+    /// Risk contributed by acting outside the delegator's task domain.
     pub domain_mismatch: f64,
+    /// Risk contributed by behavioral anomaly detection against the subject baseline.
     pub anomaly: f64,
 }
 
 impl AuditEntry {
+    /// Whether this entry records a denial.
+    ///
+    /// Denials are what alert rules and [`AuditCondition::Denied`] act on, and what
+    /// [`AuditAnalysisResult::denied_rate`] counts; prefer this predicate over
+    /// reading `granted` directly.
     #[must_use]
     pub fn is_denied(&self) -> bool {
         !self.granted
     }
 
+    /// Whether the entry carries a risk verdict at or above the high-risk cut (0.6).
+    ///
+    /// Triage helper only: the authoritative threshold is the one on each
+    /// deployment's [`AuditCondition::HighRisk`] rule, which may differ. An entry
+    /// with no verdict is never high risk - unscored is not the same as safe.
     #[must_use]
     pub fn is_high_risk(&self) -> bool {
         self.verdict.as_ref().is_some_and(|v| v.risk_score >= 0.6)
@@ -52,15 +97,24 @@ impl AuditEntry {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+/// Side effect a matched [`AuditRule`] asks for.
+///
+/// Actions are observability and response only: they run after the decision has
+/// been recorded and must never feed back into [`AuditEntry::granted`]. Keep
+/// alert text and `params` free of credentials - alerts are exported to
+/// operators and log sinks.
 pub enum AuditAction {
+    /// Emit a human-facing alert carrying `message` at `severity`.
     Alert {
         message: String,
         severity: AuditSeverity,
     },
-    Notify {
-        target: String,
-        message: String,
-    },
+    /// Notify a specific `target` (webhook, queue, chat channel) with `message`.
+    Notify { target: String, message: String },
+    /// Request an automated response named `action` with `params`.
+    ///
+    /// Deliberately free-form: the audit subsystem records the request, it does
+    /// not execute countermeasures.
     Countermeasure {
         action: String,
         params: HashMap<String, String>,
@@ -68,41 +122,72 @@ pub enum AuditAction {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+/// Triage level of an alert; carries no authorization weight on its own.
 pub enum AuditSeverity {
+    /// Informational - recorded, not paged.
     Info,
+    /// Needs operator attention at the next opportunity.
     Warning,
+    /// Urgent; assume an active or attempted compromise until triaged.
     Critical,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+/// A policy rule: when `condition` holds and the cooldown has elapsed, `action` runs.
+///
+/// Rules observe already-recorded decisions, so a disabled or broken rule
+/// degrades detection but never enforcement. `cooldown_secs` suppresses per rule
+/// id, not per subject, and a suppressed match is not re-evaluated: a long
+/// cooldown can hide a later, more severe match for the same rule.
 pub struct AuditRule {
+    /// Stable rule id; the cooldown key and what [`AuditAlert::rule_id`] reports.
     pub id: String,
+    /// Operator-facing rule name, used in alert text and panic logs.
     pub name: String,
+    /// Disabled rules are skipped entirely: no evaluation and no cooldown update.
     pub enabled: bool,
+    /// Predicate selecting the entries this rule reacts to.
     pub condition: AuditCondition,
+    /// What to do when the rule fires; it cannot change the triggering decision.
     pub action: AuditAction,
+    /// Minimum seconds between two firings of this rule id; `0` fires on every match.
     pub cooldown_secs: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+/// Predicate over a single [`AuditEntry`], evaluated by [`AuditPolicyEngine::evaluate`].
+///
+/// Every variant except [`AuditCondition::RapidDenials`] is a pure function of one
+/// entry. An unscored entry (`verdict: None`) fails each risk-based condition, so
+/// treat a missing verdict as "unknown, not safe" when writing rules.
 pub enum AuditCondition {
+    /// Matches every denial.
     Denied,
-    HighRisk {
-        threshold: f64,
-    },
-    CategorySensitive {
-        min_weight: f64,
-    },
-    DomainMismatch {
-        min_weight: f64,
-    },
-    RapidDenials {
-        window_secs: u64,
-        min_count: u32,
-    },
-    TrustBelow {
-        threshold: f64,
-    },
+    /// Matches entries whose `risk_score` is at or above `threshold`.
+    ///
+    /// The threshold lives on the rule so deployments can tune it without touching
+    /// the scoring engine; it is unrelated to [`AuditEntry::is_high_risk`]'s 0.6.
+    HighRisk { threshold: f64 },
+    /// Matches entries whose resource-sensitivity sub-score is at or above `min_weight`.
+    CategorySensitive { min_weight: f64 },
+    /// Matches entries whose domain-mismatch sub-score is at or above `min_weight`.
+    DomainMismatch { min_weight: f64 },
+    /// Matches when the subject accumulated `min_count` denials within `window_secs`.
+    ///
+    /// The one history-dependent condition: it needs the [`AuditSink`] the policy
+    /// engine was built with, and [`AuditCondition::evaluate`] alone always returns
+    /// `false` for it. An engine without a sink therefore never fires it - a silent
+    /// detection gap, not a fail-closed default.
+    RapidDenials { window_secs: u64, min_count: u32 },
+    /// Matches when the entry's trust score (`1.0 - trust_penalty`) is at or below `threshold`.
+    ///
+    /// Note the polarity: a low trust score matches. An unscored entry has no trust
+    /// reading and never matches.
+    TrustBelow { threshold: f64 },
+    /// Combines sub-conditions with `operator` (all / any).
+    ///
+    /// Degenerate cases follow `Iterator::all`/`any`: an empty `All` matches
+    /// everything, an empty `Any` matches nothing.
     Composite {
         conditions: Vec<AuditCondition>,
         operator: LogicalOp,
@@ -110,12 +195,21 @@ pub enum AuditCondition {
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+/// Boolean connective for [`AuditCondition::Composite`].
 pub enum LogicalOp {
+    /// Fire only when every sub-condition matches.
     All,
+    /// Fire when at least one sub-condition matches.
     Any,
 }
 
 impl AuditCondition {
+    /// Evaluate the condition against one entry; `true` means the rule fires.
+    ///
+    /// Pure and side-effect free: it must not touch the sink, which is why
+    /// [`AuditCondition::RapidDenials`] always returns `false` here and is resolved
+    /// by [`AuditPolicyEngine::evaluate`] instead. Keep it pure - the condition may
+    /// be evaluated for entries that are never persisted.
     #[must_use]
     pub fn evaluate(&self, entry: &AuditEntry) -> bool {
         match self {
@@ -152,66 +246,142 @@ impl AuditCondition {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+/// A fired rule: what matched, what to do about it, and the evidence.
+///
+/// Delivered to hooks registered with [`AuditLogger::on_alert`]. A hook is
+/// arbitrary caller code, so it must not be able to fail the audit write, and its
+/// output is never the authorization decision.
 pub struct AuditAlert {
+    /// Id of the rule that fired (also its cooldown key).
     pub rule_id: String,
+    /// Name of the rule that fired, for operator-facing text.
     pub rule_name: String,
+    /// The action the rule asked for; dispatching it is the consumer's job.
     pub action: AuditAction,
+    /// Snapshot of the matching entry, so the alert stays meaningful after retention
+    /// evicts the original from the sink.
     pub triggering_entry: Box<AuditEntry>,
+    /// When the rule fired (UTC), not when the underlying decision was made.
     pub created_at: DateTime<Utc>,
 }
 
+/// Storage for audit entries.
+///
+/// Implementations must attempt to persist every appended entry and must not fail
+/// or block the caller: `append` returns nothing, so a sink that cannot write is
+/// expected to record that internally (log/metric) rather than drop it silently.
+/// `query` and `count` must agree with what `append` accepted; retention belongs to
+/// the sink, so callers cannot assume an entry survives forever.
 #[async_trait::async_trait]
 pub trait AuditSink: Send + Sync {
+    /// Persist one decision. Idempotence is not required; the sink assigns `id`.
     async fn append(&self, entry: AuditEntry);
+    /// Return matching entries newest first; `filter.limit` is applied here.
     async fn query(&self, filter: &AuditFilter) -> Vec<AuditEntry>;
+    /// Count matching entries without materializing them.
     async fn count(&self, filter: &AuditFilter) -> u64;
 }
 
 #[derive(Debug, Clone, Default)]
+/// Selector for [`AuditSink::query`] and [`AuditSink::count`].
+///
+/// Every field is optional and `Default` matches everything; the fields combine
+/// conjunctively (AND), there is no OR form. `min_risk` compares an unscored
+/// entry against 0.0, so a bound above zero excludes entries with no verdict.
 pub struct AuditFilter {
+    /// Restrict to one subject id.
     pub subject_id: Option<String>,
+    /// Restrict to grants (`true`) or denials (`false`).
     pub granted: Option<bool>,
+    /// Restrict to one permission string (exact match, no wildcards).
     pub permission: Option<String>,
+    /// Inclusive lower bound on `created_at`.
     pub since: Option<DateTime<Utc>>,
+    /// Inclusive upper bound on `created_at`.
     pub until: Option<DateTime<Utc>>,
+    /// Inclusive lower bound on `risk_score`; an entry with no verdict reads as 0.0.
     pub min_risk: Option<f64>,
+    /// Cap on returned entries, applied after sorting newest first; `count` ignores it.
     pub limit: Option<usize>,
 }
 
+/// Evaluates [`AuditRule`]s against entries and reports the ones that fired.
+///
+/// Implementations own their rule state, including per-rule cooldown timestamps,
+/// so two engines loaded with the same rules can both fire - cooldown is local,
+/// not global. Rule changes made through this trait are not persisted.
 #[async_trait::async_trait]
 pub trait AuditPolicyEngine: Send + Sync {
+    /// Evaluate every enabled rule against `entry` and return the alerts that fired.
+    ///
+    /// Must not mutate the entry: it has already been persisted by the caller.
     async fn evaluate(&self, entry: &AuditEntry) -> Vec<AuditAlert>;
+    /// Append a rule. A duplicate `id` is not rejected, and each copy keeps its own
+    /// cooldown slot.
     async fn add_rule(&self, rule: AuditRule);
+    /// Remove every rule with `rule_id`; `Ok(false)` means nothing matched.
     async fn remove_rule(&self, rule_id: &str) -> Result<bool>;
+    /// Snapshot of the current rules; mutating the returned vector does not affect
+    /// the engine.
     async fn list_rules(&self) -> Vec<AuditRule>;
 }
 
+/// Computes aggregate statistics over a batch of entries.
+///
+/// Read-only and advisory: analysis summarizes what the sink already holds and must
+/// never be used as an authorization input.
 #[async_trait::async_trait]
 pub trait AuditAnalyzer: Send + Sync {
+    /// Summarize one batch. The batch is a snapshot; results do not update later.
     async fn analyze(&self, entries: &[AuditEntry]) -> AuditAnalysisResult;
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+/// Summary an [`AuditAnalyzer`] produced over one batch of entries.
+///
+/// A one-shot snapshot, not a live view. `top_risk_entries` is capped by the
+/// analyzer (10 for [`DefaultAuditAnalyzer`]), so it is not the full denial set.
 pub struct AuditAnalysisResult {
+    /// Number of entries in the analyzed batch.
     pub total_entries: u64,
+    /// Denials in the batch.
     pub denied_count: u64,
+    /// `denied_count / total_entries`, or 0.0 for an empty batch.
     pub denied_rate: f64,
+    /// Entries at or above the analyzer's high-risk cut (0.6).
     pub high_risk_count: u64,
+    /// Per-subject rollup, keyed by subject id.
     pub by_subject: HashMap<String, SubjectStats>,
+    /// Decision counts per permission string, grants and denials combined.
     pub by_permission: HashMap<String, u64>,
+    /// Highest-risk entries, descending, capped by the analyzer.
     pub top_risk_entries: Vec<AuditEntry>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+/// Per-subject aggregate inside an [`AuditAnalysisResult`].
 pub struct SubjectStats {
+    /// Decisions recorded for this subject in the batch.
     pub total: u64,
+    /// Denials among them.
     pub denied: u64,
+    /// Mean risk across the subject's entries (unscored entries count as 0.0).
     pub avg_risk: f64,
+    /// Highest risk seen for this subject.
     pub max_risk: f64,
 }
 
+// Retention cap for the in-memory sink. Matches the same 10k bound used by
+// `TtlPermissionCache` and the login rate limiter, so one process's in-memory
+// security state has a single, predictable ceiling.
 const DEFAULT_MAX_AUDIT_ENTRIES: usize = 10000;
 
+/// Bounded in-memory [`AuditSink`] backed by a ring buffer.
+///
+/// On overflow the oldest entries are dropped, so this sink is neither durable nor
+/// tamper-evident: it is for tests, examples and single-process deployments that
+/// ship entries elsewhere. Size `max_entries` so the retention window covers the
+/// longest investigation you need; evidence beyond it is gone.
 pub struct InMemoryAuditSink {
     entries: RwLock<VecDeque<AuditEntry>>,
     next_id: std::sync::atomic::AtomicU64,
@@ -219,6 +389,7 @@ pub struct InMemoryAuditSink {
 }
 
 impl InMemoryAuditSink {
+    /// Create a sink retaining the default maximum of 10 000 entries.
     #[must_use]
     pub fn new() -> Self {
         Self {
@@ -228,6 +399,10 @@ impl InMemoryAuditSink {
         }
     }
 
+    /// Create a sink retaining at most `max_entries` entries, evicting oldest first.
+    ///
+    /// The bound is the whole retention policy: there is no time-based expiry, so a
+    /// quiet system keeps entries indefinitely.
     #[must_use]
     pub fn with_max_entries(max_entries: usize) -> Self {
         Self {
@@ -314,6 +489,12 @@ impl AuditSink for InMemoryAuditSink {
     }
 }
 
+/// Rule engine with in-memory rules, cooldown state and an optional [`AuditSink`].
+///
+/// Holds no persistence - [`AuditPolicyEngine::add_rule`] affects this instance
+/// only. Without a sink the history-dependent [`AuditCondition::RapidDenials`] can
+/// never fire, so a deployment relying on it must use
+/// [`InMemoryAuditPolicyEngine::with_sink`].
 pub struct InMemoryAuditPolicyEngine {
     rules: RwLock<Vec<AuditRule>>,
     last_triggered: RwLock<HashMap<String, DateTime<Utc>>>,
@@ -321,6 +502,7 @@ pub struct InMemoryAuditPolicyEngine {
 }
 
 impl InMemoryAuditPolicyEngine {
+    /// Create an engine with no rules and no sink (RapidDenials cannot fire).
     #[must_use]
     pub fn new() -> Self {
         Self {
@@ -330,6 +512,10 @@ impl InMemoryAuditPolicyEngine {
         }
     }
 
+    /// Create an engine that resolves history-dependent conditions against `sink`.
+    ///
+    /// The sink is also the source RapidDenials counts from, so it should be the same
+    /// sink the decisions are written to; otherwise the rule counts a different history.
     #[must_use]
     pub fn with_sink(sink: Arc<dyn AuditSink>) -> Self {
         Self {
@@ -437,9 +623,14 @@ impl AuditPolicyEngine for InMemoryAuditPolicyEngine {
     }
 }
 
+/// Stateless [`AuditAnalyzer`] computing the bundled summary statistics.
+///
+/// Counts denials and high-risk entries (risk >= 0.6) and keeps the ten riskiest
+/// entries, so the result is a triage aid rather than a complete denial inventory.
 pub struct DefaultAuditAnalyzer;
 
 impl DefaultAuditAnalyzer {
+    /// Create the analyzer; it holds no state, so one instance serves every query.
     #[must_use]
     pub fn new() -> Self {
         Self
@@ -518,6 +709,13 @@ impl AuditAnalyzer for DefaultAuditAnalyzer {
     }
 }
 
+/// Audit front door: persist a decision, evaluate policy, dispatch alerts.
+///
+/// [`AuditLogger::log`] appends to the sink first, so evidence survives a slow or
+/// panicking policy engine and hook. Hooks run synchronously on the caller's task;
+/// a panicking hook is caught and logged, and the remaining hooks still run.
+/// Cloning shares sink, engine, analyzer and hook list - the clone is a handle,
+/// not a copy of the state.
 pub struct AuditLogger {
     sink: Arc<dyn AuditSink>,
     policy_engine: Option<Arc<dyn AuditPolicyEngine>>,
@@ -526,6 +724,7 @@ pub struct AuditLogger {
 }
 
 impl AuditLogger {
+    /// Build a logger over `sink`, with no policy engine and no analyzer yet.
     pub fn new(sink: impl AuditSink + 'static) -> Self {
         Self {
             sink: Arc::new(sink),
@@ -535,23 +734,35 @@ impl AuditLogger {
         }
     }
 
+    /// Attach the rule engine whose alerts [`AuditLogger::log`] returns and dispatches.
     #[must_use]
     pub fn with_policy_engine(mut self, engine: impl AuditPolicyEngine + 'static) -> Self {
         self.policy_engine = Some(Arc::new(engine));
         self
     }
 
+    /// Attach the analyzer used by [`AuditLogger::analyze_recent`].
     #[must_use]
     pub fn with_analyzer(mut self, analyzer: impl AuditAnalyzer + 'static) -> Self {
         self.analyzer = Some(Arc::new(analyzer));
         self
     }
 
+    /// Register a callback invoked for every fired alert.
+    ///
+    /// Hooks run while the logger's hook lock is held, so a blocking hook delays every
+    /// later [`AuditLogger::log`] call. A panicking hook is caught and logged; it can
+    /// never poison the audit path. Registering is not idempotent.
     pub async fn on_alert(&self, hook: impl Fn(AuditAlert) + Send + Sync + 'static) {
         let mut hooks = self.alert_hooks.write().await;
         hooks.push(Box::new(hook));
     }
 
+    /// Record `entry` and return the alerts its rules produced.
+    ///
+    /// The entry is appended before rules run, so the audit write does not depend on
+    /// policy success. Returned alerts have also been handed to the hooks. The logger
+    /// reports; it never grants or denies - the caller owns the decision.
     #[must_use]
     pub async fn log(&self, entry: AuditEntry) -> Vec<AuditAlert> {
         self.sink.append(entry.clone()).await;
@@ -579,16 +790,22 @@ impl AuditLogger {
         alerts
     }
 
+    /// Read matching entries from the sink, newest first.
     #[must_use]
     pub async fn query(&self, filter: &AuditFilter) -> Vec<AuditEntry> {
         self.sink.query(filter).await
     }
 
+    /// Count matching entries in the sink.
     #[must_use]
     pub async fn count(&self, filter: &AuditFilter) -> u64 {
         self.sink.count(filter).await
     }
 
+    /// Query the sink and analyze the result; `None` when no analyzer is attached.
+    ///
+    /// Runs over one snapshot, so entries appended afterwards are not reflected and
+    /// `filter.limit` bounds the analysis window.
     #[must_use]
     pub async fn analyze_recent(&self, filter: &AuditFilter) -> Option<AuditAnalysisResult> {
         let analyzer = self.analyzer.as_ref()?;

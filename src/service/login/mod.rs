@@ -37,6 +37,21 @@ struct RateLimitEntry {
     window_start: Instant,
 }
 
+/// Fixed-window rate limiter keyed by an opaque string (a username).
+///
+/// A key accumulates failures; after `max_attempts` failures within
+/// `window_secs` the key stays blocked until `window_secs + lockout_secs` have
+/// elapsed since the window opened. Two properties shape the threat model:
+///
+/// - It is per key, not per source address. It slows guessing against one account,
+///   but does not by itself stop a spray across many usernames, and anyone who
+///   knows a victim's username can use it to keep that account locked out.
+/// - State is in-process and unshared. N replicas allow N times the attempts, and a
+///   restart clears every lockout, so a deployment that needs a hard guarantee must
+///   put a shared limiter (or per-IP limiting) in front of this one.
+///
+/// The limiter is also not an existence oracle: it counts attempts for any key,
+/// whether or not the account exists, and its error carries no account state.
 pub struct LoginRateLimiter {
     max_attempts: u32,
     window_secs: u64,
@@ -44,11 +59,40 @@ pub struct LoginRateLimiter {
     entries: Arc<RwLock<HashMap<String, RateLimitEntry>>>,
 }
 
+/// Minimum password length in bytes, enforced by [`validate_password`].
+///
+/// 8 is the NIST SP 800-63B minimum password length; the length floor, not the
+/// character-class rule below, is the control that actually raises guessing cost.
 const MIN_PASSWORD_LEN: usize = 8;
+/// Maximum password length in bytes.
+///
+/// Bounds how much attacker-controlled input reaches the Argon2id work function.
+/// The 19 MiB memory cost is fixed, so a huge password cannot amplify memory much,
+/// but it would still be hashed on every attempt; 128 keeps that cost flat and is
+/// generous for both a passphrase and a password-manager value.
 const MAX_PASSWORD_LEN: usize = 128;
+/// Minimum username length in bytes; a local policy choice (shortest meaningful
+/// operator-chosen name), not a security control - basis to be confirmed with
+/// security review if any downstream treats it as one.
 const MIN_USERNAME_LEN: usize = 2;
+/// Maximum username length in bytes.
+///
+/// Bounds the size of every derived identifier: rate-limiter bucket key (see
+/// [`RATE_LIMITER_MAX_ENTRIES`]), audit subject id, store rows and log lines.
 const MAX_USERNAME_LEN: usize = 64;
 
+/// Normalize and validate a username, returning the trimmed canonical form.
+///
+/// Accepts 2..=64 bytes of `[A-Za-z0-9._-]` after trimming, which keeps path
+/// separators, whitespace, quotes and shell metacharacters out of every
+/// downstream store, log line and file name. The caller must use the returned
+/// value - not the input - as the identity, otherwise the rate limiter and the
+/// user table can disagree on what the "same" username is.
+///
+/// # Errors
+///
+/// [`KirinoError::Validation`] when the trimmed value is empty or too short, too
+/// long, or contains a character outside the allowed set.
 pub fn validate_username(username: &str) -> Result<String> {
     let trimmed = username.trim();
     if trimmed.is_empty() || trimmed.len() < MIN_USERNAME_LEN {
@@ -76,6 +120,20 @@ pub fn validate_username(username: &str) -> Result<String> {
     Ok(trimmed.to_string())
 }
 
+/// Enforce the password policy: 8..=128 bytes and at least 3 of the 4 character
+/// classes (uppercase, lowercase, digit, non-alphanumeric).
+///
+/// Lengths are counted in bytes, not characters, so a non-ASCII passphrase can
+/// clear the floor with fewer than eight characters. The composition rule is a
+/// local policy choice - NIST SP 800-63B prefers length and breach checks over
+/// composition - and its basis is to be confirmed with security review. This
+/// function only checks shape: it cannot tell whether a password is breached,
+/// reused or otherwise known.
+///
+/// # Errors
+///
+/// [`KirinoError::Validation`] when the length or the class count is out of
+/// policy.
 pub fn validate_password(password: &str) -> Result<()> {
     if password.len() < MIN_PASSWORD_LEN {
         return Err(KirinoError::Validation(format!(
@@ -111,9 +169,32 @@ pub fn validate_password(password: &str) -> Result<()> {
     Ok(())
 }
 
+/// Soft cap on how many rate-limit buckets a [`LoginRateLimiter`] tracks.
+///
+/// At the cap the limiter first drops buckets whose window has fully elapsed and
+/// then inserts the new key unconditionally, so this is a memory-hygiene bound,
+/// not a hard ceiling: a burst of distinct usernames (credential stuffing, or a
+/// scanner walking the namespace) keeps every live bucket and can push the map
+/// past 10k. Keys are attacker-supplied and, on the login path, only trimmed -
+/// the number of distinct keys is not bounded by the user table, and neither is
+/// key length, so both are unbounded inputs and the real ceiling is process
+/// memory. Because only elapsed buckets are pruned, the cap can never shorten an
+/// active lockout: the failure mode it permits is memory growth, not a weakened
+/// block. 10k matches the in-memory audit sink and TTL permission cache
+/// defaults, so one process's in-memory security state has a single predictable
+/// ceiling; the number itself has no recorded derivation and is to be confirmed
+/// with security review before being treated as a DoS control.
 const RATE_LIMITER_MAX_ENTRIES: usize = 10_000;
 
 impl LoginRateLimiter {
+    /// Create a limiter allowing `max_attempts` failures per `window_secs`, then
+    /// blocking the key for `lockout_secs`.
+    ///
+    /// The three numbers are policy, not derived constants: size them from the
+    /// legitimate retry rate (a human mistyping a password) against the online
+    /// guessing budget the deployment accepts, and record the reasoning here when
+    /// changing them. [`AuthService::new`] constructs the login and registration
+    /// limiters with the crate's defaults.
     #[must_use]
     pub fn new(max_attempts: u32, window_secs: u64, lockout_secs: u64) -> Self {
         Self {
@@ -124,6 +205,20 @@ impl LoginRateLimiter {
         }
     }
 
+    /// Record one failed attempt for `key`, failing while the key is blocked.
+    ///
+    /// The window is fixed, not sliding: it opens on the first counted failure and is
+    /// reset once `window_secs + lockout_secs` have elapsed, or once the window has
+    /// passed with fewer than `max_attempts` failures. The counter only advances on
+    /// this path, so a successful authentication must call
+    /// [`LoginRateLimiter::reset`] (the [`AuthService`] login path does); otherwise
+    /// earlier failures keep counting against the key until the window rolls over.
+    ///
+    /// # Errors
+    ///
+    /// [`KirinoError::Validation`] while the key is inside its lockout window. The
+    /// message states only how long to wait - it never reveals account state and
+    /// must stay that way, since callers surface it to unauthenticated clients.
     pub async fn check_and_record_failure(&self, key: &str) -> Result<()> {
         let mut entries = self.entries.write().await;
         let now = Instant::now();
@@ -167,6 +262,11 @@ impl LoginRateLimiter {
         Ok(())
     }
 
+    /// Forget `key`'s failures, clearing any active lockout.
+    ///
+    /// Call it only after the identity has actually been proven (a successful login
+    /// or registration). Resetting on an unverified request would let an attacker
+    /// clear the counter at will.
     pub async fn reset(&self, key: &str) {
         let mut entries = self.entries.write().await;
         entries.remove(key);
@@ -302,7 +402,19 @@ where
             engine,
             #[cfg(feature = "rbac-dynamic")]
             arbiter: None,
+            // Login: 5 failures per 300 s window, then a 900 s lockout. Rationale:
+            // five covers a human mistyping a password a few times, while staying far
+            // below what an online guessing session would need; the lockout is 3x the
+            // window so the block outlives the observation period instead of expiring
+            // with it. The exact numbers have no recorded derivation - treat them as
+            // tunable policy defaults pending confirmation with security review.
             rate_limiter: LoginRateLimiter::new(5, 300, 900),
+            // Registration: 3 failures per 300 s window, then a 1800 s lockout.
+            // Stricter than login because account creation is not a repeated human
+            // action and is the more attractive automation target (mass registration,
+            // name squatting). A rejected duplicate name also counts as a failure,
+            // since only a successful registration resets the key. Same caveat as
+            // above: defaults without a recorded derivation, pending security review.
             register_rate_limiter: LoginRateLimiter::new(3, 300, 1800),
             first_user_role: first_user_role.to_string(),
             default_role: default_role.to_string(),
@@ -426,6 +538,12 @@ where
         Ok(user.to_public())
     }
 
+    // A well-formed Argon2id hash with an all-zero salt, verified against when the
+    // username does not exist so that path pays the same hashing cost as a real
+    // wrong-password check (see `authenticate_user`). Its m/t/p must match
+    // `static_password::ARGON2_*` or the unknown-user path becomes measurably
+    // cheaper than the known-user one, restoring the enumeration oracle. Removing
+    // the verification would do the same.
     const DUMMY_HASH: &str =
         "$argon2id$v=19$m=19456,t=2,p=1$AAAAAAAAAAAAAAAAAAAAAA$AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
 
@@ -441,6 +559,14 @@ where
         };
 
         if !user.is_active {
+            // Timing equalization, not authentication: the deactivated-account path
+            // must pay the same Argon2id cost as a wrong password on an active
+            // account, otherwise response time becomes an account-state oracle
+            // (the unknown-user branch above does the equivalent with DUMMY_HASH).
+            // The result is intentionally discarded, and the cost is only paid if
+            // `password_hash` is a valid PHC string - which `hash_password`
+            // guarantees for anything stored through this crate. Do not remove this
+            // call or turn it into an early return.
             let _ = verify_password(password, &user.password_hash);
             return Err(KirinoError::AuthenticationFailed.into());
         }

@@ -1,18 +1,49 @@
+//! Fail-closed constraint validation gate.
+//!
+//! Each check reads the constraint store and returns `Err` both for a violation and
+//! for a store failure; a caller on a security path must treat either as a denial.
+//! The gate keeps no cache and takes no lock across calls, so it validates the state
+//! that was stored when it read and is not atomic with the write it guards.
+
 use anyhow::Result;
 
 use super::store::ConstraintStore;
 use crate::error::KirinoError;
 
+/// Applies the stored constraint policies to role assignment and activation.
+///
+/// Semantics worth relying on:
+/// - fail-closed: a store error propagates as `Err` (via `?`), so an unreadable
+///   store denies rather than permits, and the caller must deny too;
+/// - default-permit by absence: a role with no stored constraint of a given kind
+///   passes that check, so an unseeded store enforces nothing;
+/// - no cache and no staleness window: every call re-reads the store, so a policy
+///   change applies from the next call, at the cost of store reads per check;
+/// - advisory, not transactional: the validator performs no write and holds no lock
+///   between a check and the caller's write, so two concurrent assignments can both
+///   pass a cardinality check (TOCTOU). Enforcement depends on the caller invoking a
+///   check before committing the assignment, and on denying when a check errors.
 pub struct ConstraintValidator<S: ConstraintStore> {
     store: S,
 }
 
 impl<S: ConstraintStore> ConstraintValidator<S> {
+    /// Wraps an existing store; the store is neither seeded nor verified here.
+    ///
+    /// Passing an empty store yields a validator that permits everything, so store
+    /// population is a security-critical precondition.
     #[must_use]
     pub fn new(store: S) -> Self {
         Self { store }
     }
 
+    /// Checks SSD policies before assigning `new_role` to `current_roles`.
+    ///
+    /// Re-assigning a role that is already held short-circuits to `Ok(())`, so the
+    /// call is idempotent for held roles. Otherwise the existing roles plus the new
+    /// one are tested against every stored policy and the first violation denies.
+    /// A store error propagates and must be treated as denial (fail-closed); with no
+    /// SSD policy stored the check passes.
     /// # Errors
     /// Returns an error if adding the new role would violate an SSD policy.
     pub async fn validate_ssd(&self, current_roles: &[String], new_role: &str) -> Result<()> {
@@ -35,6 +66,12 @@ impl<S: ConstraintStore> ConstraintValidator<S> {
         Ok(())
     }
 
+    /// Checks DSD policies before activating `new_role` in an active role set.
+    ///
+    /// Same shape as `validate_ssd`: a role that is already active short-circuits to
+    /// `Ok(())`, the first violating policy denies, and a store error propagates and
+    /// must be treated as denial (fail-closed). With no DSD policy stored the check
+    /// passes.
     /// # Errors
     /// Returns an error if activating the new role would violate a DSD policy.
     pub async fn validate_dsd(&self, active_roles: &[String], new_role: &str) -> Result<()> {
@@ -57,6 +94,12 @@ impl<S: ConstraintStore> ConstraintValidator<S> {
         Ok(())
     }
 
+    /// Checks that `role_name` has no temporal window that is currently invalid.
+    ///
+    /// Every stored window for the role is examined, so one expired or not-yet-started
+    /// window denies the role even when another window is current. Roles with no
+    /// stored window pass. The verdict comes from the wall clock at call time and is
+    /// not cached, so a system clock change changes the outcome.
     /// # Errors
     /// Returns an error if any temporal constraint is violated at the current time.
     pub async fn validate_temporal(&self, role_name: &str) -> Result<()> {
@@ -73,6 +116,12 @@ impl<S: ConstraintStore> ConstraintValidator<S> {
         Ok(())
     }
 
+    /// Checks the stored cardinality bound for `role_name` against a caller count.
+    ///
+    /// The count is supplied by the caller and is neither read from nor verified
+    /// against the store, so an under-count weakens the bound (fail-open); pass an
+    /// authoritative assignment count. Roles with no stored bound pass, and a store
+    /// error propagates as denial.
     /// # Errors
     /// Returns an error if the cardinality constraint for the role would be exceeded.
     pub async fn validate_cardinality(
@@ -93,6 +142,11 @@ impl<S: ConstraintStore> ConstraintValidator<S> {
         Ok(())
     }
 
+    /// Checks that every prerequisite stored for `role_name` is in `current_roles`.
+    ///
+    /// A missing prerequisite denies; role hierarchies are not resolved here, so a
+    /// prerequisite satisfied only transitively still denies. A store error
+    /// propagates as denial, and roles with no stored prerequisite pass.
     /// # Errors
     /// Returns an error if the prerequisite role is not present in `current_roles`.
     pub async fn validate_prerequisite(
@@ -113,6 +167,13 @@ impl<S: ConstraintStore> ConstraintValidator<S> {
         Ok(())
     }
 
+    /// Runs the assignment-time checks in order: SSD, cardinality, prerequisite,
+    /// then temporal. Stops at the first failure and propagates store errors.
+    ///
+    /// DSD is not part of this path: it is enforced when a role is activated in a
+    /// session. The method performs no write, so it must be called before the
+    /// assignment is committed, and an empty or unseeded store makes it a no-op
+    /// (default-permit by absence of policy).
     /// # Errors
     /// Returns an error if any SSD, cardinality, prerequisite, or temporal constraint is violated.
     pub async fn validate_assignment(

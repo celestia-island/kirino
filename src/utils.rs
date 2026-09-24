@@ -5,9 +5,9 @@
 /// (`len % 4 == 1`) and non-canonical trailing bits rejected so bytes
 /// decoded from equal-length encodings stay unique (RFC 4648 §3.5).
 ///
-/// WebAuthn consumers wrap [`decode`] to map errors onto their own
-/// challenge error type; see
-/// [`crate::auth::passport::webauthn::base64url_decode`].
+/// WebAuthn consumers wrap [`base64url::decode`] to map errors onto their own
+/// challenge error type; that wrapper lives in the WebAuthn challenge module
+/// (`auth::passport::webauthn`, feature `auth-webauthn`).
 pub mod base64url {
     /// A base64url decode failure.
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]

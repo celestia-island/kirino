@@ -1,13 +1,80 @@
+//! Role hierarchy: walk a role's parent chain, union the permissions of
+//! every reachable ancestor, and detect cycles in that chain.
+//!
+//! Threat model: parent links are configuration rather than end-user
+//! input, but they are still privilege-bearing -- adding a parent adds
+//! permissions, and a misconfigured or duplicated link widens privilege
+//! silently. A cycle would turn a naive walk into an infinite loop (a
+//! hang, not a wrong answer), so both entry points are cycle-safe:
+//! [`resolve_role_chain`] keeps a visited set and never expands a role
+//! twice, and [`detect_cycle`] tracks the current path and returns as
+//! soon as a role repeats.
+//!
+//! What happens on a cycle, exactly: neither function errors and neither
+//! truncates. `resolve_role_chain` returns the union of the permissions
+//! it collected before the repeat (for `a <-> b`, both roles'
+//! permissions plus every other ancestor reached); `detect_cycle`
+//! returns `true` so the caller can refuse the role or report the
+//! configuration defect. Nothing is repaired here.
+//!
+//! Bounds: termination is bounded by the number of distinct role names
+//! the registry reports. There is no explicit depth cap, no numeric
+//! threshold and no timeout in this module; `resolve_role_chain` is
+//! iterative (an explicit stack), while `detect_cycle` is recursive, so
+//! its call-stack usage grows with chain depth.
+//!
+//! Failure mode: neither function returns a `Result`, so there is no
+//! error path and nothing to fail open on. An unknown role name -- or a
+//! parent name the registry does not know -- contributes no permissions
+//! and ends that branch: nothing is invented, but the missing subtree is
+//! also not reported, so a typo silently under-grants (the safe
+//! direction) instead of failing loudly.
+//!
+//! Staleness: the registry is read on every call and nothing is cached
+//! here, so results reflect registry state at call time.
+
 use std::collections::HashSet;
 
 use crate::rbac::traits::{Permission, Role};
 
+/// A [`Role`] that inherits permissions from named parent roles.
+///
+/// Security semantics: inheritance is additive only. A parent can add
+/// permissions the role does not list, and there is no way to subtract a
+/// parent permission from a child -- revocation must remove the role or
+/// the grant, never add a negative entry.
+///
+/// The default implementation returns no parents, so a role that does
+/// not override `parent_roles` is a flat role holding exactly its own
+/// permissions. Parent names are resolved against the registry at
+/// resolution time and are never validated here: an unknown name is
+/// silently ignored (see [`resolve_role_chain`]).
 pub trait HierarchicalRole<P: Permission>: Role<P> {
+    /// Names of the roles this role inherits from.
+    ///
+    /// The names are looked up in the registry by
+    /// [`resolve_role_chain`]; a name the registry does not know
+    /// contributes nothing, so a stale entry widens nothing but also
+    /// raises no error. The default returns an empty list (no
+    /// inheritance). Because the walk visits each name at most once, a
+    /// cycle in these names cannot loop it -- use [`detect_cycle`] when
+    /// the cycle must be surfaced instead of tolerated.
     fn parent_roles(&self) -> Vec<String> {
         Vec::new()
     }
 }
 
+/// A hierarchy node: a role name, the permissions it holds directly, and
+/// the names of its parent roles.
+///
+/// The node is plain data -- it validates nothing. Consequences worth
+/// knowing at the call site: an empty permission set is a role that
+/// grants nothing on its own (deny by default for the direct set), a
+/// parent name no registry knows is a silent no-op at resolution time,
+/// and the parent list may contain duplicates or cycles without
+/// affecting termination (the walk visits each name once). All fields
+/// are private; the only way in is [`HierarchyNode::new`] plus
+/// [`HierarchyNode::with_parents`].
 #[derive(Debug, Clone)]
 pub struct HierarchyNode<P: Permission> {
     name: String,
@@ -16,6 +83,12 @@ pub struct HierarchyNode<P: Permission> {
 }
 
 impl<P: Permission> HierarchyNode<P> {
+    /// Build a node with the given direct permissions and no parents.
+    ///
+    /// The node grants exactly the permissions passed in, so an empty set
+    /// grants nothing. Inherited permissions are not computed or cached
+    /// here -- they are resolved per call by [`resolve_role_chain`] -- so
+    /// a role's effective set can only widen by adding parents.
     pub fn new(name: impl Into<String>, permissions: HashSet<P>) -> Self {
         Self {
             name: name.into(),
@@ -24,6 +97,15 @@ impl<P: Permission> HierarchyNode<P> {
         }
     }
 
+    /// Attach the parent role names (builder style: consumes and returns
+    /// `self`, so it composes with `new`).
+    ///
+    /// The list is stored verbatim. Nothing is checked here: no
+    /// deduplication, no lookup of the names in the registry, no
+    /// [`detect_cycle`] call and no depth limit. Duplicates and unknown
+    /// names are harmless at resolution time because the walk expands
+    /// each name once, but they are also invisible -- a wrong parent
+    /// name silently drops that whole subtree of inherited permissions.
     #[must_use]
     pub fn with_parents(mut self, parents: Vec<String>) -> Self {
         self.parents = parents;
@@ -32,21 +114,52 @@ impl<P: Permission> HierarchyNode<P> {
 }
 
 impl<P: Permission> Role<P> for HierarchyNode<P> {
+    /// The name this node is registered under. Parent links are stored
+    /// and resolved as names, so this string is the key every child looks
+    /// up -- renaming a role without updating its children silently
+    /// drops their inheritance.
     fn role_name(&self) -> &str {
         &self.name
     }
 
+    /// The permissions held directly by this node (exactly the set given
+    /// to [`HierarchyNode::new`]), without any inherited permissions --
+    /// for the inherited union use [`resolve_role_chain`].
     fn permissions(&self) -> &HashSet<P> {
         &self.permissions
     }
 }
 
 impl<P: Permission> HierarchicalRole<P> for HierarchyNode<P> {
+    /// Returns a clone of the parent names configured by
+    /// [`HierarchyNode::with_parents`]. No lookup and no validation
+    /// happen here, so an unregistered name is passed through unchanged
+    /// and is ignored later, during resolution.
     fn parent_roles(&self) -> Vec<String> {
         self.parents.clone()
     }
 }
 
+/// Union the permissions of `role_name` and of every ancestor reachable
+/// through [`RoleRegistry::role_parents`](crate::rbac::traits::RoleRegistry::role_parents).
+///
+/// Cycle-safe and terminating: the walk keeps a visited set and skips a
+/// role it has already expanded, so a cycle stops the walk instead of
+/// looping. A cycle is not an error here and does not truncate the
+/// result -- every permission collected before the repeat is returned,
+/// so for `a <-> b` the caller gets the union of both roles'
+/// permissions. When a cycle must be reported rather than tolerated,
+/// check [`detect_cycle`] separately; this function never calls it.
+///
+/// Bounds: work is bounded by the number of distinct role names, with no
+/// explicit depth limit and no numeric threshold. The walk is iterative
+/// (an explicit stack), so depth does not consume call stack here.
+///
+/// Fail-closed details: an unknown `role_name`, or a parent name the
+/// registry does not know, contributes no permissions and ends that
+/// branch -- the function returns an empty, non-defaulted set for an
+/// unresolvable role rather than an error. Nothing is granted that the
+/// registry did not report, and role defaults are not applied here.
 #[must_use]
 pub fn resolve_role_chain<P>(
     role_name: &str,
@@ -78,6 +191,17 @@ where
     all_perms
 }
 
+/// Depth-first cycle probe behind [`detect_cycle`].
+///
+/// `path` holds the roles on the current recursion path (the grey set)
+/// and `visited` the roles already fully explored (the black set); a
+/// name found in `path` is a back edge and returns `true` upwards
+/// immediately, which is what makes the probe terminate on cyclic
+/// shapes. Parents are followed only for a role the registry knows
+/// (`get_role_permissions` returns `Some`), so an unknown name is a leaf
+/// here. The sets are working state owned by the caller and must not be
+/// reused across queries -- `detect_cycle` allocates fresh ones per
+/// call.
 fn dfs<P>(
     name: &str,
     registry: &dyn crate::rbac::traits::RoleRegistry<P>,
@@ -108,6 +232,24 @@ where
     false
 }
 
+/// Report whether `role_name` participates in a parent cycle reachable
+/// from it (including a role that names itself as its own parent).
+///
+/// Returns `true` as soon as a role repeats on the current path, and
+/// `false` in every other case -- including an unknown role (the
+/// registry reports no permissions for it, so no parents are followed)
+/// and a diamond where two paths share an ancestor without a cycle.
+///
+/// This is a diagnosis, not a repair: it does not report where the cycle
+/// is, does not enumerate further cycles, and does not change what
+/// [`resolve_role_chain`] returns. The caller decides whether a cyclic
+/// role is refused, logged or tolerated -- tolerating it still
+/// terminates, but the privileges it yields may not be the intended
+/// ones.
+///
+/// Bounds: work is bounded by the number of distinct role names, but the
+/// search is recursive, so call-stack usage grows with chain depth.
+/// There is no explicit depth limit and no numeric threshold here.
 #[must_use]
 pub fn detect_cycle<P>(role_name: &str, registry: &dyn crate::rbac::traits::RoleRegistry<P>) -> bool
 where
