@@ -200,70 +200,27 @@ impl WebAuthnChallengeStore {
     }
 }
 
-/// RFC 4648 base64url without padding.
-///
-/// RFC 4648 base64url **without** padding, exactly the encoding WebAuthn
+/// RFC 4648 base64url **without** padding — exactly the encoding WebAuthn
 /// §4.2 prescribes for `clientDataJSON.challenge` (browsers emit unpadded).
+///
+/// Thin wrapper over the house codec [`crate::utils::base64url::encode`].
 #[must_use]
 pub fn base64url_encode(bytes: &[u8]) -> String {
-    const TABLE: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
-    let mut out = String::with_capacity(bytes.len().div_ceil(3) * 4);
-    for chunk in bytes.chunks(3) {
-        let b0 = chunk[0] as u32;
-        let b1 = chunk.get(1).map_or(0, |&b| u32::from(b));
-        let b2 = chunk.get(2).map_or(0, |&b| u32::from(b));
-        let n = (b0 << 16) | (b1 << 8) | b2;
-        out.push(TABLE[(n >> 18 & 63) as usize] as char);
-        out.push(TABLE[(n >> 12 & 63) as usize] as char);
-        if chunk.len() > 1 {
-            out.push(TABLE[(n >> 6 & 63) as usize] as char);
-        }
-        if chunk.len() > 2 {
-            out.push(TABLE[(n & 63) as usize] as char);
-        }
-    }
-    out
+    crate::utils::base64url::encode(bytes)
 }
 
 /// Decode RFC 4648 base64url; trailing `=` tolerated but never required,
 /// impossible lengths (`len % 4 == 1`) and non-canonical trailing bits
 /// rejected so bytes decoded from equal-length encodings stay unique.
 ///
+/// Thin wrapper over the house codec [`crate::utils::base64url::decode`].
+///
 /// # Errors
 ///
-/// [`WebAuthnChallengeError::NotFound`] on any malformed input.
+/// [`WebAuthnChallengeError::NotFound`] on any malformed input — decode
+/// failures are deliberately indistinguishable from an unknown challenge.
 pub fn base64url_decode(s: &str) -> Result<Vec<u8>, WebAuthnChallengeError> {
-    fn val(c: u8) -> Option<u32> {
-        match c {
-            b'A'..=b'Z' => Some(u32::from(c - b'A')),
-            b'a'..=b'z' => Some(u32::from(c - b'a') + 26),
-            b'0'..=b'9' => Some(u32::from(c - b'0') + 52),
-            b'-' => Some(62),
-            b'_' => Some(63),
-            _ => None,
-        }
-    }
-    if s.len() % 4 == 1 {
-        return Err(WebAuthnChallengeError::NotFound);
-    }
-    let s = s.trim_end_matches('=');
-    let mut out = Vec::with_capacity(s.len() * 3 / 4 + 3);
-    let mut acc: u32 = 0;
-    let mut bits: u32 = 0;
-    for (i, &c) in s.as_bytes().iter().enumerate() {
-        let v = val(c).ok_or(WebAuthnChallengeError::NotFound)?;
-        acc = (acc << 6) | v;
-        bits += 6;
-        if bits >= 8 {
-            bits -= 8;
-            out.push(((acc >> bits) & 0xff) as u8);
-        }
-        // Canonical tail: leftover pad bits after the final byte must be 0.
-        if i == s.len() - 1 && bits > 0 && (acc & ((1 << bits) - 1)) != 0 {
-            return Err(WebAuthnChallengeError::NotFound);
-        }
-    }
-    Ok(out)
+    crate::utils::base64url::decode(s).map_err(|_| WebAuthnChallengeError::NotFound)
 }
 
 #[cfg(test)]
