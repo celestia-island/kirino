@@ -41,6 +41,12 @@ pub struct TokenClaims {
     /// Cross-auth relay ID (UUIDv7, permanent).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub relay_id: Option<String>,
+    /// Workspace scope (RBAC partitioning): when set, the session is
+    /// scoped to this workspace and permission resolution should use it
+    /// as the workspace context. Absent = the session is workspace-
+    /// agnostic (permissions resolve against unscoped grants only).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub workspace_id: Option<String>,
     /// Permissions carried in the token for authorization.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub permissions: Vec<String>,
@@ -73,6 +79,7 @@ impl TokenClaims {
             user_id: None,
             tenant_id: None,
             relay_id: None,
+            workspace_id: None,
             permissions: Vec::new(),
             aud: None,
         }
@@ -100,6 +107,15 @@ impl TokenClaims {
 
     pub fn with_relay(mut self, relay_id: impl Into<String>) -> Self {
         self.relay_id = Some(relay_id.into());
+        self
+    }
+
+    /// Scope the session to one workspace (RBAC partitioning). The token
+    /// carries the workspace uuid; consumers pass it to
+    /// `resolve_permissions_in(..., Some(workspace_id))` so workspace-
+    /// scoped grants apply during this session.
+    pub fn with_workspace(mut self, workspace_id: impl Into<String>) -> Self {
+        self.workspace_id = Some(workspace_id.into());
         self
     }
 
