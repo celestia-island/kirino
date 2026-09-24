@@ -1,6 +1,6 @@
 [package]
 name = "kirino"
-version = "0.7.4"
+version = "0.7.5"
 edition = "2021"
 description = "Zero-trust authentication and authorization framework with RBAC and dynamic risk assessment."
 license-file = "LICENSE"

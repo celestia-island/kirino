@@ -192,6 +192,31 @@ mod tests {
     use super::*;
 
     #[test]
+    fn sub_accessors_survive_sign_verify_roundtrip() {
+        let manager = TokenManager::new(SessionConfig::new("test-secret"));
+        let user_id = Uuid::new_v4();
+        let token = manager
+            .sign(&TokenClaims::new(
+                user_id,
+                "alice".into(),
+                TokenType::Access,
+                60,
+                "kirino",
+            ))
+            .unwrap();
+
+        let claims = manager.verify(&token).unwrap();
+        // Semantic accessors: the stable identifier is the UUID (`sub`
+        // here, `user_id` in the root crate's Claims) and the login name
+        // is `username` (`sub` in the root crate's Claims).
+        assert_eq!(claims.sub_uuid(), user_id.to_string());
+        assert_eq!(claims.sub_username(), "alice");
+        // Wire compatibility: `sub` on the wire is still the user UUID.
+        assert_eq!(claims.sub, user_id.to_string());
+        assert_eq!(claims.username, "alice");
+    }
+
+    #[test]
     fn sign_and_verify() {
         let config = SessionConfig::new("test-secret-key-for-unit-tests");
         let manager = TokenManager::new(config);
