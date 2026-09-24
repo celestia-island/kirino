@@ -1,152 +1,111 @@
-pub mod base64 {
+/// RFC 4648 base64url codec — the single house implementation.
+///
+/// URL-safe alphabet (`-`/`_`), padding neither emitted nor required on
+/// encode, trailing `=` tolerated on decode, impossible lengths
+/// (`len % 4 == 1`) and non-canonical trailing bits rejected so bytes
+/// decoded from equal-length encodings stay unique (RFC 4648 §3.5).
+///
+/// WebAuthn consumers wrap [`decode`] to map errors onto their own
+/// challenge error type; see
+/// [`crate::auth::passport::webauthn::base64url_decode`].
+pub mod base64url {
+    /// A base64url decode failure.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub enum Base64UrlDecodeError {
+        /// Input length (before padding trim) is `len % 4 == 1`.
+        InvalidLength,
+        /// Byte at `index` is outside the base64url alphabet.
+        InvalidByte {
+            /// Offset of the offending byte in the input.
+            index: usize,
+            /// The offending byte value.
+            byte: u8,
+        },
+        /// Trailing bits of the final quantum are non-zero; the input
+        /// cannot have been produced by encoding bytes (RFC 4648 §3.5).
+        NonCanonicalTrailingBits,
+    }
 
-    use anyhow::{anyhow, Result};
-
-    const LOOKUP: [u8; 256] = {
-        let mut table = [0xFFu8; 256];
-        let chars = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-        let mut i = 0;
-        while i < chars.len() {
-            table[chars[i] as usize] = i as u8;
-            i += 1;
+    impl std::fmt::Display for Base64UrlDecodeError {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            match self {
+                Self::InvalidLength => write!(f, "invalid base64url length (len % 4 == 1)"),
+                Self::InvalidByte { index, byte } => {
+                    write!(f, "invalid base64url byte {byte:#04x} at index {index}")
+                }
+                Self::NonCanonicalTrailingBits => {
+                    write!(f, "non-canonical trailing bits in base64url input")
+                }
+            }
         }
-        table
-    };
+    }
+    impl std::error::Error for Base64UrlDecodeError {}
 
-    pub fn decode(input: &str) -> Result<Vec<u8>> {
-        let bytes = input.as_bytes();
-        let mut result = Vec::with_capacity(bytes.len() * 3 / 4);
-        let mut accum: u32 = 0;
+    /// Encode bytes as unpadded RFC 4648 base64url (WebAuthn §4.2 form).
+    #[must_use]
+    pub fn encode(bytes: &[u8]) -> String {
+        const TABLE: &[u8; 64] =
+            b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+        let mut out = String::with_capacity(bytes.len().div_ceil(3) * 4);
+        for chunk in bytes.chunks(3) {
+            let b0 = chunk[0] as u32;
+            let b1 = chunk.get(1).map_or(0, |&b| u32::from(b));
+            let b2 = chunk.get(2).map_or(0, |&b| u32::from(b));
+            let n = (b0 << 16) | (b1 << 8) | b2;
+            out.push(TABLE[(n >> 18 & 63) as usize] as char);
+            out.push(TABLE[(n >> 12 & 63) as usize] as char);
+            if chunk.len() > 1 {
+                out.push(TABLE[(n >> 6 & 63) as usize] as char);
+            }
+            if chunk.len() > 2 {
+                out.push(TABLE[(n & 63) as usize] as char);
+            }
+        }
+        out
+    }
+
+    /// Decode RFC 4648 base64url; trailing `=` tolerated but never required.
+    ///
+    /// # Errors
+    ///
+    /// [`Base64UrlDecodeError::InvalidLength`] when `len % 4 == 1`,
+    /// [`Base64UrlDecodeError::InvalidByte`] on any byte outside the
+    /// base64url alphabet (whitespace included), and
+    /// [`Base64UrlDecodeError::NonCanonicalTrailingBits`] when the final
+    /// quantum carries non-zero pad bits.
+    pub fn decode(s: &str) -> Result<Vec<u8>, Base64UrlDecodeError> {
+        fn val(c: u8) -> Option<u32> {
+            match c {
+                b'A'..=b'Z' => Some(u32::from(c - b'A')),
+                b'a'..=b'z' => Some(u32::from(c - b'a') + 26),
+                b'0'..=b'9' => Some(u32::from(c - b'0') + 52),
+                b'-' => Some(62),
+                b'_' => Some(63),
+                _ => None,
+            }
+        }
+        if s.len() % 4 == 1 {
+            return Err(Base64UrlDecodeError::InvalidLength);
+        }
+        let s = s.trim_end_matches('=');
+        let mut out = Vec::with_capacity(s.len() * 3 / 4 + 3);
+        let mut acc: u32 = 0;
         let mut bits: u32 = 0;
-        let mut pad_count = 0;
-
-        for &b in bytes {
-            if b == b'\n' || b == b'\r' || b == b' ' {
-                continue;
-            }
-            if b == b'=' {
-                pad_count += 1;
-                continue;
-            }
-            if pad_count > 0 {
-                return Err(anyhow!(
-                    "unexpected character after padding in base64 input"
-                ));
-            }
-            let val = LOOKUP[b as usize];
-            if val == 0xFF {
-                return Err(anyhow!("invalid base64 character: {b:#04x}"));
-            }
-            accum = (accum << 6) | u32::from(val);
+        for (i, &c) in s.as_bytes().iter().enumerate() {
+            let v = val(c).ok_or(Base64UrlDecodeError::InvalidByte { index: i, byte: c })?;
+            acc = (acc << 6) | v;
             bits += 6;
             if bits >= 8 {
                 bits -= 8;
-                #[allow(clippy::cast_possible_truncation)]
-                result.push((accum >> bits) as u8);
-                accum &= (1_u32 << bits).wrapping_sub(1);
+                out.push(((acc >> bits) & 0xff) as u8);
+            }
+            // Canonical tail: leftover pad bits after the final byte must be 0.
+            if i == s.len() - 1 && bits > 0 && (acc & ((1 << bits) - 1)) != 0 {
+                return Err(Base64UrlDecodeError::NonCanonicalTrailingBits);
             }
         }
-
-        if pad_count > 2 {
-            return Err(anyhow!(
-                "invalid base64 padding: too many padding characters"
-            ));
-        }
-        if pad_count > 0 {
-            let total_content_bytes = bytes
-                .iter()
-                .filter(|&&b| b != b'\n' && b != b'\r' && b != b' ')
-                .count();
-            let data_chars = total_content_bytes - pad_count;
-            let expected_pad = (4 - data_chars % 4) % 4;
-            if pad_count != expected_pad {
-                let msg = if expected_pad == 0 {
-                    "invalid base64 padding: unexpected padding".to_string()
-                } else {
-                    format!("invalid base64 padding: expected {expected_pad} pad characters, got {pad_count}")
-                };
-                return Err(anyhow!(msg));
-            }
-        }
-
-        Ok(result)
+        Ok(out)
     }
-
-    pub fn decode_url_safe(input: &str) -> Result<Vec<u8>> {
-        let standard = input.replace('-', "+").replace('_', "/");
-        let padded = {
-            let mut s = standard;
-            let pad = (4 - s.len() % 4) % 4;
-            for _ in 0..pad {
-                s.push('=');
-            }
-            s
-        };
-        decode(&padded)
-    }
-
-    #[must_use]
-    pub fn encode(input: &[u8]) -> String {
-        const CHARS: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-        let mut result = String::new();
-        for chunk in input.chunks(3) {
-            let b0 = u32::from(chunk[0]);
-            let b1 = if chunk.len() > 1 {
-                u32::from(chunk[1])
-            } else {
-                0
-            };
-            let b2 = if chunk.len() > 2 {
-                u32::from(chunk[2])
-            } else {
-                0
-            };
-            let triple = (b0 << 16) | (b1 << 8) | b2;
-            result.push(CHARS[((triple >> 18) & 0x3F) as usize] as char);
-            result.push(CHARS[((triple >> 12) & 0x3F) as usize] as char);
-            if chunk.len() > 1 {
-                result.push(CHARS[((triple >> 6) & 0x3F) as usize] as char);
-            } else {
-                result.push('=');
-            }
-            if chunk.len() > 2 {
-                result.push(CHARS[(triple & 0x3F) as usize] as char);
-            } else {
-                result.push('=');
-            }
-        }
-        result
-    }
-
-    #[must_use]
-    pub fn url_safe_encode(input: &[u8]) -> String {
-        let encoded = encode(input);
-        encoded
-            .trim_end_matches('=')
-            .replace('+', "-")
-            .replace('/', "_")
-    }
-}
-
-/// Minimal percent-encoding for URL query parameters.
-#[must_use]
-pub fn url_encode(input: &str) -> String {
-    const HEX: &[u8] = b"0123456789ABCDEF";
-    let mut result = String::with_capacity(input.len());
-    for &byte in input.as_bytes() {
-        match byte {
-            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'~' => {
-                result.push(byte as char);
-            }
-            b' ' => result.push_str("%20"),
-            _ => {
-                result.push('%');
-                result.push(HEX[(byte >> 4) as usize] as char);
-                result.push(HEX[(byte & 0x0F) as usize] as char);
-            }
-        }
-    }
-    result
 }
 
 /// Constant-time byte comparison.
@@ -190,90 +149,71 @@ mod tests {
         assert!(constant_time_eq(b"", b""));
     }
 
+    // RFC 4648 §10 known-answer vectors, base64url variant (unpadded).
     #[test]
-    fn test_base64_decode_empty() {
-        assert!(base64::decode("").unwrap().is_empty());
+    fn base64url_encode_rfc4648_vectors() {
+        assert_eq!(base64url::encode(b""), "");
+        assert_eq!(base64url::encode(b"f"), "Zg");
+        assert_eq!(base64url::encode(b"fo"), "Zm8");
+        assert_eq!(base64url::encode(b"foo"), "Zm9v");
+        assert_eq!(base64url::encode(b"foob"), "Zm9vYg");
+        assert_eq!(base64url::encode(b"fooba"), "Zm9vYmE");
+        assert_eq!(base64url::encode(b"foobar"), "Zm9vYmFy");
+        // Alphabet checks: 62 -> '-', 63 -> '_', never '+' or '/' or '='.
+        assert_eq!(base64url::encode(&[0xfb, 0xff]), "-_8");
+        assert_eq!(base64url::encode(&[0xfb, 0xff, 0xfe, 0xfd]), "-__-_Q");
+    }
+
+    // RFC 4648 §10 known-answer vectors, decode direction.
+    #[test]
+    fn base64url_decode_rfc4648_vectors() {
+        assert_eq!(base64url::decode("").unwrap(), b"");
+        assert_eq!(base64url::decode("Zg").unwrap(), b"f");
+        assert_eq!(base64url::decode("Zm8").unwrap(), b"fo");
+        assert_eq!(base64url::decode("Zm9v").unwrap(), b"foo");
+        assert_eq!(base64url::decode("Zm9vYg").unwrap(), b"foob");
+        assert_eq!(base64url::decode("Zm9vYmE").unwrap(), b"fooba");
+        assert_eq!(base64url::decode("Zm9vYmFy").unwrap(), b"foobar");
+        // Trailing padding tolerated though never required.
+        assert_eq!(base64url::decode("Zg==").unwrap(), b"f");
+        assert_eq!(base64url::decode("Zm8=").unwrap(), b"fo");
+        assert_eq!(base64url::decode("Zm9v").unwrap(), b"foo");
     }
 
     #[test]
-    fn test_base64_decode_hello() {
-        assert_eq!(base64::decode("aGVsbG8=").unwrap(), b"hello");
-    }
-
-    #[test]
-    fn test_base64_decode_foobar() {
-        assert_eq!(base64::decode("Zm9vYmFy").unwrap(), b"foobar");
-    }
-
-    #[test]
-    fn test_base64_decode_url_safe() {
-        let result = base64::decode_url_safe("aGVsbG8").unwrap();
-        assert_eq!(result, b"hello");
-    }
-
-    #[test]
-    fn test_base64_decode_with_whitespace() {
-        assert_eq!(base64::decode("aGVs\n bG8=").unwrap(), b"hello");
-    }
-
-    #[test]
-    fn test_base64_decode_padding_variants() {
-        assert_eq!(base64::decode("YQ==").unwrap(), b"a");
-        assert_eq!(base64::decode("YWI=").unwrap(), b"ab");
-        assert_eq!(base64::decode("YWJj").unwrap(), b"abc");
-    }
-
-    #[test]
-    fn test_base64_decode_invalid_char_rejected() {
-        assert!(base64::decode("aGVs!bG8=").is_err());
-    }
-
-    #[test]
-    fn test_base64_decode_roundtrip() {
-        for len in 1..=64 {
-            let data: Vec<u8> = (0..len).map(|i| (i * 7 + 13) as u8).collect();
-            let encoded = base64::encode(&data);
-            let decoded = base64::decode(&encoded).unwrap();
-            assert_eq!(decoded, data, "roundtrip failed for len={len}");
-        }
-    }
-
-    #[test]
-    fn test_base64_decode_long_input() {
-        let data = b"the quick brown fox jumps over the lazy dog 1234567890!@#$%^&*()";
-        let encoded = base64::encode(data);
-        let decoded = base64::decode(&encoded).unwrap();
-        assert_eq!(decoded, data);
-    }
-
-    #[test]
-    fn test_url_encode_plain_text() {
-        assert_eq!(url_encode("hello"), "hello");
-        assert_eq!(url_encode("abc123"), "abc123");
-    }
-
-    #[test]
-    fn test_url_encode_spaces() {
-        assert_eq!(url_encode("a b"), "a%20b");
-        assert_eq!(url_encode("hello world"), "hello%20world");
-    }
-
-    #[test]
-    fn test_url_encode_special_chars() {
-        assert_eq!(url_encode("a&b=c"), "a%26b%3Dc");
+    fn base64url_decode_rejects_malformed() {
         assert_eq!(
-            url_encode("https://example.com/path?q=1"),
-            "https%3A%2F%2Fexample.com%2Fpath%3Fq%3D1"
+            base64url::decode("A").unwrap_err(),
+            base64url::Base64UrlDecodeError::InvalidLength
         );
+        assert_eq!(
+            base64url::decode("Zm9=").unwrap_err(),
+            base64url::Base64UrlDecodeError::NonCanonicalTrailingBits
+        );
+        assert_eq!(
+            base64url::decode("Zm$v").unwrap_err(),
+            base64url::Base64UrlDecodeError::InvalidByte {
+                index: 2,
+                byte: b'$'
+            }
+        );
+        // Standard-alphabet symbols are invalid in the URL-safe form.
+        assert!(base64url::decode("+/8A").is_err());
+        // Stricter than the retired utils codec: no whitespace tolerance.
+        assert!(base64url::decode("Zm9 vYg").is_err());
     }
 
     #[test]
-    fn test_url_encode_unreserved_safe() {
-        assert_eq!(url_encode("-._~"), "-._~");
-    }
-
-    #[test]
-    fn test_url_encode_empty() {
-        assert_eq!(url_encode(""), "");
+    fn base64url_roundtrip_all_lengths() {
+        for len in 0..=64 {
+            let data: Vec<u8> = (0..len).map(|i| (i * 7 + 13) as u8).collect();
+            let encoded = base64url::encode(&data);
+            assert!(!encoded.contains('='), "unpadded for len={len}");
+            assert_eq!(
+                base64url::decode(&encoded).unwrap(),
+                data,
+                "roundtrip failed for len={len}"
+            );
+        }
     }
 }
