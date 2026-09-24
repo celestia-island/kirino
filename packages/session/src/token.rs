@@ -12,9 +12,19 @@ pub enum TokenType {
 /// Claims embedded in JWT tokens.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TokenClaims {
-    /// Subject (user ID).
+    /// JWT `sub` — the **user's UUID** (string form) for tokens minted by
+    /// this crate.
+    ///
+    /// Cross-crate divergence: the root crate's
+    /// `kirino::auth::credential::basic::Claims` binds `sub` to the
+    /// **username** (with the UUID in its `user_id` field). Never copy `sub`
+    /// verbatim between the two claim sets — map through
+    /// [`TokenClaims::sub_uuid`] / [`TokenClaims::sub_username`] instead.
+    /// Sibling services minting their own `TokenClaims` may bind `sub` to
+    /// non-user subjects (e.g. device serials for bootstrap tokens).
     pub sub: String,
-    /// Username.
+    /// Username of the authenticated user (distinct from `sub`, which
+    /// carries the user UUID).
     pub username: String,
     /// Token type.
     pub token_type: TokenType,
@@ -33,6 +43,9 @@ pub struct TokenClaims {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub roles: Vec<String>,
     /// Auxiliary user ID (backward compat — redundant with sub).
+    ///
+    /// Removal target: drop in 0.8 once downstream readers migrate to
+    /// [`TokenClaims::sub_uuid`] (`sub` already carries the same UUID).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub user_id: Option<String>,
     /// Tenant ID for multi-tenant deployments.
@@ -129,6 +142,28 @@ impl TokenClaims {
         self
     }
 
+    /// The token subject's stable user identifier — the `sub` claim, which
+    /// this crate binds to the user UUID.
+    ///
+    /// Migration-safe counterpart of
+    /// `kirino::auth::credential::basic::Claims::sub_uuid`: in that claim
+    /// set the UUID lives in `user_id`, while here it is `sub` — this
+    /// accessor returns it uniformly.
+    #[must_use]
+    pub fn sub_uuid(&self) -> &str {
+        &self.sub
+    }
+
+    /// The token subject's username — the `username` claim.
+    ///
+    /// Migration-safe counterpart of
+    /// `kirino::auth::credential::basic::Claims::sub_username`: in that
+    /// claim set the username is what `sub` carries.
+    #[must_use]
+    pub fn sub_username(&self) -> &str {
+        &self.username
+    }
+
     pub fn expiration(&self) -> DateTime<Utc> {
         DateTime::from_timestamp(self.exp as i64, 0).unwrap_or(DateTime::UNIX_EPOCH)
     }
@@ -145,4 +180,25 @@ pub struct TokenPair {
     pub refresh_token: String,
     pub token_type: String,
     pub expires_in: u64,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sub_accessors_pin_cross_crate_semantics() {
+        let uid = Uuid::new_v4();
+        let claims = TokenClaims::new(uid, "alice".into(), TokenType::Access, 60, "kirino");
+        // Semantic accessors agree with the root crate's Claims accessors
+        // regardless of which claim set carries which value.
+        assert_eq!(claims.sub_uuid(), uid.to_string());
+        assert_eq!(claims.sub_username(), "alice");
+        // Wire compatibility: this claim set still carries the user UUID in
+        // `sub` and the login name in `username` — do not silently change
+        // either.
+        let json = serde_json::to_string(&claims).unwrap();
+        assert!(json.contains(&format!("\"sub\":\"{uid}\"")), "{json}");
+        assert!(json.contains("\"username\":\"alice\""), "{json}");
+    }
 }

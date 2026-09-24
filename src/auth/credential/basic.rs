@@ -6,9 +6,25 @@ use tokio::sync::RwLock;
 
 use jsonwebtoken::{decode, encode, Algorithm, DecodingKey, EncodingKey, Header, Validation};
 
+/// JWT claims issued by [`JwtManager`] (root-crate wire format).
+///
+/// # `sub` semantics — read before mixing claim sets
+///
+/// This claim set binds the RFC 7519 `sub` to the **username**, with the
+/// stable user UUID in [`Claims::user_id`]. The session crate's
+/// `kirino_session::TokenClaims` does the opposite: its `sub` **is** the
+/// user UUID (username in a dedicated field). Copying `sub` verbatim
+/// between the two claim sets silently swaps identity semantics; map
+/// through [`Claims::sub_username`] / [`Claims::sub_uuid`] instead.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Claims {
+    /// JWT `sub` — the **username** in this claim set. Diverges from
+    /// `kirino_session::TokenClaims`, whose `sub` is the user UUID; see the
+    /// struct-level docs before migrating claims across crates.
     pub sub: String,
+    /// Stable user identifier (UUID string). This is what `sub` carries in
+    /// `kirino_session::TokenClaims`; prefer [`Claims::sub_uuid`] for
+    /// migration-safe reads.
     pub user_id: String,
     pub roles: Vec<String>,
     #[serde(default)]
@@ -33,6 +49,27 @@ const MIN_JWT_SECRET_LENGTH: usize = 32;
 const MAX_JWT_EXPIRATION_HOURS: i64 = 87600;
 const REVOCATION_MAX_ENTRIES: usize = 50_000;
 const REVOCATION_AUTO_CLEANUP_WINDOW_SECS: i64 = 86400 * 7;
+
+impl Claims {
+    /// The authenticated user's username.
+    ///
+    /// Migration-safe counterpart of `kirino_session::TokenClaims::sub_username`:
+    /// returns the login name regardless of which claim set carries it.
+    #[must_use]
+    pub fn sub_username(&self) -> &str {
+        &self.sub
+    }
+
+    /// The authenticated user's stable identifier (UUID string).
+    ///
+    /// Migration-safe counterpart of `kirino_session::TokenClaims::sub_uuid`:
+    /// in this claim set the UUID lives in `user_id`, while in kirino-session
+    /// it is the `sub` claim — this accessor returns it uniformly.
+    #[must_use]
+    pub fn sub_uuid(&self) -> &str {
+        &self.user_id
+    }
+}
 
 impl JwtManager {
     pub fn new(secret: &str, expiration_hours: i64) -> Result<Self> {
@@ -181,6 +218,22 @@ mod tests {
         assert_eq!(claims.sub, "alice");
         assert_eq!(claims.user_id, "user-1");
         assert_eq!(claims.roles, vec!["admin".to_string()]);
+    }
+
+    #[test]
+    fn test_sub_accessors_pin_cross_crate_semantics() {
+        let mgr = make_mgr();
+        let uid = "0b7bfc9c-86f5-4e0e-a9bc-8e5a50bb5f9a";
+        let token = mgr.issue(uid, "alice", vec![]).unwrap();
+        let claims = mgr.verify(&token).unwrap();
+        // Semantic accessors agree with kirino-session's TokenClaims
+        // accessors regardless of which claim set carries which value.
+        assert_eq!(claims.sub_username(), "alice");
+        assert_eq!(claims.sub_uuid(), uid);
+        // Wire compatibility: this claim set still carries the username in
+        // `sub` and the UUID in `user_id` — do not silently change either.
+        assert_eq!(claims.sub, "alice");
+        assert_eq!(claims.user_id, uid);
     }
 
     #[test]
