@@ -1,3 +1,10 @@
+//! Persistence boundary for constraint policies, plus an in-memory implementation.
+//!
+//! The store is the fail-closed gate's only data source. `ConstraintValidator`
+//! propagates any `Err` from these methods and the caller must deny on it, so an
+//! implementation that turns a backend failure into an empty list silently opens
+//! the gate. Implementations must therefore report read failures as errors.
+
 use anyhow::Result;
 
 use async_trait::async_trait;
@@ -6,36 +13,82 @@ use super::policies::{
     CardinalityConstraint, DsdPolicy, PrerequisiteConstraint, SsdPolicy, TemporalConstraint,
 };
 
+/// Async storage of the constraint definitions applied by `ConstraintValidator`.
+///
+/// Contract for implementors, in security terms:
+/// - every method returns `Result`, and a read failure must surface as `Err` rather
+///   than as an empty list, because an empty list means "no restriction";
+/// - `add_*` methods are not idempotent: re-adding an existing entry fails and leaves
+///   the stored entry unchanged, so an update is a remove followed by an add and is
+///   not atomic (a failure between the two leaves the constraint absent);
+/// - `remove_*` methods return `Ok(false)` when nothing matched; removing a missing
+///   entry is not an error and does not create one;
+/// - `list_*` methods return a snapshot the caller owns; no ordering is promised.
 #[async_trait]
 pub trait ConstraintStore: Send + Sync {
+    /// Returns a snapshot of all stored SSD policies.
+    /// An `Err` here aborts the check; callers must deny rather than continue with
+    /// an empty list.
     async fn list_ssd_policies(&self) -> Result<Vec<SsdPolicy>>;
+    /// Stores an SSD policy. Fails if one with the same `name` already exists; there
+    /// is no upsert, so a failed re-add leaves the previously stored policy in force.
     async fn add_ssd_policy(&self, policy: SsdPolicy) -> Result<()>;
+    /// Removes every SSD policy named `name`; `Ok(false)` means none matched, which
+    /// is not an error. Deleting an absent policy is not itself a security event.
     async fn remove_ssd_policy(&self, name: &str) -> Result<bool>;
 
+    /// Returns a snapshot of all stored DSD policies. DSD is enforced when a role is
+    /// activated in a session, not when it is assigned.
     async fn list_dsd_policies(&self) -> Result<Vec<DsdPolicy>>;
+    /// Stores a DSD policy. Fails on a duplicate `name` without overwriting; an
+    /// administrator tightening an existing policy must remove it first.
     async fn add_dsd_policy(&self, policy: DsdPolicy) -> Result<()>;
+    /// Removes every DSD policy named `name`; `Ok(false)` when none matched.
     async fn remove_dsd_policy(&self, name: &str) -> Result<bool>;
 
+    /// Returns a snapshot of all stored cardinality constraints.
+    /// Stored bounds are inert until a check runs against a caller-supplied count.
     async fn list_cardinality_constraints(&self) -> Result<Vec<CardinalityConstraint>>;
+    /// Stores a cardinality constraint. Fails when a constraint for the same
+    /// `role_name` already exists, leaving the old bound in force (no upsert).
     async fn add_cardinality_constraint(&self, constraint: CardinalityConstraint) -> Result<()>;
+    /// Removes the cardinality constraint for `role_name`; `Ok(false)` when the role
+    /// has none. After removal the role is unbounded, so removal is fail-open.
     async fn remove_cardinality_constraint(&self, role_name: &str) -> Result<bool>;
 
+    /// Returns a snapshot of all stored prerequisite constraints.
     async fn list_prerequisite_constraints(&self) -> Result<Vec<PrerequisiteConstraint>>;
+    /// Stores a prerequisite constraint. The uniqueness key is the
+    /// `(role_name, requires)` pair, so one role may carry several prerequisites and
+    /// only an identical pair is rejected.
     async fn add_prerequisite_constraint(&self, constraint: PrerequisiteConstraint) -> Result<()>;
     /// Removes **all** prerequisite constraints for the given role.
+    /// Returns `Ok(false)` when the role has none; removal is fail-open for the role.
     async fn remove_prerequisite_constraint(&self, role_name: &str) -> Result<bool>;
     /// Removes a specific prerequisite constraint matching `(role_name, requires)`.
+    /// Returns `Ok(false)` when no pair matches, so a miss cannot be told apart from
+    /// a successful removal except by the returned flag.
     async fn remove_prerequisite_constraint_for(
         &self,
         role_name: &str,
         requires: &str,
     ) -> Result<bool>;
 
+    /// Returns a snapshot of all stored temporal constraints.
+    /// Windows are not filtered by the current time here; expiry is decided later by
+    /// `TemporalConstraint::is_valid`, which reads the wall clock.
     async fn list_temporal_constraints(&self) -> Result<Vec<TemporalConstraint>>;
+    /// Stores a temporal constraint. The uniqueness key is the role and both window
+    /// endpoints, so a role may hold several windows; because the validator denies
+    /// when any matching window is not current, adding an expired window for a role
+    /// denies that role outright.
     async fn add_temporal_constraint(&self, constraint: TemporalConstraint) -> Result<()>;
     /// Removes **all** temporal constraints for the given role.
+    /// `Ok(false)` means the role had none; after removal the role has no time bound.
     async fn remove_temporal_constraint(&self, role_name: &str) -> Result<bool>;
     /// Removes a specific temporal constraint by index position.
+    /// Matching is on the role plus exactly equal `valid_from` and `valid_until`
+    /// values; `Ok(false)` when no such window is stored.
     async fn remove_temporal_constraint_for(
         &self,
         role_name: &str,
@@ -44,6 +97,15 @@ pub trait ConstraintStore: Send + Sync {
     ) -> Result<bool>;
 }
 
+/// Process-local, non-durable `ConstraintStore` backed by vectors behind locks.
+///
+/// Security caveats: the state is in memory only, so it is lost on restart and is
+/// not shared between processes; a restarted or freshly built store holds no
+/// constraints and therefore permits everything until it is re-seeded (fail-open).
+/// Entries are appended without any size cap, so seeding must stay bounded by the
+/// caller. Each method takes one lock for the duration of a single read or mutation
+/// and no lock is held across methods, so a validator check and the write it guards
+/// are not atomic with respect to concurrent writers.
 pub struct InMemoryConstraintStore {
     ssd_policies: tokio::sync::RwLock<Vec<SsdPolicy>>,
     dsd_policies: tokio::sync::RwLock<Vec<DsdPolicy>>,
@@ -53,6 +115,10 @@ pub struct InMemoryConstraintStore {
 }
 
 impl InMemoryConstraintStore {
+    /// Creates an empty store.
+    ///
+    /// An empty store enforces nothing, so every check passes; loading the intended
+    /// constraints before serving requests is a security-critical precondition.
     #[must_use]
     pub fn new() -> Self {
         Self {
@@ -66,6 +132,9 @@ impl InMemoryConstraintStore {
 }
 
 impl Default for InMemoryConstraintStore {
+    /// Same as `new`: builds an unseeded store, which permits everything until
+    /// constraints are added. Provided so `Default` callers cannot get a store that
+    /// looks configured but is not.
     fn default() -> Self {
         Self::new()
     }
@@ -73,10 +142,15 @@ impl Default for InMemoryConstraintStore {
 
 #[async_trait]
 impl ConstraintStore for InMemoryConstraintStore {
+    /// Clones the current contents under a read lock; the caller owns the copy, so
+    /// later mutations of this store do not affect the returned vector.
     async fn list_ssd_policies(&self) -> Result<Vec<SsdPolicy>> {
         Ok(self.ssd_policies.read().await.clone())
     }
 
+    /// Appends the policy, or returns `Err` if a policy with the same name is already
+    /// stored. It never overwrites: a duplicate add fails and the stored policy is
+    /// unchanged, so re-adding is not idempotent and the old policy stays in force.
     async fn add_ssd_policy(&self, policy: SsdPolicy) -> Result<()> {
         let mut policies = self.ssd_policies.write().await;
         if policies.iter().any(|p| p.name == policy.name) {
@@ -89,6 +163,8 @@ impl ConstraintStore for InMemoryConstraintStore {
         Ok(())
     }
 
+    /// Removes all policies with the given name and reports whether the store
+    /// changed; `Ok(false)` means the name was absent and nothing was removed.
     async fn remove_ssd_policy(&self, name: &str) -> Result<bool> {
         let mut policies = self.ssd_policies.write().await;
         let before = policies.len();
@@ -96,10 +172,14 @@ impl ConstraintStore for InMemoryConstraintStore {
         Ok(policies.len() < before)
     }
 
+    /// Clones the current contents under a read lock; the caller owns the copy.
     async fn list_dsd_policies(&self) -> Result<Vec<DsdPolicy>> {
         Ok(self.dsd_policies.read().await.clone())
     }
 
+    /// Appends the policy, or returns `Err` on a duplicate name without overwriting.
+    /// Loosening or tightening a stored policy requires removing it first, which is
+    /// not atomic with the add.
     async fn add_dsd_policy(&self, policy: DsdPolicy) -> Result<()> {
         let mut policies = self.dsd_policies.write().await;
         if policies.iter().any(|p| p.name == policy.name) {
@@ -112,6 +192,8 @@ impl ConstraintStore for InMemoryConstraintStore {
         Ok(())
     }
 
+    /// Removes all policies with the given name; `Ok(false)` when none matched,
+    /// which leaves the store untouched and is not an error.
     async fn remove_dsd_policy(&self, name: &str) -> Result<bool> {
         let mut policies = self.dsd_policies.write().await;
         let before = policies.len();
@@ -119,10 +201,13 @@ impl ConstraintStore for InMemoryConstraintStore {
         Ok(policies.len() < before)
     }
 
+    /// Clones the current contents under a read lock; the caller owns the copy.
     async fn list_cardinality_constraints(&self) -> Result<Vec<CardinalityConstraint>> {
         Ok(self.cardinality.read().await.clone())
     }
 
+    /// Appends the constraint, or returns `Err` when the role already has one; the
+    /// existing bound is kept, so a limit can only be changed by removing it first.
     async fn add_cardinality_constraint(&self, constraint: CardinalityConstraint) -> Result<()> {
         let mut constraints = self.cardinality.write().await;
         if constraints
@@ -138,6 +223,8 @@ impl ConstraintStore for InMemoryConstraintStore {
         Ok(())
     }
 
+    /// Removes the bound for the role; `Ok(false)` when the role had none. Until a
+    /// bound is re-added the role is effectively uncapped.
     async fn remove_cardinality_constraint(&self, role_name: &str) -> Result<bool> {
         let mut constraints = self.cardinality.write().await;
         let before = constraints.len();
@@ -145,10 +232,14 @@ impl ConstraintStore for InMemoryConstraintStore {
         Ok(constraints.len() < before)
     }
 
+    /// Clones the current contents under a read lock; the caller owns the copy.
     async fn list_prerequisite_constraints(&self) -> Result<Vec<PrerequisiteConstraint>> {
         Ok(self.prerequisites.read().await.clone())
     }
 
+    /// Appends the constraint, or returns `Err` when the identical
+    /// `(role_name, requires)` pair is already stored. Distinct prerequisites for the
+    /// same role coexist, and all of them must hold for the assignment to pass.
     async fn add_prerequisite_constraint(&self, constraint: PrerequisiteConstraint) -> Result<()> {
         let mut constraints = self.prerequisites.write().await;
         if constraints
@@ -165,6 +256,8 @@ impl ConstraintStore for InMemoryConstraintStore {
         Ok(())
     }
 
+    /// Removes every prerequisite of the role, not one of them; `Ok(false)` when the
+    /// role had none. Dropping prerequisites makes the role easier to assign.
     async fn remove_prerequisite_constraint(&self, role_name: &str) -> Result<bool> {
         let mut constraints = self.prerequisites.write().await;
         let before = constraints.len();
@@ -172,6 +265,9 @@ impl ConstraintStore for InMemoryConstraintStore {
         Ok(constraints.len() < before)
     }
 
+    /// Removes only the `(role_name, requires)` pair; other prerequisites of the role
+    /// are untouched. `Ok(false)` when no pair matched, so a miss is silent apart
+    /// from the returned flag.
     async fn remove_prerequisite_constraint_for(
         &self,
         role_name: &str,
@@ -183,10 +279,15 @@ impl ConstraintStore for InMemoryConstraintStore {
         Ok(constraints.len() < before)
     }
 
+    /// Clones the current contents under a read lock; the caller owns the copy.
+    /// Expired windows are still returned, because expiry is evaluated at check time.
     async fn list_temporal_constraints(&self) -> Result<Vec<TemporalConstraint>> {
         Ok(self.temporal.read().await.clone())
     }
 
+    /// Appends the constraint, or returns `Err` when the role already has a window
+    /// with exactly the same endpoints. Several distinct windows may be stored for
+    /// one role, and the validator denies the role while any of them is not current.
     async fn add_temporal_constraint(&self, constraint: TemporalConstraint) -> Result<()> {
         let mut constraints = self.temporal.write().await;
         if constraints.iter().any(|c| {
@@ -203,6 +304,8 @@ impl ConstraintStore for InMemoryConstraintStore {
         Ok(())
     }
 
+    /// Removes every temporal window of the role; `Ok(false)` when the role had none.
+    /// With no window left the role is no longer time-bounded at all.
     async fn remove_temporal_constraint(&self, role_name: &str) -> Result<bool> {
         let mut constraints = self.temporal.write().await;
         let before = constraints.len();
@@ -210,6 +313,8 @@ impl ConstraintStore for InMemoryConstraintStore {
         Ok(constraints.len() < before)
     }
 
+    /// Removes only the window whose role and both endpoints are exactly equal;
+    /// other windows of the role are untouched. `Ok(false)` when none matched.
     async fn remove_temporal_constraint_for(
         &self,
         role_name: &str,

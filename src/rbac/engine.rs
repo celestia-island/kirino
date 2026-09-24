@@ -17,6 +17,20 @@ use crate::rbac::{
     },
 };
 
+/// Role-based access-control decision engine over pluggable registries and stores.
+///
+/// Composes a role registry, a permission registry, an assignment store and a
+/// permission cache. Security invariants it upholds:
+///
+/// - Deny wins. An explicitly denied permission is checked before extra grants and
+///   cannot be re-granted by a role.
+/// - Fail closed. A store error during a check is reported as a denial (never as a
+///   grant) and is deliberately not cached, so a transient store outage cannot pin
+///   an allow or a deny.
+/// - Decisions may be served from cache. Role or assignment writes performed
+///   outside this type must be followed by [`RbacEngine::invalidate_subject_cache`]
+///   (or [`RbacEngine::invalidate_all_cache`]), otherwise a revoked grant stays
+///   usable until the cache entry expires.
 pub struct RbacEngine<S, P, A>
 where
     S: Subject,
@@ -53,6 +67,11 @@ where
     P: Permission,
     A: AssignmentStore<S, P>,
 {
+    /// Build an engine with the default TTL permission cache (300 s).
+    ///
+    /// The TTL is the revocation window: revoking a role through the assignment store
+    /// does not take effect for checks served from this cache until it expires or is
+    /// invalidated. Use [`RbacEngine::with_cache`] to supply a different policy.
     #[must_use]
     pub fn new(
         role_registry: impl RoleRegistry<P> + 'static,
@@ -70,36 +89,70 @@ where
         }
     }
 
+    /// Replace the default cache.
+    ///
+    /// The engine calls `invalidate_subject`/`invalidate_all` on the supplied cache,
+    /// so it must honour them; a cache with a longer TTL (or none) widens the window
+    /// in which a revoked permission is still reported as granted.
     #[must_use]
     pub fn with_cache(mut self, cache: impl PermissionCache<S, P> + 'static) -> Self {
         self.cache = Shared::from_arc_unsized(Arc::new(cache));
         self
     }
 
+    /// Shared handle to the role registry.
+    ///
+    /// It is the live object, not a snapshot: mutating role definitions through this
+    /// handle bypasses the engine's cache, so follow a write with
+    /// [`RbacEngine::invalidate_all_cache`] or revocations may not take effect.
     #[must_use]
     pub fn role_registry(&self) -> Shared<dyn RoleRegistry<P>> {
         self.role_registry.clone()
     }
 
+    /// Shared handle to the permission registry (the catalogue of known permissions).
+    ///
+    /// Read-mostly: entries here describe what exists, not who holds it, so changes do
+    /// not by themselves affect any cached decision.
     #[must_use]
     pub fn permission_registry(&self) -> Shared<dyn PermissionRegistry<P>> {
         self.permission_registry.clone()
     }
 
+    /// Shared handle to the assignment store.
+    ///
+    /// This is how roles, extra permissions and explicit denials are written. Every
+    /// write performed through it must be paired with a cache invalidation (see
+    /// [`RbacEngine::invalidate_subject_cache`]) to be effective immediately.
     #[must_use]
     pub fn assignment_store(&self) -> Shared<A> {
         self.assignment_store.clone()
     }
 
+    /// Shared handle to the permission cache.
+    ///
+    /// Exposed for inspection and manual eviction; entries in it are authorization
+    /// decisions, so treat its contents as security state (do not log keys derived
+    /// from credentials, and clear it after an out-of-band permission change).
     #[must_use]
     pub fn cache(&self) -> Shared<dyn PermissionCache<S, P>> {
         self.cache.clone()
     }
 
+    /// Drop every cached decision for one subject.
+    ///
+    /// Required after changing that subject's roles, extra permissions or explicit
+    /// denials; call it after the write commits, since a concurrent check may re-cache
+    /// the pre-write answer in between.
     pub async fn invalidate_subject_cache(&self, subject: &S) {
         self.cache.invalidate_subject(subject).await;
     }
 
+    /// Drop every cached decision.
+    ///
+    /// Required after a change to role definitions or to the permission catalogue,
+    /// which can affect any subject at once. This is a global barrier: expect a burst
+    /// of store traffic as the cache refills.
     pub async fn invalidate_all_cache(&self) {
         self.cache.invalidate_all().await;
     }
@@ -150,6 +203,15 @@ where
         Ok(None)
     }
 
+    /// Decide whether `subject` holds `permission`, with deny-by-default semantics.
+    ///
+    /// Evaluates explicit denials first, then extra grants, then role membership, and
+    /// caches the outcome. Any store error is logged and answered with `false` rather
+    /// than propagated, so a caller cannot distinguish "denied" from "store
+    /// unavailable": treat `false` as deny, never as "retry later and assume yes".
+    /// Has no wildcard or inheritance expansion - use
+    /// [`RbacEngine::check_permission`], or `RbacEngine::check_hierarchical`
+    /// (feature `rbac-hierarchy`) for role inheritance.
     #[must_use]
     pub async fn check(&self, subject: &S, permission: &P) -> bool {
         match self.check_cached_deny_extra(subject, permission).await {
@@ -189,6 +251,12 @@ where
         false
     }
 
+    /// Check many permissions for one subject, at most 64 store lookups in flight.
+    ///
+    /// Every permission is decided by [`RbacEngine::check`], so the same fail-closed
+    /// rule applies per entry: a store error yields `false` for that permission and
+    /// does not abort the batch. The result contains exactly the requested keys, so a
+    /// missing key is a bug, not a denial.
     #[must_use]
     pub async fn check_batch(&self, subject: &S, permissions: &HashSet<P>) -> HashMap<P, bool> {
         use futures::stream::{self, StreamExt};
@@ -208,6 +276,12 @@ where
         perms.into_iter().zip(outcomes).collect()
     }
 
+    /// Every permission the subject can exercise: role permissions plus extra grants,
+    /// minus explicit denials.
+    ///
+    /// Unlike [`RbacEngine::check`] this propagates store errors instead of denying, so
+    /// the caller decides how to fail; do not treat a partial answer as authoritative.
+    /// Results are not served from cache.
     pub async fn effective_permissions(&self, subject: &S) -> Result<HashSet<P>> {
         let mut perms = HashSet::new();
 
@@ -286,6 +360,12 @@ where
     P: Permission,
     A: AssignmentStore<S, P>,
 {
+    /// Like [`RbacEngine::check`], but resolves each of the subject's roles through the
+    /// role hierarchy (inherited permissions included).
+    ///
+    /// Only available with the `rbac-hierarchy` feature. Same invariants as `check`:
+    /// expire-first ordering against the shared cache, store errors answered with
+    /// `false`, and no wildcard expansion.
     #[must_use]
     pub async fn check_hierarchical(&self, subject: &S, permission: &P) -> bool {
         match self.check_cached_deny_extra(subject, permission).await {
@@ -324,6 +404,12 @@ where
         false
     }
 
+    /// Hierarchy-aware variant of [`RbacEngine::effective_permissions`]: role
+    /// permissions are expanded through the role chain before explicit denials are
+    /// subtracted.
+    ///
+    /// Only available with the `rbac-hierarchy` feature. Propagates store errors, and
+    /// is not cached, so it is safe to use as an authorization audit input.
     pub async fn effective_permissions_hierarchical(&self, subject: &S) -> Result<HashSet<P>> {
         let mut perms = HashSet::new();
 

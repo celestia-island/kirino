@@ -1,23 +1,41 @@
 use std::{ops::Deref, sync::Arc};
 
+/// Reference-counted handle to a shared component (role registry, permission
+/// registry, assignment store or permission cache).
+///
+/// Security semantics: cloning a `Shared` shares the SAME underlying instance,
+/// so state changes made through one handle - notably cache invalidation - are
+/// immediately visible to every other holder, including a running engine.
+/// [`Deref`] exposes the inner trait object, which means a holder can call
+/// store methods directly and bypass the engine's decision path; treat a
+/// `Shared` as a capability to the component, not as a safe read-only view.
 #[derive(Debug)]
 pub struct Shared<T: ?Sized>(Arc<T>);
 
 impl<T: ?Sized> Clone for Shared<T> {
+    /// Clones the handle, not the value: both handles address the same
+    /// instance, so no store state is duplicated or isolated.
     fn clone(&self) -> Self {
         Self(self.0.clone())
     }
 }
 
 impl<T> Shared<T> {
+    /// Wraps a value the caller hands over permanently - the `Shared` owns it
+    /// from here on and other handles will observe its mutations.
     pub fn new(value: T) -> Self {
         Self(Arc::new(value))
     }
 
+    /// Wraps an `Arc` the caller may still hold; `self` is one more owner, so
+    /// the caller's handle and this one share state.
     pub fn from_arc(arc: Arc<T>) -> Self {
         Self(arc)
     }
 
+    /// Consumes the handle and returns the underlying `Arc`. Any other handle
+    /// created earlier still points at the same instance, so this does not
+    /// take exclusive ownership of the component.
     #[must_use]
     pub fn into_arc(self) -> Arc<T> {
         self.0
@@ -25,20 +43,30 @@ impl<T> Shared<T> {
 }
 
 impl<T: ?Sized> Shared<T> {
+    /// Wraps a type-erased `Arc`, e.g. `Arc<dyn RoleRegistry<P>>`. The trait
+    /// object's methods are what callers reach through [`Deref`], so the
+    /// object's own failure semantics (deny vs propagate) apply unchanged.
     pub fn from_arc_unsized(arc: Arc<T>) -> Self {
         Self(arc)
     }
 
+    /// Number of live handles to the component, including this one. Useful to
+    /// confirm a store is no longer shared before mutating it out of band.
     #[must_use]
     pub fn strong_count(&self) -> usize {
         Arc::strong_count(&self.0)
     }
 
+    /// Whether two handles address the same instance, i.e. the same backing
+    /// store. This is identity, not equivalence: two distinct components with
+    /// identical contents are NOT equal.
     #[must_use]
     pub fn ptr_eq(&self, other: &Self) -> bool {
         Arc::ptr_eq(&self.0, &other.0)
     }
 
+    /// Borrows a plain `Arc` to the same instance, for APIs that want an
+    /// `Arc` rather than a `Shared` without giving up ownership here.
     #[must_use]
     pub fn clone_arc(&self) -> Arc<T> {
         Arc::clone(&self.0)
@@ -48,6 +76,8 @@ impl<T: ?Sized> Shared<T> {
 impl<T: ?Sized> Deref for Shared<T> {
     type Target = T;
 
+    /// Gives direct access to the component, so holder-side calls skip any
+    /// wrapper checks the engine performs before contacting the store.
     fn deref(&self) -> &Self::Target {
         &self.0
     }
@@ -57,12 +87,18 @@ impl<T> Default for Shared<T>
 where
     T: Default,
 {
+    /// Builds a fresh default component. Each call produces an independent
+    /// instance, so a defaulted store is empty and shares nothing - it also
+    /// shares no cached decisions with any other handle.
     fn default() -> Self {
         Self::new(T::default())
     }
 }
 
 impl<T: ?Sized> PartialEq for Shared<T> {
+    /// Pointer identity of the underlying instance (see
+    /// [`ptr_eq`](Shared::ptr_eq)); contents are never compared, so this
+    /// cannot be used to check that two configurations are equivalent.
     fn eq(&self, other: &Self) -> bool {
         Arc::ptr_eq(&self.0, &other.0)
     }
@@ -71,6 +107,9 @@ impl<T: ?Sized> PartialEq for Shared<T> {
 impl<T: ?Sized> Eq for Shared<T> {}
 
 impl<T: ?Sized> std::hash::Hash for Shared<T> {
+    /// Hashes the instance address, consistent with the pointer-identity
+    /// equality above. Two equal components therefore hash alike only when
+    /// they are literally the same allocation.
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
         let ptr = Arc::as_ptr(&self.0);
         let thin = ptr.cast::<()>();

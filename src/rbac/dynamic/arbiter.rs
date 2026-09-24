@@ -1,3 +1,9 @@
+//! The authorization arbiter: risk scoring, policy mapping and verdict creation.
+//!
+//! Fail-closed summary: a lockdown is checked before any scoring, only L3/L4
+//! verdicts allow, an unmapped risk maps to L0, and trust-store or missing-evidence
+//! failures only raise risk. Trust state is bounded by decay, mitigations are
+//! advisory to the host, and verdicts are audited on a best-effort basis.
 use std::{
     collections::{HashMap, HashSet},
     sync::Arc,
@@ -18,23 +24,73 @@ use crate::rbac::{
     shared::Shared,
 };
 
+/// Hard cap on the number of per-delegator anomaly detectors kept in memory
+/// (threat model section 2.6). It is a resource-exhaustion bound, not a security
+/// threshold: above it, delegators without a detector are charged
+/// `DEFAULT_ANOMALY_SCORE_WHEN_AT_CAPACITY` instead of a real deviation. The map
+/// only shrinks when `AuthorizationArbiter::restore` drops an entry, so once the
+/// cap is reached new delegators stay undetected for the life of the process.
 const MAX_ANOMALY_DETECTORS: usize = 10_000;
 
+/// Anomaly score charged to a delegator whose detector could not be created
+/// because the cap was reached.
+///
+/// It is deliberately above the 0.1 cold-start score, so a saturated arbiter errs
+/// toward more risk (the threat model calls it a conservative default), but the
+/// exact value has no derivation recorded in the repository (basis to be
+/// confirmed with security review).
 const DEFAULT_ANOMALY_SCORE_WHEN_AT_CAPACITY: f64 = 0.15;
 
+/// Sentinel `evidence_count` written into the trust record by
+/// `AuthorizationArbiter::lockdown`.
+///
+/// No code compares against this value; it is copied into the record so the next
+/// `feedback` recomputes `confidence` from a large evidence count (about 0.91)
+/// instead of collapsing toward zero, which keeps the near-zero post-lockdown
+/// trust at full weight. The exact magnitude has no derivation recorded in the
+/// repository (basis to be confirmed with security review).
 const LOCKDOWN_EVIDENCE_COUNT: u64 = 999;
 
+/// Risk-based authorization arbiter: the entry point of the dynamic layer.
+///
+/// `authorize` turns an `ActionRequest` into an `AuthorizationVerdict` by scoring
+/// five dimensions, mapping the total risk to an autonomy level with the installed
+/// `DynamicPolicy` and deriving `allowed` from that level (L3/L4 only). Every
+/// failure path is meant to deny: a locked-down delegator is rejected before any
+/// scoring, an unmapped risk maps to `L0Frozen`, a missing strategy degrades to
+/// an explicit `Block` at lookup time, and a missing trust record or a lying trust
+/// store can only raise the penalty.
+/// The struct is `Clone`, but a clone shares the same trust store, detectors,
+/// policy and frozen set (all behind `Arc`/`Shared`), so it is another handle to
+/// the *same* authorization state, not an independent instance.
 #[derive(Clone)]
 pub struct AuthorizationArbiter {
+    /// Trust records, the only source of the trust dimension; shared with every
+    /// clone of this arbiter.
     trust_store: Shared<dyn TrustScoreStore>,
+    /// Per-delegator behavioral state, capped at `max_detectors` to bound memory
+    /// (threat model section 2.6).
     detectors: Arc<RwLock<HashMap<String, AnomalyDetector>>>,
+    /// Cap applied to `detectors`; see `with_max_detectors`.
     max_detectors: usize,
+    /// Domain confinement in force; `None` means the domain dimension contributes
+    /// 0.0 and no `trust_floor` is applied.
     domain_scope: Arc<RwLock<Option<DomainScope>>>,
+    /// Risk-to-level policy. Validated by `set_policy`, not by `new`, and read on
+    /// every scoring call.
     policy: Arc<RwLock<DynamicPolicy>>,
+    /// In-process lockdown set: the authoritative deny gate for lockdown, and
+    /// deliberately not persisted, so it is lost on restart.
     frozen: Arc<RwLock<HashSet<String>>>,
+    /// Optional audit logger. `None` means verdicts are computed and returned but
+    /// never recorded anywhere, for allows and denies alike.
     audit: Option<Shared<AuditLogger>>,
 }
 
+/// Manual `Debug`: reports structure only (detector count, whether a domain scope
+/// and an audit sink are configured, frozen count) and never trust values or
+/// policy contents, so it is safe to log. The counts come from `try_read`, which
+/// yields 0 / false under contention, so the output must not be used as a metric.
 impl std::fmt::Debug for AuthorizationArbiter {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("AuthorizationArbiter")
@@ -57,6 +113,13 @@ impl std::fmt::Debug for AuthorizationArbiter {
 
 impl AuthorizationArbiter {
     /// Creates a new `AuthorizationArbiter`.
+    ///
+    /// Starts with no domain scope, no audit sink and an empty lockdown set, and
+    /// with the detector cap at its built-in maximum. The `policy` argument is
+    /// *not* validated here: an invalid policy silently rescales risk (weights
+    /// that sum to 5.0 saturate every score), and only `set_policy` runs
+    /// `DynamicPolicy::validate`. The trust store is wrapped in `Shared`, which is
+    /// how clones of an arbiter end up sharing trust state.
     ///
     /// # Internal lock ordering
     ///
@@ -83,34 +146,95 @@ impl AuthorizationArbiter {
 
     /// Sets the maximum number of anomaly detectors.
     /// When exceeded, new delegators will use a default anomaly score.
+    ///
+    /// Delegators that already have a detector keep it; only delegators without
+    /// one are charged the fixed default (0.15, above the 0.1 cold-start value, so
+    /// the fallback leans toward more risk) and a warning is logged. The cap is a
+    /// resource-exhaustion bound: because the map only shrinks when `restore`
+    /// drops an entry, a saturated arbiter leaves every further delegator without
+    /// anomaly detection for the rest of the process, so size it for the expected
+    /// number of distinct delegator ids. Setting `0` disables anomaly detection
+    /// entirely.
     #[must_use]
     pub fn with_max_detectors(mut self, max: usize) -> Self {
         self.max_detectors = max;
         self
     }
 
+    /// Installs the audit logger used for every verdict, and returns the arbiter
+    /// (builder form).
+    ///
+    /// Without it, verdicts are returned to the caller and never recorded: allow
+    /// and deny decisions are equally unlogged, so an arbiter without a sink fails
+    /// open on the audit axis (audit durability is explicitly out of scope in
+    /// `docs/THREAT_MODEL.md` section 3). Logging is best-effort and cannot change
+    /// a decision: `AuditLogger::log` is infallible and alert-hook panics are
+    /// caught inside the audit layer.
     #[must_use]
     pub fn with_audit(mut self, audit: AuditLogger) -> Self {
         self.audit = Some(Shared::new(audit));
         self
     }
 
+    /// Installs the initial domain scope and returns the arbiter (builder form).
+    ///
+    /// It replaces rather than merges any existing scope, and it is configuration
+    /// trusted by the host. A domain whose resource prefix list is empty imposes
+    /// no resource confinement at all (see `TaskDomain::is_resource_allowed`);
+    /// with no scope installed the domain dimension is charged 0.0 and no
+    /// `trust_floor` applies, so the *default* is unconfined and a scope should be
+    /// installed for any confined workload.
     #[must_use]
     pub fn with_domain_scope(mut self, scope: DomainScope) -> Self {
         self.domain_scope = Arc::new(RwLock::new(Some(scope)));
         self
     }
 
+    /// Borrowed handle to the shared trust store, for direct reads and writes that
+    /// bypass the arbiter.
+    ///
+    /// Writing through it changes future scoring with no evidence accounting, and
+    /// reading it exposes per-delegator trust, so treat every caller as
+    /// control-plane code with the same authority as `feedback`. Exposing this
+    /// handle to request-handling code lets that code forge trust (raise it, or
+    /// zero out another delegator's) without going through a verdict.
     #[must_use]
     pub fn trust_store(&self) -> &Shared<dyn TrustScoreStore> {
         &self.trust_store
     }
 
+    /// Spawns the resilient trust-decay worker for this arbiter's store and
+    /// returns its abort-on-drop handle.
+    ///
+    /// The interval is both the tick period and the amount of decay charged per
+    /// tick, so it defines the staleness bound on trust. Keep the returned handle
+    /// alive: dropping it stops decay immediately (see `TrustDecayHandle`), which
+    /// silently removes that bound and lets stale trust keep granting autonomy.
+    /// Requires a Tokio runtime; spawning panics outside one.
     pub fn spawn_trust_decay(&self, interval: std::time::Duration) -> TrustDecayHandle {
         let store = self.trust_store.clone_arc();
         TrustDecayWorker::spawn_resilient(store, interval)
     }
 
+    /// Validates and installs a new policy; on failure the previous policy stays
+    /// in force.
+    ///
+    /// `DynamicPolicy::validate` is the only gate. It checks the weight sum
+    /// (within 0.05 of 1.0), individual weights, band ordering/ranges and that
+    /// every banded level has a strategy, but it does not check band coverage, so
+    /// a policy with gaps silently turns the uncovered risks into denies.
+    ///
+    /// Ordering caveat: `authorize` scores risk before it reads the policy, so a
+    /// concurrent `set_policy` can pair a score produced under the old weights
+    /// with the new bands -- a narrow window of mixed-policy verdicts, and one
+    /// that is not necessarily fail-closed because weights and bands can move in
+    /// either direction. A writer also waits for in-flight scoring to release the
+    /// policy read lock (which is held across the trust-store lookup).
+    ///
+    /// # Errors
+    ///
+    /// Returns the validation error unchanged and writes nothing when the policy
+    /// is invalid.
     pub async fn set_policy(&self, policy: DynamicPolicy) -> anyhow::Result<()> {
         policy.validate()?;
         let mut guard = self.policy.write().await;
@@ -118,11 +242,39 @@ impl AuthorizationArbiter {
         Ok(())
     }
 
+    /// Replaces the domain scope, with no validation at all (contrast
+    /// `set_policy`).
+    ///
+    /// The scope is read on every `risk_score` call, so the change applies to
+    /// requests scored after it and never re-scores a verdict that was already
+    /// returned. There is no way to remove a scope once set, only to replace it,
+    /// and a scope with empty resource prefix lists silently disables resource
+    /// confinement for that domain.
     pub async fn set_domain_scope(&self, scope: DomainScope) {
         let mut guard = self.domain_scope.write().await;
         *guard = Some(scope);
     }
 
+    /// Produces the authorization verdict for one action request.
+    ///
+    /// Decision order, which later refactors must preserve:
+    /// 1. the in-process lockdown set is checked first and a frozen delegator is
+    ///    denied outright (`allowed: false`, `L0Frozen`, risk 1.0) without scoring
+    ///    or consulting the policy, so a lockdown cannot be outvoted by a good
+    ///    score;
+    /// 2. the risk is scored on five dimensions (which mutates the delegator's
+    ///    anomaly window -- see `risk_score`);
+    /// 3. the level comes from `DynamicPolicy::map_to_level` and `allowed` is true
+    ///    only for `L4FullAutonomy` / `L3Conditional`;
+    /// 4. `mitigation` carries the level's strategy for every denied verdict, and
+    ///    for allowed verdicts only when that strategy is a `Throttle`.
+    ///
+    /// Every verdict is written to the audit logger when one is installed, on the
+    /// lockdown path as well; the audit write cannot fail the decision.
+    /// Mitigations are advisory to the host: this method does not rate-limit and
+    /// does not request human confirmation, so ignoring `mitigation` silently
+    /// upgrades a confirmation-gated verdict to plain access, and an L3 verdict is
+    /// an allow whether or not its throttle is actually enforced.
     #[must_use]
     pub async fn authorize(&self, request: &ActionRequest) -> AuthorizationVerdict {
         let frozen = self.frozen.read().await;
@@ -202,6 +354,33 @@ impl AuthorizationArbiter {
         verdict
     }
 
+    /// Scores a request on the five risk dimensions, without applying the policy
+    /// thresholds, and returns the clamped total alongside the raw sub-scores.
+    ///
+    /// Dimension sources: `delegator_weight` from the delegator type (Human 0.0,
+    /// Scheduler 0.02, Agent 0.05, SubAgent 0.15, ExternalSystem 0.30);
+    /// `trust_penalty` is `1.0 - value * confidence` of the stored score, raised
+    /// when the current domain's `trust_floor` is not met; `sensitivity` is the
+    /// claimed category's base weight; `domain_mismatch` is the scope's excess
+    /// weight (0.0 when no scope is installed); `anomaly` is the detector's
+    /// deviation. The total is their weighted sum with
+    /// `DynamicPolicy::dimension_weights`, clamped to `[0, 1]` (`NaN` is preserved
+    /// and denied later by the policy's unmatched-band fallback).
+    ///
+    /// Fail-closed failure handling, none of which blocks the call: a trust-store
+    /// `get` error is logged and scored as zero trust (maximum penalty); a missing
+    /// trust record uses `TrustScore::default()`, which also yields zero trust; a
+    /// delegator beyond the detector cap is charged the fixed 0.15 default. The
+    /// trust store is authoritative when it answers, so a host that returns
+    /// forged scores can lower the penalty, which is why store correctness is the
+    /// host's responsibility (threat model section 3).
+    ///
+    /// Side effect and ordering caveat: this is not read-only. It observes the
+    /// request in the delegator's anomaly detector, so calling it in addition to
+    /// `authorize` (for logging, previews or tests) double-counts the action and
+    /// skews the behavioral baseline. It reads the trust store while holding the
+    /// policy read lock, so a slow or hanging store delays `set_policy`; the
+    /// detector write lock is taken only afterwards.
     #[must_use]
     pub async fn risk_score(&self, request: &ActionRequest) -> RiskScore {
         let policy = self.policy.read().await;
@@ -301,6 +480,27 @@ impl AuthorizationArbiter {
         }
     }
 
+    /// Records the observed outcome of a previously authorized action and updates
+    /// the delegator's trust score accordingly.
+    ///
+    /// Severity mapping: `Success` is compliant 0.5 (+0.005 trust), `Failure` is a
+    /// violation of 0.2 (-0.02), `PolicyViolation` a violation of 0.8 (-0.08), and
+    /// `Anomalous` uses its `deviation` verbatim as the violation severity (not
+    /// clamped, so it must be in `[0, 1]`).
+    ///
+    /// Who may call it: this is a privileged control-plane operation. The outcome
+    /// is taken on faith and the delegator id comes from the caller's request, so
+    /// an untrusted caller could inflate trust with invented successes or deflate
+    /// another delegator's trust by naming its id. Only report outcomes actually
+    /// observed by the enforcement point.
+    ///
+    /// Failure handling: a `get` error falls back to `TrustScore::default()`, so
+    /// the outcome is applied to a fresh record and then written back -- a
+    /// transient store blip therefore *resets* accumulated trust (fail-closed but
+    /// lossy, and a denial-of-service on that delegator). A `set` error is logged
+    /// and dropped, which leaves the previous score in force and can keep a more
+    /// permissive trust level alive than the outcome implies. Outcome payloads
+    /// (`error`, `rule`) are not stored by this call; the caller must log them.
     pub async fn feedback(&self, request: &ActionRequest, outcome: ActionOutcome) {
         let mut trust = self
             .trust_store
@@ -335,6 +535,21 @@ impl AuthorizationArbiter {
         }
     }
 
+    /// Freezes a delegator to L0: every later `authorize` call for that id is
+    /// denied with risk 1.0, regardless of policy, trust or domain state.
+    ///
+    /// Enforcement is the in-process `frozen` set, so it takes effect immediately
+    /// and cannot be outvoted -- but it is *not* persisted: after a restart the
+    /// entry is gone and the delegator is scored normally again, with only the
+    /// persisted near-zero trust raising its risk. Re-apply lockdowns from durable
+    /// state at startup if they must survive a restart. Also note that the arbiter
+    /// does not check who calls this, so exposing it to request handling lets any
+    /// caller freeze any delegator (a denial-of-service) -- gate it behind an
+    /// operator/admin permission.
+    ///
+    /// The trust record is written best-effort (`value` 0.0, `confidence` 1.0,
+    /// `evidence_count` 999): a store failure is logged and does not weaken the
+    /// in-process freeze. `reason` is only logged, never stored on the verdict.
     pub async fn lockdown(&self, delegator_id: &str, reason: &str) {
         {
             let mut frozen = self.frozen.write().await;
@@ -359,6 +574,24 @@ impl AuthorizationArbiter {
         );
     }
 
+    /// Lifts a lockdown and re-seeds the delegator's trust from `target`.
+    ///
+    /// Operator control with no authorization check inside (see `lockdown`), so
+    /// the host must gate it. Effects, in order: the id is removed from the frozen
+    /// set, a fresh score is written (`L4` 0.95, `L3` 0.8, `L2` 0.6, `L1` 0.4,
+    /// `L0` 0.1, with `confidence` forced to 0.8 and `evidence_count` 10), and the
+    /// delegator's anomaly detector is dropped, so its behavioral baseline is
+    /// re-learned from scratch.
+    ///
+    /// Caveats operators should expect: the seeded confidence is not durable,
+    /// because the next `feedback` recomputes `confidence` from `evidence_count`
+    /// (10) and collapses it to about 0.10, multiplying the seeded value down, so
+    /// a restore is a temporary reprieve unless evidence accumulates.
+    /// `restore(.., L0Frozen)` does *not* deny: it unfreezes with a 0.1 seed, and
+    /// the delegator is then scored normally. Dropping the baseline also means
+    /// anomaly-based containment is blind right after a restore (the next 100
+    /// observations contribute only the cold-start 0.1), so risk is dominated by
+    /// trust, sensitivity and domain in that window.
     pub async fn restore(&self, delegator_id: &str, target: AutonomyLevel) {
         {
             let mut frozen = self.frozen.write().await;
@@ -394,6 +627,20 @@ impl AuthorizationArbiter {
         );
     }
 
+    /// Returns a JSON snapshot of one delegator's dynamic-authz state: the frozen
+    /// flag, effective trust, confidence, evidence count, whether the anomaly
+    /// baseline is ready, and a constant `"enabled": true` (this subsystem has no
+    /// disable switch).
+    ///
+    /// Read-only, and deliberately explicit about failures: when the trust store
+    /// errors it reports `trust_store_ok: false` alongside a *default* (zero) trust
+    /// score, so consumers must check `trust_store_ok` before drawing conclusions
+    /// from `trust_score` or `trust_confidence`. `frozen` reflects only this
+    /// process (a lockdown in another replica is invisible here), and
+    /// `anomaly_baseline_ready` is false for delegators without a detector (for
+    /// example above the detector cap, or right after `restore`). The payload
+    /// contains the delegator id, so treat it as operator-facing data and gate
+    /// access to it.
     #[must_use]
     pub async fn status_summary(&self, delegator_id: &str) -> serde_json::Value {
         let (trust, store_ok) = match self.trust_store.get(delegator_id).await {
