@@ -1,7 +1,9 @@
 //! Distributed JWT session management for kirino.
 //!
 //! Provides:
-//! - JWT token signing and verification with shared secret
+//! - JWT token signing and verification with a shared secret (HS256) or
+//!   an Ed25519 key pair, where verify-only services hold no signing key
+//!   (see [`config::SessionConfig`])
 //! - Session persistence via PostgreSQL (optional `postgres` feature)
 //! - Token refresh mechanism (plain, or one-time-use rotation with replay
 //!   detection via [`TokenManager::refresh_rotating`])
