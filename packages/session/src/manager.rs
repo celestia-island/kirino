@@ -55,9 +55,7 @@ impl KeySet {
             Some(pem) => match EncodingKey::from_ed_pem(pem.as_bytes()) {
                 Ok(key) => Some(key),
                 Err(e) => {
-                    return Self::Broken(format!(
-                        "Ed25519 signing key is not a valid PEM key: {e}"
-                    ))
+                    return Self::Broken(format!("Ed25519 signing key is not a valid PEM key: {e}"))
                 }
             },
         };
@@ -125,8 +123,8 @@ impl TokenManager {
             Some(aud) => c.with_audience(aud.clone()),
             None => c,
         };
-        let access = self.sign(
-            &stamp(TokenClaims::new(
+        let access = self.sign(&stamp(
+            TokenClaims::new(
                 user_id,
                 username.clone(),
                 TokenType::Access,
@@ -134,10 +132,10 @@ impl TokenManager {
                 &self.config.issuer,
             )
             .with_session(&sid)
-            .with_roles(roles.clone())),
-        )?;
-        let refresh = self.sign(
-            &stamp(TokenClaims::new(
+            .with_roles(roles.clone()),
+        ))?;
+        let refresh = self.sign(&stamp(
+            TokenClaims::new(
                 user_id,
                 username,
                 TokenType::Refresh,
@@ -145,8 +143,8 @@ impl TokenManager {
                 &self.config.issuer,
             )
             .with_session(&sid)
-            .with_roles(roles)),
-        )?;
+            .with_roles(roles),
+        ))?;
         Ok(TokenPair {
             access_token: access,
             refresh_token: refresh,
@@ -159,10 +157,11 @@ impl TokenManager {
     pub fn sign(&self, claims: &TokenClaims) -> SessionResult<String> {
         let key = match &self.keys {
             KeySet::SharedSecret { encoding, .. } => encoding,
-            KeySet::Ed25519 { encoding: Some(key), .. } => key,
-            KeySet::Ed25519 { encoding: None, .. } => {
-                return Err(SessionError::SigningUnavailable)
-            }
+            KeySet::Ed25519 {
+                encoding: Some(key),
+                ..
+            } => key,
+            KeySet::Ed25519 { encoding: None, .. } => return Err(SessionError::SigningUnavailable),
             KeySet::Broken(msg) => return Err(SessionError::Keys(msg.clone())),
         };
         Ok(encode(&Header::new(self.keys.algorithm()), claims, key)?)
@@ -202,9 +201,7 @@ impl TokenManager {
             // claim: without marking it required, an audience-less token
             // sails through a configured boundary — the exact token a
             // sibling service would mint with the shared secret.
-            validation
-                .required_spec_claims
-                .insert("aud".to_owned());
+            validation.required_spec_claims.insert("aud".to_owned());
         }
         let mut last_err = None;
         for key in decoding {
@@ -335,7 +332,9 @@ mod tests {
     fn ed25519_issue_and_verify_round_trip() {
         let manager = TokenManager::new(issuer_config());
         let user_id = Uuid::new_v4();
-        let pair = manager.issue_pair(user_id, "alice".into(), vec!["admin".into()]).unwrap();
+        let pair = manager
+            .issue_pair(user_id, "alice".into(), vec!["admin".into()])
+            .unwrap();
 
         let access = manager.verify(&pair.access_token).unwrap();
         assert_eq!(access.sub, user_id.to_string());
@@ -348,16 +347,30 @@ mod tests {
     fn verify_only_manager_verifies_but_never_mints() {
         // The gateway shape: public key only. A leaked config from such a
         // service must not be enough to forge a token.
-        let verifier = TokenManager::new(SessionConfig::new("x").add_ed25519_verifying_key(ED_PUB_A));
+        let verifier =
+            TokenManager::new(SessionConfig::new("x").add_ed25519_verifying_key(ED_PUB_A));
         let issuer = TokenManager::new(issuer_config());
-        let pair = issuer.issue_pair(Uuid::new_v4(), "bob".into(), vec![]).unwrap();
+        let pair = issuer
+            .issue_pair(Uuid::new_v4(), "bob".into(), vec![])
+            .unwrap();
 
         assert_eq!(verifier.verify(&pair.access_token).unwrap().username, "bob");
         let err = verifier
-            .sign(&TokenClaims::new(Uuid::new_v4(), "bob".into(), TokenType::Access, 60, "kirino"))
+            .sign(&TokenClaims::new(
+                Uuid::new_v4(),
+                "bob".into(),
+                TokenType::Access,
+                60,
+                "kirino",
+            ))
             .unwrap_err();
-        assert!(matches!(err, SessionError::SigningUnavailable), "got: {err:?}");
-        assert!(verifier.issue_pair(Uuid::new_v4(), "bob".into(), vec![]).is_err());
+        assert!(
+            matches!(err, SessionError::SigningUnavailable),
+            "got: {err:?}"
+        );
+        assert!(verifier
+            .issue_pair(Uuid::new_v4(), "bob".into(), vec![])
+            .is_err());
     }
 
     #[test]
@@ -373,10 +386,22 @@ mod tests {
                 .add_ed25519_verifying_key(ED_PUB_A),
         );
         let hs_token = hs
-            .sign(&TokenClaims::new(Uuid::new_v4(), "u".into(), TokenType::Access, 60, "kirino"))
+            .sign(&TokenClaims::new(
+                Uuid::new_v4(),
+                "u".into(),
+                TokenType::Access,
+                60,
+                "kirino",
+            ))
             .unwrap();
         let ed_token = ed
-            .sign(&TokenClaims::new(Uuid::new_v4(), "u".into(), TokenType::Access, 60, "kirino"))
+            .sign(&TokenClaims::new(
+                Uuid::new_v4(),
+                "u".into(),
+                TokenType::Access,
+                60,
+                "kirino",
+            ))
             .unwrap();
         assert!(ed.verify(&hs_token).is_err());
         assert!(hs.verify(&ed_token).is_err());
@@ -398,8 +423,12 @@ mod tests {
                 .with_ed25519_signing_key(ED_PRIV_A)
                 .add_ed25519_verifying_key(ED_PUB_A),
         );
-        let new_token = current.issue_pair(Uuid::new_v4(), "n".into(), vec![]).unwrap();
-        let old_token = retiring.issue_pair(Uuid::new_v4(), "o".into(), vec![]).unwrap();
+        let new_token = current
+            .issue_pair(Uuid::new_v4(), "n".into(), vec![])
+            .unwrap();
+        let old_token = retiring
+            .issue_pair(Uuid::new_v4(), "o".into(), vec![])
+            .unwrap();
         assert!(current.verify(&new_token.access_token).is_ok());
         assert!(current.verify(&old_token.access_token).is_ok());
         // A key outside the accepted set still fails.
@@ -420,11 +449,16 @@ mod tests {
         // Construction stays infallible; the misconfiguration surfaces on
         // every sign and verify with a precise message instead of a panic
         // or a silently ignored key.
-        let manager = TokenManager::new(
-            SessionConfig::new("x").add_ed25519_verifying_key("not a pem"),
-        );
+        let manager =
+            TokenManager::new(SessionConfig::new("x").add_ed25519_verifying_key("not a pem"));
         let err = manager
-            .sign(&TokenClaims::new(Uuid::new_v4(), "u".into(), TokenType::Access, 60, "kirino"))
+            .sign(&TokenClaims::new(
+                Uuid::new_v4(),
+                "u".into(),
+                TokenType::Access,
+                60,
+                "kirino",
+            ))
             .unwrap_err();
         assert!(matches!(err, SessionError::Keys(_)), "got: {err:?}");
         assert!(manager.verify("anything").is_err());
@@ -436,7 +470,9 @@ mod tests {
         // stamped on mint, so the manager rejected its own tokens.
         let config = issuer_config().with_audience("chest-api");
         let manager = TokenManager::new(config);
-        let pair = manager.issue_pair(Uuid::new_v4(), "alice".into(), vec![]).unwrap();
+        let pair = manager
+            .issue_pair(Uuid::new_v4(), "alice".into(), vec![])
+            .unwrap();
 
         let claims = manager.verify(&pair.access_token).unwrap();
         assert_eq!(claims.aud.as_deref(), Some("chest-api"));
@@ -445,11 +481,16 @@ mod tests {
         // must be rejected by the same manager — that is the audience
         // boundary doing its job.
         let unaudited = TokenManager::new(issuer_config())
-            .sign(&TokenClaims::new(Uuid::new_v4(), "alice".into(), TokenType::Access, 60, "kirino"))
+            .sign(&TokenClaims::new(
+                Uuid::new_v4(),
+                "alice".into(),
+                TokenType::Access,
+                60,
+                "kirino",
+            ))
             .unwrap();
         assert!(manager.verify(&unaudited).is_err());
     }
-
 
     #[test]
     fn sub_accessors_survive_sign_verify_roundtrip() {
