@@ -32,6 +32,17 @@ enum KeySet {
 
 impl KeySet {
     fn resolve(ed: &Ed25519Keys, secret: &str) -> Self {
+        if ed.signing_pem.is_some() && ed.verifying_pems.is_empty() {
+            // Wrong-direction config: an issuer that configured its private
+            // key but no public key would otherwise silently mint HS256
+            // tokens with the leftover secret — the exact trust path this
+            // profile exists to retire. Fail as loudly as a malformed PEM.
+            return Self::Broken(
+                "an Ed25519 signing key is configured but no verifying key is: \
+                 add the matching public key with `add_ed25519_verifying_key`"
+                    .into(),
+            );
+        }
         if ed.verifying_pems.is_empty() {
             return Self::SharedSecret {
                 encoding: EncodingKey::from_secret(secret.as_bytes()),
@@ -70,7 +81,16 @@ impl KeySet {
         match self {
             Self::SharedSecret { .. } => Algorithm::HS256,
             Self::Ed25519 { .. } => Algorithm::EdDSA,
-            Self::Broken(_) => Algorithm::EdDSA, // unreachable: sign/verify fail first
+            Self::Broken(_) => {
+                // Every sign/verify call site returns the Broken error before
+                // reaching here; keep that invariant loud in debug builds.
+                debug_assert!(
+                    false,
+                    "KeySet::Broken must be handled by sign/verify before \
+                     algorithm() is consulted"
+                );
+                Algorithm::EdDSA
+            }
         }
     }
 }
@@ -154,6 +174,13 @@ impl TokenManager {
     }
 
     /// Sign claims into a JWT string.
+    ///
+    /// The claims are signed as given: unlike [`Self::issue_pair`], this
+    /// does **not** stamp the configured audience onto them. A caller that
+    /// signs claims by hand on a manager configured with
+    /// [`SessionConfig::with_audience`] must set `aud` itself
+    /// ([`TokenClaims::with_audience`]) or its own verifier — and every
+    /// other audience-enforcing service — will reject the token.
     pub fn sign(&self, claims: &TokenClaims) -> SessionResult<String> {
         let key = match &self.keys {
             KeySet::SharedSecret { encoding, .. } => encoding,
@@ -326,6 +353,109 @@ mod tests {
         SessionConfig::new("unused-in-ed25519-profile")
             .with_ed25519_signing_key(ED_PRIV_A)
             .add_ed25519_verifying_key(ED_PUB_A)
+    }
+
+    #[test]
+    fn signing_key_without_verifying_keys_fails_loudly() {
+        // The silent-HS256-downgrade trap the adversarial round probed: an
+        // issuer that configured only its private key used to mint HS256
+        // tokens signed with the leftover placeholder secret — forgeable by
+        // anyone who reads the config. It must refuse instead.
+        let manager = TokenManager::new(
+            SessionConfig::new("placeholder").with_ed25519_signing_key(ED_PRIV_A),
+        );
+        let err = manager
+            .sign(&TokenClaims::new(
+                Uuid::new_v4(),
+                "u".into(),
+                TokenType::Access,
+                60,
+                "kirino",
+            ))
+            .unwrap_err();
+        assert!(matches!(err, SessionError::Keys(_)), "got: {err:?}");
+        assert!(manager.verify("any-token").is_err());
+        assert!(manager
+            .issue_pair(Uuid::new_v4(), "u".into(), vec![])
+            .is_err());
+    }
+
+    #[test]
+    fn lenient_verify_still_requires_the_audience() {
+        // Leniency is an expiry axis, not a trust axis: a token with no
+        // audience must stay rejected even where expiry is forgiven.
+        let issuer = TokenManager::new(
+            SessionConfig::new("x")
+                .with_ed25519_signing_key(ED_PRIV_A)
+                .add_ed25519_verifying_key(ED_PUB_A),
+        );
+        let strict_aud = TokenManager::new(
+            SessionConfig::new("x")
+                .add_ed25519_verifying_key(ED_PUB_A)
+                .with_audience("chest-api"),
+        );
+        let token = issuer
+            .sign(&TokenClaims::new(
+                Uuid::new_v4(),
+                "u".into(),
+                TokenType::Access,
+                60,
+                "kirino",
+            ))
+            .unwrap();
+        assert!(strict_aud.verify_lenient(&token).is_err());
+    }
+
+    #[test]
+    fn strict_verify_rejects_expired_tokens_and_lenient_does_not() {
+        // The manager-level expiry contract: jsonwebtoken's default leeway
+        // is 60s, so the token is pushed 5 minutes into the past to be
+        // unambiguously expired.
+        let manager = TokenManager::new(issuer_config());
+        let mut claims =
+            TokenClaims::new(Uuid::new_v4(), "u".into(), TokenType::Access, 60, "kirino");
+        claims.exp = (chrono::Utc::now().timestamp() - 300) as usize;
+        let token = manager.sign(&claims).unwrap();
+
+        assert!(manager.verify(&token).is_err());
+        let lenient = manager.verify_lenient(&token).unwrap();
+        assert_eq!(lenient.sub, claims.sub);
+    }
+
+    #[test]
+    fn verify_rejects_a_foreign_issuer() {
+        // Signed by a key this manager trusts, but minted by someone else:
+        // issuer and audience are the two claims that keep a shared keypair
+        // from becoming a family-wide passport.
+        let manager = TokenManager::new(
+            SessionConfig::new("x")
+                .with_ed25519_signing_key(ED_PRIV_A)
+                .add_ed25519_verifying_key(ED_PUB_A)
+                .with_issuer("kirino"),
+        );
+        let foreign = manager
+            .sign(&TokenClaims::new(
+                Uuid::new_v4(),
+                "u".into(),
+                TokenType::Access,
+                60,
+                "someone-else",
+            ))
+            .unwrap();
+        assert!(manager.verify(&foreign).is_err());
+    }
+
+    #[test]
+    fn refresh_tokens_carry_the_configured_audience() {
+        // Both halves of the pair are audience-bound: a refresh token that
+        // could be replayed at an audience-less endpoint would make the
+        // access token's audience decorative.
+        let manager = TokenManager::new(issuer_config().with_audience("chest-api"));
+        let pair = manager
+            .issue_pair(Uuid::new_v4(), "alice".into(), vec![])
+            .unwrap();
+        let refresh = manager.verify(&pair.refresh_token).unwrap();
+        assert_eq!(refresh.aud.as_deref(), Some("chest-api"));
     }
 
     #[test]

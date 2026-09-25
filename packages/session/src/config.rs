@@ -11,7 +11,7 @@ use zeroize::Zeroizing;
 /// least one Ed25519 public verifying key; the shared secret is then
 /// ignored (remove it — see [`SessionConfig::add_ed25519_verifying_key`]).
 #[derive(Clone, Default)]
-pub struct Ed25519Keys {
+pub(crate) struct Ed25519Keys {
     /// Private key PEM (issuer side). `None` on verify-only services such
     /// as a gateway that must never mint tokens.
     pub signing_pem: Option<Zeroizing<String>>,
