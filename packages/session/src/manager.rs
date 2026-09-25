@@ -1,27 +1,96 @@
-use jsonwebtoken::{decode, encode, DecodingKey, EncodingKey, Header, Validation};
+use jsonwebtoken::{decode, encode, Algorithm, DecodingKey, EncodingKey, Header, Validation};
 use uuid::Uuid;
 
-use crate::config::SessionConfig;
+use crate::config::{Ed25519Keys, SessionConfig};
 use crate::error::{SessionError, SessionResult};
 use crate::revocation::RefreshRevocationStore;
 use crate::token::{TokenClaims, TokenPair, TokenType};
 
-/// Core JWT token manager — stateless sign/verify with shared secret.
+/// The resolved key profile of a [`TokenManager`].
+///
+/// `Broken` keeps construction infallible while still failing loudly: a
+/// malformed PEM surfaces on the first sign or verify with a precise
+/// message instead of a panic at startup or — worse — a silently ignored
+/// key.
+enum KeySet {
+    SharedSecret {
+        encoding: EncodingKey,
+        decoding: DecodingKey,
+    },
+    Ed25519 {
+        /// `None` on verify-only instances: minting then fails with
+        /// [`SessionError::SigningUnavailable`] rather than working.
+        encoding: Option<EncodingKey>,
+        decoding: Vec<DecodingKey>,
+    },
+    /// A malformed key found at construction; the message is replayed on
+    /// every sign/verify so construction stays infallible and the failure
+    /// stays loud. A `String` (not the error enum) because `SessionError`
+    /// is not `Clone`.
+    Broken(String),
+}
+
+impl KeySet {
+    fn resolve(ed: &Ed25519Keys, secret: &str) -> Self {
+        if ed.verifying_pems.is_empty() {
+            return Self::SharedSecret {
+                encoding: EncodingKey::from_secret(secret.as_bytes()),
+                decoding: DecodingKey::from_secret(secret.as_bytes()),
+            };
+        }
+        let mut decoding = Vec::with_capacity(ed.verifying_pems.len());
+        for (i, pem) in ed.verifying_pems.iter().enumerate() {
+            match DecodingKey::from_ed_pem(pem.as_bytes()) {
+                Ok(key) => decoding.push(key),
+                Err(e) => {
+                    return Self::Broken(format!(
+                        "Ed25519 verifying key #{} is not a valid PEM key: {e}",
+                        i + 1
+                    ))
+                }
+            }
+        }
+        let encoding = match &ed.signing_pem {
+            None => None,
+            Some(pem) => match EncodingKey::from_ed_pem(pem.as_bytes()) {
+                Ok(key) => Some(key),
+                Err(e) => {
+                    return Self::Broken(format!(
+                        "Ed25519 signing key is not a valid PEM key: {e}"
+                    ))
+                }
+            },
+        };
+        Self::Ed25519 { encoding, decoding }
+    }
+
+    /// The only algorithm this manager accepts. Pinning it per profile is
+    /// the alg-confusion guard: an HS256 token presented to an Ed25519
+    /// manager (or vice versa) is rejected by the algorithm whitelist
+    /// before any key is tried.
+    fn algorithm(&self) -> Algorithm {
+        match self {
+            Self::SharedSecret { .. } => Algorithm::HS256,
+            Self::Ed25519 { .. } => Algorithm::EdDSA,
+            Self::Broken(_) => Algorithm::EdDSA, // unreachable: sign/verify fail first
+        }
+    }
+}
+
+/// Core JWT token manager — stateless sign/verify.
+///
+/// Symmetric (HS256 shared secret) by default; asymmetric (Ed25519) when
+/// the config carries at least one public verifying key. See
+/// [`SessionConfig`] for why the asymmetric profile exists.
 pub struct TokenManager {
     config: SessionConfig,
-    encoding_key: EncodingKey,
-    decoding_key: DecodingKey,
+    keys: KeySet,
 }
 
 impl TokenManager {
     pub fn new(config: SessionConfig) -> Self {
-        let encoding_key = EncodingKey::from_secret(config.secret.as_bytes());
-        let decoding_key = DecodingKey::from_secret(config.secret.as_bytes());
-        Self {
-            config,
-            encoding_key,
-            decoding_key,
-        }
+        let keys = KeySet::resolve(&config.ed25519, &config.secret);
+        Self { config, keys }
     }
 
     /// Issue an access + refresh token pair for a user.
@@ -49,8 +118,15 @@ impl TokenManager {
         roles: Vec<String>,
     ) -> SessionResult<TokenPair> {
         let sid = Uuid::new_v4().to_string();
+        // Audience is stamped from the config so the pair passes this very
+        // manager's verifier: a configured audience without stamping would
+        // have every issued token rejected at first presentation.
+        let stamp = |c: TokenClaims| match &self.config.audience {
+            Some(aud) => c.with_audience(aud.clone()),
+            None => c,
+        };
         let access = self.sign(
-            &TokenClaims::new(
+            &stamp(TokenClaims::new(
                 user_id,
                 username.clone(),
                 TokenType::Access,
@@ -58,10 +134,10 @@ impl TokenManager {
                 &self.config.issuer,
             )
             .with_session(&sid)
-            .with_roles(roles.clone()),
+            .with_roles(roles.clone())),
         )?;
         let refresh = self.sign(
-            &TokenClaims::new(
+            &stamp(TokenClaims::new(
                 user_id,
                 username,
                 TokenType::Refresh,
@@ -69,7 +145,7 @@ impl TokenManager {
                 &self.config.issuer,
             )
             .with_session(&sid)
-            .with_roles(roles),
+            .with_roles(roles)),
         )?;
         Ok(TokenPair {
             access_token: access,
@@ -81,19 +157,20 @@ impl TokenManager {
 
     /// Sign claims into a JWT string.
     pub fn sign(&self, claims: &TokenClaims) -> SessionResult<String> {
-        Ok(encode(&Header::default(), claims, &self.encoding_key)?)
+        let key = match &self.keys {
+            KeySet::SharedSecret { encoding, .. } => encoding,
+            KeySet::Ed25519 { encoding: Some(key), .. } => key,
+            KeySet::Ed25519 { encoding: None, .. } => {
+                return Err(SessionError::SigningUnavailable)
+            }
+            KeySet::Broken(msg) => return Err(SessionError::Keys(msg.clone())),
+        };
+        Ok(encode(&Header::new(self.keys.algorithm()), claims, key)?)
     }
 
     /// Verify a JWT and return its claims.
     pub fn verify(&self, token: &str) -> SessionResult<TokenClaims> {
-        let mut validation = Validation::default();
-        validation.set_issuer(&[&self.config.issuer]);
-        validation.validate_exp = true;
-        if let Some(ref aud) = self.config.audience {
-            validation.set_audience(&[aud]);
-        }
-        let data = decode::<TokenClaims>(token, &self.decoding_key, &validation)?;
-        Ok(data.claims)
+        self.verify_with(token, true)
     }
 
     /// Verify a JWT without rejecting expired tokens.
@@ -103,14 +180,42 @@ impl TokenManager {
     /// in exchange.  Expiry is checked on the returned claims so callers
     /// can decide whether to issue a fresh token.
     pub fn verify_lenient(&self, token: &str) -> SessionResult<TokenClaims> {
-        let mut validation = Validation::default();
+        self.verify_with(token, false)
+    }
+
+    /// Shared verify core: issuer, audience (when configured), expiry
+    /// (optional), and exactly one algorithm family. With several
+    /// verifying keys the keys are tried in configuration order — the
+    /// rotation path — and the last error is reported when none match.
+    fn verify_with(&self, token: &str, check_exp: bool) -> SessionResult<TokenClaims> {
+        let decoding: &[DecodingKey] = match &self.keys {
+            KeySet::SharedSecret { decoding, .. } => std::slice::from_ref(decoding),
+            KeySet::Ed25519 { decoding, .. } => decoding,
+            KeySet::Broken(msg) => return Err(SessionError::Keys(msg.clone())),
+        };
+        let mut validation = Validation::new(self.keys.algorithm());
         validation.set_issuer(&[&self.config.issuer]);
-        validation.validate_exp = false;
+        validation.validate_exp = check_exp;
         if let Some(ref aud) = self.config.audience {
             validation.set_audience(&[aud]);
+            // jsonwebtoken validates `aud` only when the token carries the
+            // claim: without marking it required, an audience-less token
+            // sails through a configured boundary — the exact token a
+            // sibling service would mint with the shared secret.
+            validation
+                .required_spec_claims
+                .insert("aud".to_owned());
         }
-        let data = decode::<TokenClaims>(token, &self.decoding_key, &validation)?;
-        Ok(data.claims)
+        let mut last_err = None;
+        for key in decoding {
+            match decode::<TokenClaims>(token, key, &validation) {
+                Ok(data) => return Ok(data.claims),
+                Err(e) => last_err = Some(e),
+            }
+        }
+        Err(last_err
+            .map(SessionError::Jwt)
+            .unwrap_or_else(|| SessionError::Keys("no verifying keys configured".into())))
     }
 
     /// Decode a JWT without verifying signature (e.g. for client-side expiry check).
@@ -190,6 +295,161 @@ impl TokenManager {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Static throwaway keypairs (openssl genpkey -algorithm ed25519),
+    /// fixtures for tests only — no deployment uses them.
+    const ED_PRIV_A: &str = concat!(
+        "-----BEGIN PRIVATE KEY-----\n",
+        "MC4CAQAwBQYDK2VwBCIEIHJZMnU8aSb141PJf2mApAbFap7LFj5SZQWxhQSM5X9d\n",
+        "-----END PRIVATE KEY-----\n",
+    );
+    const ED_PUB_A: &str = concat!(
+        "-----BEGIN PUBLIC KEY-----\n",
+        "MCowBQYDK2VwAyEA+OA4Ug8REAhjvduxgwR+bDv3teNNRACYE96JQ5ZTzhA=\n",
+        "-----END PUBLIC KEY-----\n",
+    );
+    const ED_PRIV_B: &str = concat!(
+        "-----BEGIN PRIVATE KEY-----\n",
+        "MC4CAQAwBQYDK2VwBCIEII1vRDE54egr3RWzmnQMTDqo+6A9Egmz5oLWXBq7Gubz\n",
+        "-----END PRIVATE KEY-----\n",
+    );
+    const ED_PUB_B: &str = concat!(
+        "-----BEGIN PUBLIC KEY-----\n",
+        "MCowBQYDK2VwAyEAtCfny0WNxTiKRgsnHuC52XlFV3hH4lFQU/ctz4XRlGU=\n",
+        "-----END PUBLIC KEY-----\n",
+    );
+
+    const ED_PRIV_C: &str = concat!(
+        "-----BEGIN PRIVATE KEY-----\n",
+        "MC4CAQAwBQYDK2VwBCIEIFCVpaUS2myE1o/0+UrTbBNAS1FVxtihGfRxQDD97fqK\n",
+        "-----END PRIVATE KEY-----\n",
+    );
+
+    fn issuer_config() -> SessionConfig {
+        SessionConfig::new("unused-in-ed25519-profile")
+            .with_ed25519_signing_key(ED_PRIV_A)
+            .add_ed25519_verifying_key(ED_PUB_A)
+    }
+
+    #[test]
+    fn ed25519_issue_and_verify_round_trip() {
+        let manager = TokenManager::new(issuer_config());
+        let user_id = Uuid::new_v4();
+        let pair = manager.issue_pair(user_id, "alice".into(), vec!["admin".into()]).unwrap();
+
+        let access = manager.verify(&pair.access_token).unwrap();
+        assert_eq!(access.sub, user_id.to_string());
+        assert_eq!(access.roles, vec!["admin".to_string()]);
+        let refresh = manager.verify(&pair.refresh_token).unwrap();
+        assert_eq!(refresh.token_type, TokenType::Refresh);
+    }
+
+    #[test]
+    fn verify_only_manager_verifies_but_never_mints() {
+        // The gateway shape: public key only. A leaked config from such a
+        // service must not be enough to forge a token.
+        let verifier = TokenManager::new(SessionConfig::new("x").add_ed25519_verifying_key(ED_PUB_A));
+        let issuer = TokenManager::new(issuer_config());
+        let pair = issuer.issue_pair(Uuid::new_v4(), "bob".into(), vec![]).unwrap();
+
+        assert_eq!(verifier.verify(&pair.access_token).unwrap().username, "bob");
+        let err = verifier
+            .sign(&TokenClaims::new(Uuid::new_v4(), "bob".into(), TokenType::Access, 60, "kirino"))
+            .unwrap_err();
+        assert!(matches!(err, SessionError::SigningUnavailable), "got: {err:?}");
+        assert!(verifier.issue_pair(Uuid::new_v4(), "bob".into(), vec![]).is_err());
+    }
+
+    #[test]
+    fn ed25519_rejects_hs256_tokens_and_vice_versa() {
+        // Alg confusion in both directions: the algorithm whitelist is
+        // pinned per profile, so a symmetric token must never verify
+        // against an Ed25519 manager even when both sides are misconfigured
+        // with the same secret, and vice versa.
+        let hs = TokenManager::new(SessionConfig::new("shared"));
+        let ed = TokenManager::new(
+            SessionConfig::new("shared")
+                .with_ed25519_signing_key(ED_PRIV_A)
+                .add_ed25519_verifying_key(ED_PUB_A),
+        );
+        let hs_token = hs
+            .sign(&TokenClaims::new(Uuid::new_v4(), "u".into(), TokenType::Access, 60, "kirino"))
+            .unwrap();
+        let ed_token = ed
+            .sign(&TokenClaims::new(Uuid::new_v4(), "u".into(), TokenType::Access, 60, "kirino"))
+            .unwrap();
+        assert!(ed.verify(&hs_token).is_err());
+        assert!(hs.verify(&ed_token).is_err());
+    }
+
+    #[test]
+    fn ed25519_rotation_verifies_tokens_from_both_keys() {
+        // Two public keys accepted, tokens signed by each private key
+        // verify — the rollout window where the new key mints while the
+        // old tokens must keep working.
+        let current = TokenManager::new(
+            SessionConfig::new("x")
+                .with_ed25519_signing_key(ED_PRIV_B)
+                .add_ed25519_verifying_key(ED_PUB_A)
+                .add_ed25519_verifying_key(ED_PUB_B),
+        );
+        let retiring = TokenManager::new(
+            SessionConfig::new("x")
+                .with_ed25519_signing_key(ED_PRIV_A)
+                .add_ed25519_verifying_key(ED_PUB_A),
+        );
+        let new_token = current.issue_pair(Uuid::new_v4(), "n".into(), vec![]).unwrap();
+        let old_token = retiring.issue_pair(Uuid::new_v4(), "o".into(), vec![]).unwrap();
+        assert!(current.verify(&new_token.access_token).is_ok());
+        assert!(current.verify(&old_token.access_token).is_ok());
+        // A key outside the accepted set still fails.
+        let stranger = TokenManager::new(
+            SessionConfig::new("x")
+                .with_ed25519_signing_key(ED_PRIV_C)
+                .add_ed25519_verifying_key(ED_PUB_B),
+        );
+        let stranger_token = &stranger
+            .issue_pair(Uuid::new_v4(), "s".into(), vec![])
+            .unwrap()
+            .access_token;
+        assert!(current.verify(stranger_token).is_err());
+    }
+
+    #[test]
+    fn malformed_pem_fails_loudly_on_first_use() {
+        // Construction stays infallible; the misconfiguration surfaces on
+        // every sign and verify with a precise message instead of a panic
+        // or a silently ignored key.
+        let manager = TokenManager::new(
+            SessionConfig::new("x").add_ed25519_verifying_key("not a pem"),
+        );
+        let err = manager
+            .sign(&TokenClaims::new(Uuid::new_v4(), "u".into(), TokenType::Access, 60, "kirino"))
+            .unwrap_err();
+        assert!(matches!(err, SessionError::Keys(_)), "got: {err:?}");
+        assert!(manager.verify("anything").is_err());
+    }
+
+    #[test]
+    fn issue_pair_stamps_the_configured_audience() {
+        // Before: a configured audience was enforced on verify but never
+        // stamped on mint, so the manager rejected its own tokens.
+        let config = issuer_config().with_audience("chest-api");
+        let manager = TokenManager::new(config);
+        let pair = manager.issue_pair(Uuid::new_v4(), "alice".into(), vec![]).unwrap();
+
+        let claims = manager.verify(&pair.access_token).unwrap();
+        assert_eq!(claims.aud.as_deref(), Some("chest-api"));
+
+        // A token without an audience (hand-signed, bypassing issue_pair)
+        // must be rejected by the same manager — that is the audience
+        // boundary doing its job.
+        let unaudited = TokenManager::new(issuer_config())
+            .sign(&TokenClaims::new(Uuid::new_v4(), "alice".into(), TokenType::Access, 60, "kirino"))
+            .unwrap();
+        assert!(manager.verify(&unaudited).is_err());
+    }
+
 
     #[test]
     fn sub_accessors_survive_sign_verify_roundtrip() {
