@@ -10,6 +10,10 @@ pub enum SessionError {
     Expired(chrono::DateTime<chrono::Utc>),
     #[error("token revoked")]
     Revoked,
+    #[error("signing is unavailable on this token manager (no private key configured — verify-only instance)")]
+    SigningUnavailable,
+    #[error("token keys are misconfigured: {0}")]
+    Keys(String),
     #[error("IO error: {0}")]
     Io(#[from] std::io::Error),
     #[cfg(feature = "postgres")]
