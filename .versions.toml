@@ -1,0 +1,24 @@
+# Version-track baselines for `celestia-devtools verify-versions`.
+#
+# kirino carries three independent version identities by design: the root
+# crate (crates.io `kirino`), the deliberately parked `kirino-session`
+# member, and the npm binding `@celestia-island/kirino`. The root manifest
+# has a `[workspace]` table but no `[workspace.package]`, so the gate's
+# baseline inference returned None and the whole cargo track silently
+# skipped (2026-09-26 structural scan S1-1: `ok: true` with zero coverage
+# while npm drifted for a month). The pins below are the override source for
+# that tool generation; the fail-closed devtools update in the same wave
+# additionally falls back to the root `[package].version` and compares the
+# pin against the root's declared line, so a pin left behind by a release
+# bump is drift, not silence. The session exemption is the load-bearing
+# entry: the 0.7.5 baseline is real either way, and without it the
+# deliberate 0.7.0 park would read as drift.
+#
+# Bump both tracks in the same commit that bumps the release versions.
+
+[track]
+cargo = "0.7.5"
+npm = "0.7.5"
+
+[exempt.cargo]
+"packages/session" = "deliberately parked at the published 0.7.0 until the 0.8.0 Ed25519-line release decision (rationale in packages/session/Cargo.toml)"
