@@ -513,7 +513,15 @@ where
 
     #[must_use]
     pub fn with_rate_limiter(mut self, limiter: LoginRateLimiter) -> Self {
+        // Keep the limiter's policy in step with the service's: a limiter
+        // built standalone defaults to Enabled, and leaving it there after
+        // the service was set to Disabled would resurrect password-attempt
+        // bookkeeping the policy just switched off (builder-order trap,
+        // flagged by verification round 1 — the service gate still refuses
+        // the login itself, so this is consistency, not a security fix).
+        let policy = self.password_login_policy;
         self.rate_limiter = limiter;
+        self.rate_limiter.set_policy(policy);
         self
     }
 
@@ -1240,6 +1248,21 @@ mod tests {
             auth.register("alice", "Password123!", None).await.unwrap();
             let result = auth.login("alice", "Password123!").await.unwrap();
             assert_eq!(result.username, "alice");
+        }
+
+        #[test]
+        fn test_builder_order_limiter_inherits_service_policy() {
+            // R1 finding: with_rate_limiter AFTER with_password_login_policy
+            // must not resurrect Enabled bookkeeping on the fresh limiter.
+            let svc = make_auth()
+                .with_password_login_policy(PasswordLoginPolicy::Disabled)
+                .with_rate_limiter(LoginRateLimiter::new(5, 300, 900));
+            assert_eq!(svc.rate_limiter.policy(), PasswordLoginPolicy::Disabled);
+            // Reverse order: the policy setter stays authoritative.
+            let svc2 = make_auth()
+                .with_rate_limiter(LoginRateLimiter::new(5, 300, 900))
+                .with_password_login_policy(PasswordLoginPolicy::Disabled);
+            assert_eq!(svc2.rate_limiter.policy(), PasswordLoginPolicy::Disabled);
         }
 
         #[tokio::test]
