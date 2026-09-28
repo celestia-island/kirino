@@ -1,3 +1,5 @@
+pub mod policy;
+
 use anyhow::Result;
 use chrono::Utc;
 use std::{
@@ -8,6 +10,7 @@ use std::{
 use tokio::sync::RwLock;
 use uuid::Uuid;
 
+use self::policy::PasswordLoginPolicy;
 #[cfg(feature = "auth-jwt")]
 use crate::auth::credential::basic::JwtManager;
 #[cfg(feature = "auth-password")]
@@ -52,10 +55,16 @@ struct RateLimitEntry {
 ///
 /// The limiter is also not an existence oracle: it counts attempts for any key,
 /// whether or not the account exists, and its error carries no account state.
+///
+/// A limiter additionally carries a
+/// [`PasswordLoginPolicy`] (default
+/// [`Enabled`](policy::PasswordLoginPolicy::Enabled)); see
+/// [`with_policy`](LoginRateLimiter::with_policy) for what `Disabled` skips.
 pub struct LoginRateLimiter {
     max_attempts: u32,
     window_secs: u64,
     lockout_secs: u64,
+    policy: PasswordLoginPolicy,
     entries: Arc<RwLock<HashMap<String, RateLimitEntry>>>,
 }
 
@@ -201,8 +210,52 @@ impl LoginRateLimiter {
             max_attempts,
             window_secs,
             lockout_secs,
+            // Default-keep: a limiter built without an explicit policy keeps
+            // counting, so every existing caller is unaffected.
+            policy: PasswordLoginPolicy::Enabled,
             entries: Arc::new(RwLock::new(HashMap::new())),
         }
+    }
+
+    /// Attach a [`PasswordLoginPolicy`] to this
+    /// limiter.
+    ///
+    /// While the policy is `Disabled` both mutation paths become no-ops:
+    /// [`check_and_record_failure`](LoginRateLimiter::check_and_record_failure)
+    /// returns `Ok(())` without taking the write lock or recording an entry,
+    /// and [`reset`](LoginRateLimiter::reset) returns without touching the
+    /// map. The intended pairing is a deployment that refuses password login
+    /// outright (see
+    /// [`AuthService::with_password_login_policy`](AuthService::with_password_login_policy)):
+    /// a deployment with no password attempts must not accumulate lockout
+    /// state, and an uncounted key can never lock an account out of the
+    /// sign-in paths that remain. The no-op is "no bookkeeping", not "no
+    /// enforcement" - a caller that keeps accepting password attempts while
+    /// the limiter is `Disabled` has disarmed its limiter, so the refusal
+    /// belongs in the caller's entry points, which is what `AuthService`
+    /// does.
+    #[must_use]
+    pub fn with_policy(mut self, policy: PasswordLoginPolicy) -> Self {
+        self.policy = policy;
+        self
+    }
+
+    /// The [`PasswordLoginPolicy`] this limiter
+    /// was configured with; `Enabled` unless
+    /// [`with_policy`](LoginRateLimiter::with_policy) set otherwise.
+    #[must_use]
+    pub fn policy(&self) -> PasswordLoginPolicy {
+        self.policy
+    }
+
+    /// Set the policy in place, keeping any recorded state.
+    ///
+    /// Private: the public path is the [`with_policy`](LoginRateLimiter::with_policy)
+    /// builder. `AuthService::with_password_login_policy` uses this to keep its
+    /// login limiter in step with the service-level policy without dropping
+    /// live lockout windows on the floor.
+    fn set_policy(&mut self, policy: PasswordLoginPolicy) {
+        self.policy = policy;
     }
 
     /// Record one failed attempt for `key`, failing while the key is blocked.
@@ -219,7 +272,15 @@ impl LoginRateLimiter {
     /// [`KirinoError::Validation`] while the key is inside its lockout window. The
     /// message states only how long to wait - it never reveals account state and
     /// must stay that way, since callers surface it to unauthenticated clients.
+    ///
+    /// While this limiter's [`PasswordLoginPolicy`]
+    /// is `Disabled` the call is a no-op that returns `Ok(())` without taking
+    /// the write lock: see [`with_policy`](LoginRateLimiter::with_policy).
     pub async fn check_and_record_failure(&self, key: &str) -> Result<()> {
+        if !self.policy.is_enabled() {
+            return Ok(());
+        }
+
         let mut entries = self.entries.write().await;
         let now = Instant::now();
 
@@ -267,7 +328,16 @@ impl LoginRateLimiter {
     /// Call it only after the identity has actually been proven (a successful login
     /// or registration). Resetting on an unverified request would let an attacker
     /// clear the counter at will.
+    ///
+    /// A no-op while this limiter's
+    /// [`PasswordLoginPolicy`] is `Disabled`, since
+    /// no entry can exist to forget - see
+    /// [`with_policy`](LoginRateLimiter::with_policy).
     pub async fn reset(&self, key: &str) {
+        if !self.policy.is_enabled() {
+            return;
+        }
+
         let mut entries = self.entries.write().await;
         entries.remove(key);
     }
@@ -362,6 +432,20 @@ pub struct LoginResult {
 /// services. The grant is guarded by both an in-process latch and an empty-table check, so it
 /// can only ever hand out one first-user role, and it is applied to registration only: logging
 /// in never changes a role.
+///
+/// # Password login policy
+///
+/// The service also carries a
+/// [`PasswordLoginPolicy`] - whether the password
+/// sign-in method is offered at all. It defaults to
+/// [`Enabled`](policy::PasswordLoginPolicy::Enabled) (the historical
+/// behaviour) and is turned off with
+/// [`with_password_login_policy`](AuthService::with_password_login_policy),
+/// which makes [`login`](AuthService::login) and
+/// [`login_with_session`](AuthService::login_with_session) refuse the attempt
+/// before any credential is read. Third-party-only deployments (the family
+/// ERP signs in via Feishu only) configure it from their settings; see the
+/// [`policy`] module docs for the full contract.
 #[cfg(all(feature = "auth-password", feature = "auth-jwt"))]
 pub struct AuthService<DB, P, A>
 where
@@ -375,6 +459,7 @@ where
     arbiter: Option<Shared<AuthorizationArbiter>>,
     rate_limiter: LoginRateLimiter,
     register_rate_limiter: LoginRateLimiter,
+    password_login_policy: PasswordLoginPolicy,
     first_user_role: String,
     default_role: String,
     auto_admin_first_user: bool,
@@ -416,6 +501,9 @@ where
             // since only a successful registration resets the key. Same caveat as
             // above: defaults without a recorded derivation, pending security review.
             register_rate_limiter: LoginRateLimiter::new(3, 300, 1800),
+            // Default-keep: password login stays enabled unless the consumer
+            // opts out, so existing callers behave exactly as before.
+            password_login_policy: PasswordLoginPolicy::Enabled,
             first_user_role: first_user_role.to_string(),
             default_role: default_role.to_string(),
             auto_admin_first_user: false,
@@ -427,6 +515,57 @@ where
     pub fn with_rate_limiter(mut self, limiter: LoginRateLimiter) -> Self {
         self.rate_limiter = limiter;
         self
+    }
+
+    /// Sets whether the password sign-in method is offered at all.
+    ///
+    /// With [`Disabled`](policy::PasswordLoginPolicy::Disabled)
+    /// the password login entry points ([`login`](AuthService::login) and
+    /// [`login_with_session`](AuthService::login_with_session)) refuse every
+    /// attempt with a validation error before any credential is looked up,
+    /// hashed or compared, and the login rate limiter stops recording
+    /// password attempts (see
+    /// [`LoginRateLimiter::with_policy`]). This is the configuration shape
+    /// for third-party-only deployments - the family ERP keeps Feishu
+    /// sign-in only - where each service parses the value from its own
+    /// settings with [`PasswordLoginPolicy::parse`](policy::PasswordLoginPolicy::parse)
+    /// and fails closed on `None`. The default is
+    /// [`Enabled`](policy::PasswordLoginPolicy::Enabled); the policy only
+    /// governs the login method, it does not delete stored hashes or change
+    /// [`change_password`](AuthService::change_password).
+    #[must_use]
+    pub fn with_password_login_policy(mut self, policy: PasswordLoginPolicy) -> Self {
+        self.password_login_policy = policy;
+        self.rate_limiter.set_policy(policy);
+        self
+    }
+
+    /// The [`PasswordLoginPolicy`] this service
+    /// was configured with; [`Enabled`](policy::PasswordLoginPolicy::Enabled)
+    /// unless [`with_password_login_policy`](AuthService::with_password_login_policy)
+    /// set otherwise. A consumer uses it to decide which sign-in options to
+    /// offer in its UI.
+    #[must_use]
+    pub fn password_login_policy(&self) -> PasswordLoginPolicy {
+        self.password_login_policy
+    }
+
+    /// Refuse password login before any credential work when the policy is
+    /// `Disabled`.
+    ///
+    /// The error is a deliberate validation refusal, not
+    /// [`KirinoError::AuthenticationFailed`]: the deployment shape (password
+    /// login off, use a third-party provider) is public configuration that a
+    /// sign-in UI needs to relay, not a guess about one credential.
+    fn ensure_password_login_allowed(&self) -> Result<()> {
+        if !self.password_login_policy.is_enabled() {
+            return Err(KirinoError::Validation(
+                "password login is disabled by policy; sign in with a third-party identity provider"
+                    .to_string(),
+            )
+            .into());
+        }
+        Ok(())
     }
 
     /// Enables the first-user exemption from the invitation-only model.
@@ -610,6 +749,7 @@ where
     }
 
     pub async fn login(&self, username: &str, password: &str) -> Result<LoginResult> {
+        self.ensure_password_login_allowed()?;
         let username = username.trim();
         self.rate_limiter.check_and_record_failure(username).await?;
 
@@ -715,6 +855,7 @@ where
     where
         SM: crate::rbac::session::SessionManager<StringSubject>,
     {
+        self.ensure_password_login_allowed()?;
         let username_trimmed = username.trim();
         self.rate_limiter
             .check_and_record_failure(username_trimmed)
@@ -1032,6 +1173,139 @@ mod tests {
         limiter.check_and_record_failure("user").await.unwrap();
         limiter.check_and_record_failure("user").await.unwrap();
         assert!(limiter.check_and_record_failure("user").await.is_err());
+    }
+
+    #[test]
+    fn test_rate_limiter_default_policy_is_enabled() {
+        // Default-keep: a limiter built without an explicit policy keeps
+        // counting, exactly as before the policy existed.
+        let limiter = LoginRateLimiter::new(3, 300, 900);
+        assert_eq!(limiter.policy(), PasswordLoginPolicy::Enabled);
+    }
+
+    #[tokio::test]
+    async fn test_rate_limiter_with_policy_disabled_records_nothing() {
+        let limiter = LoginRateLimiter::new(2, 300, 900).with_policy(PasswordLoginPolicy::Disabled);
+        assert_eq!(limiter.policy(), PasswordLoginPolicy::Disabled);
+
+        // Far past max_attempts, yet every call succeeds: the Disabled path
+        // neither blocks nor counts.
+        for _ in 0..10 {
+            assert!(limiter.check_and_record_failure("user").await.is_ok());
+        }
+        limiter.reset("user").await;
+
+        // No bucket was ever created: Disabled means no bookkeeping at all.
+        assert!(limiter.entries.read().await.is_empty());
+    }
+
+    #[cfg(all(feature = "auth-password", feature = "auth-jwt"))]
+    mod password_login_policy {
+        use super::*;
+        use crate::{
+            database::memory::InMemoryUserDatabase,
+            rbac::{
+                permission::Permission, session::InMemorySessionManager,
+                store::memory::InMemoryAssignmentStore, subject::StringSubject,
+            },
+        };
+
+        type Service = AuthService<
+            InMemoryUserDatabase,
+            Permission,
+            InMemoryAssignmentStore<StringSubject, Permission>,
+        >;
+
+        fn make_auth() -> Service {
+            AuthService::new(
+                InMemoryUserDatabase::new(),
+                "test-secret-that-is-at-least-32-bytes-long",
+                24,
+                build_default_engine(),
+                "admin",
+                "viewer",
+            )
+            .unwrap()
+        }
+
+        fn make_session_mgr() -> InMemorySessionManager<StringSubject, Permission> {
+            InMemorySessionManager::new(InMemoryAssignmentStore::new())
+        }
+
+        #[tokio::test]
+        async fn test_default_policy_keeps_password_login_enabled() {
+            let auth = make_auth();
+            assert_eq!(auth.password_login_policy(), PasswordLoginPolicy::Enabled);
+
+            auth.register("alice", "Password123!", None).await.unwrap();
+            let result = auth.login("alice", "Password123!").await.unwrap();
+            assert_eq!(result.username, "alice");
+        }
+
+        #[tokio::test]
+        async fn test_disabled_policy_rejects_login_before_credentials() {
+            let auth = make_auth().with_password_login_policy(PasswordLoginPolicy::Disabled);
+            assert_eq!(auth.password_login_policy(), PasswordLoginPolicy::Disabled);
+
+            auth.register("alice", "Password123!", None).await.unwrap();
+
+            // Even the correct password is refused: the gate precedes any
+            // credential lookup, hash or comparison.
+            let err = auth.login("alice", "Password123!").await.unwrap_err();
+            assert!(
+                err.to_string().contains("password login is disabled"),
+                "expected the policy refusal, got: {err}"
+            );
+        }
+
+        #[tokio::test]
+        async fn test_disabled_policy_performs_no_rate_limit_bookkeeping() {
+            let auth = make_auth()
+                .with_rate_limiter(LoginRateLimiter::new(2, 300, 900))
+                .with_password_login_policy(PasswordLoginPolicy::Disabled);
+            auth.register("alice", "Password123!", None).await.unwrap();
+
+            // Way past the limiter's max_attempts, yet every attempt yields
+            // the policy refusal, never "too many login attempts": the
+            // password-attempt bookkeeping never runs.
+            for _ in 0..6 {
+                let err = auth.login("alice", "wrong").await.unwrap_err();
+                assert!(
+                    err.to_string().contains("password login is disabled"),
+                    "expected the policy refusal, got: {err}"
+                );
+            }
+        }
+
+        #[tokio::test]
+        async fn test_disabled_policy_rejects_login_with_session() {
+            let auth = make_auth().with_password_login_policy(PasswordLoginPolicy::Disabled);
+            auth.register("alice", "Password123!", None).await.unwrap();
+
+            let mgr = make_session_mgr();
+            let err = auth
+                .login_with_session("alice", "Password123!", &mgr, chrono::Duration::hours(1))
+                .await
+                .unwrap_err();
+            assert!(
+                err.to_string().contains("password login is disabled"),
+                "expected the policy refusal, got: {err}"
+            );
+        }
+
+        #[tokio::test]
+        async fn test_disabled_policy_keeps_registration_and_change_password() {
+            let auth = make_auth().with_password_login_policy(PasswordLoginPolicy::Disabled);
+
+            // The policy governs the login method, not the credential data:
+            // registration still works...
+            let user = auth.register("alice", "Password123!", None).await.unwrap();
+
+            // ...and an account that holds a credential can still rotate it.
+            auth.change_password(&user.id.to_string(), "Password123!", "NewPassword456!")
+                .await
+                .unwrap();
+        }
     }
 
     #[test]
