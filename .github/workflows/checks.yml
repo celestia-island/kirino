@@ -46,3 +46,7 @@ jobs:
   verify-versions:
     name: Verify version consistency
     uses: celestia-island/celestia-devtools/.github/workflows/verify-versions.yml@master
+
+  family-versions:
+    name: Family dependency identity
+    uses: celestia-island/celestia-devtools/.github/workflows/family-versions.yml@master
