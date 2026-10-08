@@ -1,6 +1,6 @@
 [package]
 name = "kirino"
-version = "0.7.6"
+version = "0.7.7"
 edition = "2021"
 description = "Zero-trust authentication and authorization framework with RBAC and dynamic risk assessment."
 license-file = "LICENSE"
@@ -59,7 +59,7 @@ hex = "^0.4"
 coset = { version = "^0.4", optional = true }
 p256 = { version = "^0.14", features = ["ecdsa", "getrandom"], optional = true }
 tracing = { version = "^0.1", features = ["log"] }
-sea-orm = { version = "^2.0.0-rc", features = ["sqlx-postgres", "runtime-tokio-rustls"], optional = true }
+sea-orm = { version = "^2", features = ["sqlx-postgres", "runtime-tokio-rustls"], optional = true }
 
 [dev-dependencies]
 criterion = "^0.8"
