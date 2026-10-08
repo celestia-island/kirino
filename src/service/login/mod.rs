@@ -1374,7 +1374,8 @@ mod tests {
 
     #[test]
     fn test_permission_all_count() {
-        assert_eq!(crate::rbac::permission::Permission::all().len(), 37);
+        // 37 points through kirino 0.7.7; +4 plugin.* fabric points (A2).
+        assert_eq!(crate::rbac::permission::Permission::all().len(), 41);
     }
 
     #[test]
