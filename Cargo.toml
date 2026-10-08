@@ -1,6 +1,6 @@
 [package]
 name = "kirino"
-version = "0.7.7"
+version.workspace = true
 edition = "2021"
 description = "Zero-trust authentication and authorization framework with RBAC and dynamic risk assessment."
 license-file = "LICENSE"
@@ -19,6 +19,9 @@ members = [
     "packages/session",
     "packages/kirino-macro",
 ]
+
+[workspace.package]
+version = "0.7.7"
 
 [lib]
 crate-type = ["rlib"]

@@ -1,6 +1,6 @@
 [package]
 name = "kirino-macro"
-version = "0.7.5"
+version.workspace = true
 edition = "2021"
 description = "Procedural macros for kirino — hierarchical permission derivation"
 license-file = "../../LICENSE"
