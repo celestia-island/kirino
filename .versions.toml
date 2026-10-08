@@ -17,8 +17,9 @@
 # Bump both tracks in the same commit that bumps the release versions.
 
 [track]
-cargo = "0.7.5"
-npm = "0.7.5"
+cargo = "0.7.7"
+npm = "0.7.7"
 
 [exempt.cargo]
 "packages/session" = "deliberately parked at the published 0.7.0 until the 0.8.0 Ed25519-line release decision (rationale in packages/session/Cargo.toml)"
+"packages/kirino-macro" = "independently versioned proc-macro crate: the published line is 0.7.5 and root 0.7.7 ships against exactly that (path dep version = \"0.7.5\"); bump it only together with its own crates.io release"
