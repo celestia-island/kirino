@@ -78,10 +78,23 @@ impl JwtManager {
                 "JWT secret must be at least {MIN_JWT_SECRET_LENGTH} bytes for HS256 security"
             ));
         }
+        let expiration_hours = expiration_hours.clamp(1, MAX_JWT_EXPIRATION_HOURS);
+        // Audit kirino-R1-SESS-3: revocations auto-clean after 7 days —
+        // a token whose TTL exceeds that window has a replay gap between
+        // revocation-entry expiry and token expiry. Make the mismatch
+        // runtime-visible instead of silently accepted.
+        if expiration_hours * 3600 > REVOCATION_AUTO_CLEANUP_WINDOW_SECS {
+            tracing::warn!(
+                expiration_hours,
+                revocation_window_secs = REVOCATION_AUTO_CLEANUP_WINDOW_SECS,
+                "token TTL exceeds the revocation auto-cleanup window; \
+                 revoked tokens may be replayed after the entry expires"
+            );
+        }
         Ok(Self {
             encoding_key: EncodingKey::from_secret(secret.as_bytes()),
             decoding_key: DecodingKey::from_secret(secret.as_bytes()),
-            expiration_hours: expiration_hours.clamp(1, MAX_JWT_EXPIRATION_HOURS),
+            expiration_hours,
             revocation: Arc::new(RwLock::new(HashMap::new())),
         })
     }
