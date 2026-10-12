@@ -60,6 +60,10 @@ impl OneShotStore {
     }
 
     /// Create a store with a custom JTI ceiling.
+    ///
+    /// A ceiling below the deployment's live-token rate denies fresh
+    /// tokens (fail closed) once the map fills — size it above the peak
+    /// in-flight JTI count.
     pub fn with_max_jtis(max_jtis: usize) -> Self {
         Self {
             used: Arc::new(Mutex::new(HashMap::new())),
