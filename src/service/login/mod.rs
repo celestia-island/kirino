@@ -730,7 +730,7 @@ where
             return Err(KirinoError::AuthenticationFailed.into());
         }
 
-        self.rate_limiter.reset(&username).await;
+        self.rate_limiter.reset(username).await;
         Ok(user)
     }
 
@@ -767,9 +767,7 @@ where
     pub async fn login(&self, username: &str, password: &str) -> Result<LoginResult> {
         self.ensure_password_login_allowed()?;
         let username = username.trim();
-        self.rate_limiter
-            .check_and_record_failure(&username)
-            .await?;
+        self.rate_limiter.check_and_record_failure(username).await?;
 
         let user = self.authenticate_user(username, password).await?;
         let user_id = user.id.to_string();
@@ -876,7 +874,7 @@ where
         self.ensure_password_login_allowed()?;
         let username_trimmed = username.trim();
         self.rate_limiter
-            .check_and_record_failure(&username_trimmed)
+            .check_and_record_failure(username_trimmed)
             .await?;
 
         let user = self.authenticate_user(username_trimmed, password).await?;
