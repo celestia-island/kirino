@@ -55,10 +55,10 @@ impl SessionStore {
                 expires_at.naive_utc().into(),
             ],
         );
-        self.db
-            .execute_raw(stmt)
-            .await
-            .map_err(|e| SessionError::Other(format!("session insert: {e}")))?;
+        self.db.execute_raw(stmt).await.map_err(|e| {
+            tracing::warn!(target: "kirino_session::store", error = %e, "session insert failed");
+            SessionError::Other("session insert failed".into())
+        })?;
         tracing::info!(%session_id, %user_id, "session created");
         Ok(())
     }
@@ -70,11 +70,10 @@ impl SessionStore {
             "UPDATE kirino_sessions SET revoked_at = NOW() WHERE session_id = $1 AND revoked_at IS NULL",
             [(*session_id).into()],
         );
-        let result = self
-            .db
-            .execute_raw(stmt)
-            .await
-            .map_err(|e| SessionError::Other(format!("session revoke: {e}")))?;
+        let result = self.db.execute_raw(stmt).await.map_err(|e| {
+            tracing::warn!(target: "kirino_session::store", error = %e, "session revoke failed");
+            SessionError::Other("session revoke failed".into())
+        })?;
         let affected = result.rows_affected() > 0;
         if affected {
             tracing::info!(%session_id, "session revoked");
@@ -93,7 +92,10 @@ impl SessionStore {
             .db
             .execute_raw(stmt)
             .await
-            .map_err(|e| SessionError::Other(format!("session revoke all: {e}")))?;
+            .map_err(|e| {
+            tracing::warn!(target: "kirino_session::store", error = %e, "session revoke all failed");
+            SessionError::Other("session revoke all failed".into())
+        })?;
         let affected = result.rows_affected();
         tracing::info!(%user_id, affected, "all user sessions revoked");
         Ok(affected)
@@ -109,11 +111,10 @@ impl SessionStore {
                AND expires_at > NOW()",
             [(*session_id).into()],
         );
-        let result = self
-            .db
-            .query_one_raw(stmt)
-            .await
-            .map_err(|e| SessionError::Other(format!("session check: {e}")))?;
+        let result = self.db.query_one_raw(stmt).await.map_err(|e| {
+            tracing::warn!(target: "kirino_session::store", error = %e, "session check failed");
+            SessionError::Other("session check failed".into())
+        })?;
         Ok(result.is_some())
     }
 
@@ -127,19 +128,24 @@ impl SessionStore {
                AND expires_at > NOW()",
             [(*session_id).into()],
         );
-        let result = self
-            .db
-            .query_one_raw(stmt)
-            .await
-            .map_err(|e| SessionError::Other(format!("session find: {e}")))?;
+        let result = self.db.query_one_raw(stmt).await.map_err(|e| {
+            tracing::warn!(target: "kirino_session::store", error = %e, "session find failed");
+            SessionError::Other("session find failed".into())
+        })?;
         match result {
             Some(row) => {
                 let uid: Uuid = row
                     .try_get_by_index(0)
-                    .map_err(|e| SessionError::Other(format!("get user_id: {e}")))?;
+                    .map_err(|e| {
+            tracing::warn!(target: "kirino_session::store", error = %e, "get user_id failed");
+            SessionError::Other("get user_id failed".into())
+        })?;
                 let hash: String = row
                     .try_get_by_index(1)
-                    .map_err(|e| SessionError::Other(format!("get token_hash: {e}")))?;
+                    .map_err(|e| {
+            tracing::warn!(target: "kirino_session::store", error = %e, "get token_hash failed");
+            SessionError::Other("get token_hash failed".into())
+        })?;
                 Ok(Some((uid, hash)))
             }
             None => Ok(None),
@@ -155,11 +161,10 @@ impl SessionStore {
             "DELETE FROM kirino_sessions WHERE expires_at < $1",
             [cutoff.naive_utc().into()],
         );
-        let result = self
-            .db
-            .execute_raw(stmt)
-            .await
-            .map_err(|e| SessionError::Other(format!("session prune: {e}")))?;
+        let result = self.db.execute_raw(stmt).await.map_err(|e| {
+            tracing::warn!(target: "kirino_session::store", error = %e, "session prune failed");
+            SessionError::Other("session prune failed".into())
+        })?;
         let count = result.rows_affected();
         if count > 0 {
             tracing::info!(count, "expired sessions pruned");

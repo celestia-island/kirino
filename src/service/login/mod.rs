@@ -281,6 +281,11 @@ impl LoginRateLimiter {
             return Ok(());
         }
 
+        // Audit kirino-R1-A1: the bucket key is case-normalized — case
+        // variants of one account name share a lockout, and no consumer
+        // call site can forget to normalize (the account lookup itself
+        // stays exact-match; only the limiter bucket collapses).
+        let key = key.trim().to_lowercase();
         let mut entries = self.entries.write().await;
         let now = Instant::now();
 
@@ -338,8 +343,11 @@ impl LoginRateLimiter {
             return;
         }
 
+        // Same normalization as check_and_record_failure: a success for
+        // `Admin` must clear the bucket an `admin` failure filled.
+        let key = key.trim().to_lowercase();
         let mut entries = self.entries.write().await;
-        entries.remove(key);
+        entries.remove(&key);
     }
 }
 
@@ -622,13 +630,15 @@ where
         validate_password(password)?;
 
         self.register_rate_limiter
-            .check_and_record_failure(&username)
+            .check_and_record_failure(&username.to_lowercase())
             .await?;
 
         let result = self.register_impl(&username, password, display_name).await;
 
         if result.is_ok() {
-            self.register_rate_limiter.reset(&username).await;
+            self.register_rate_limiter
+                .reset(&username.to_lowercase())
+                .await;
         }
         result
     }
@@ -722,7 +732,7 @@ where
             return Err(KirinoError::AuthenticationFailed.into());
         }
 
-        self.rate_limiter.reset(username).await;
+        self.rate_limiter.reset(&username.to_lowercase()).await;
         Ok(user)
     }
 
@@ -759,7 +769,9 @@ where
     pub async fn login(&self, username: &str, password: &str) -> Result<LoginResult> {
         self.ensure_password_login_allowed()?;
         let username = username.trim();
-        self.rate_limiter.check_and_record_failure(username).await?;
+        self.rate_limiter
+            .check_and_record_failure(&username.to_lowercase())
+            .await?;
 
         let user = self.authenticate_user(username, password).await?;
         let user_id = user.id.to_string();
@@ -866,7 +878,7 @@ where
         self.ensure_password_login_allowed()?;
         let username_trimmed = username.trim();
         self.rate_limiter
-            .check_and_record_failure(username_trimmed)
+            .check_and_record_failure(&username_trimmed.to_lowercase())
             .await?;
 
         let user = self.authenticate_user(username_trimmed, password).await?;
@@ -1125,6 +1137,27 @@ mod tests {
         assert!(limiter.check_and_record_failure("user").await.is_ok());
         assert!(limiter.check_and_record_failure("user").await.is_ok());
         assert!(limiter.check_and_record_failure("user").await.is_ok());
+    }
+
+    /// Audit kirino-R1-A1: the rate-limit KEY is case-normalized, so
+    /// `Admin` and `admin` share one bucket — a consumer store that
+    /// matches usernames case-insensitively cannot be turned into N
+    /// per-variant lockout bypasses. (The account lookup itself stays
+    /// exact-match; only the limiter bucket collapses.)
+    #[tokio::test]
+    async fn test_rate_limiter_keys_share_one_bucket_across_case() {
+        let limiter = LoginRateLimiter::new(3, 300, 900);
+        limiter.check_and_record_failure("Admin").await.unwrap();
+        limiter.check_and_record_failure("ADMIN").await.unwrap();
+        limiter.check_and_record_failure("admin").await.unwrap();
+        assert!(
+            limiter.check_and_record_failure("aDmin").await.is_err(),
+            "case variants must share one lockout bucket"
+        );
+        assert!(
+            limiter.check_and_record_failure(" admin ").await.is_err(),
+            "whitespace-trimmed case variants share the bucket too"
+        );
     }
 
     #[tokio::test]
