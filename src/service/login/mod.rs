@@ -281,6 +281,11 @@ impl LoginRateLimiter {
             return Ok(());
         }
 
+        // Audit kirino-R1-A1: the bucket key is case-normalized — case
+        // variants of one account name share a lockout, and no consumer
+        // call site can forget to normalize (the account lookup itself
+        // stays exact-match; only the limiter bucket collapses).
+        let key = key.trim().to_lowercase();
         let mut entries = self.entries.write().await;
         let now = Instant::now();
 
@@ -338,8 +343,11 @@ impl LoginRateLimiter {
             return;
         }
 
+        // Same normalization as check_and_record_failure: a success for
+        // `Admin` must clear the bucket an `admin` failure filled.
+        let key = key.trim().to_lowercase();
         let mut entries = self.entries.write().await;
-        entries.remove(key);
+        entries.remove(&key);
     }
 }
 
@@ -1125,6 +1133,35 @@ mod tests {
         assert!(limiter.check_and_record_failure("user").await.is_ok());
         assert!(limiter.check_and_record_failure("user").await.is_ok());
         assert!(limiter.check_and_record_failure("user").await.is_ok());
+    }
+
+    /// Audit kirino-R1-A1: the rate-limit KEY is case-normalized, so
+    /// `Admin` and `admin` share one bucket — a consumer store that
+    /// matches usernames case-insensitively cannot be turned into N
+    /// per-variant lockout bypasses. (The account lookup itself stays
+    /// exact-match; only the limiter bucket collapses.)
+    #[tokio::test]
+    async fn test_rate_limiter_keys_share_one_bucket_across_case() {
+        let limiter = LoginRateLimiter::new(3, 300, 900);
+        limiter.check_and_record_failure("Admin").await.unwrap();
+        limiter.check_and_record_failure("ADMIN").await.unwrap();
+        limiter.check_and_record_failure("admin").await.unwrap();
+        assert!(
+            limiter.check_and_record_failure("aDmin").await.is_err(),
+            "case variants must share one lockout bucket"
+        );
+        assert!(
+            limiter.check_and_record_failure(" admin ").await.is_err(),
+            "whitespace-trimmed case variants share the bucket too"
+        );
+        // Audit R1 suggestion: the RESET path normalizes too — three
+        // failures under one case, a success under another must still
+        // clear the shared bucket.
+        limiter.reset("ADMIN").await;
+        assert!(
+            limiter.check_and_record_failure("admin").await.is_ok(),
+            "reset must clear the bucket regardless of key case"
+        );
     }
 
     #[tokio::test]
