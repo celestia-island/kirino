@@ -630,15 +630,13 @@ where
         validate_password(password)?;
 
         self.register_rate_limiter
-            .check_and_record_failure(&username.to_lowercase())
+            .check_and_record_failure(&username)
             .await?;
 
         let result = self.register_impl(&username, password, display_name).await;
 
         if result.is_ok() {
-            self.register_rate_limiter
-                .reset(&username.to_lowercase())
-                .await;
+            self.register_rate_limiter.reset(&username).await;
         }
         result
     }
@@ -732,7 +730,7 @@ where
             return Err(KirinoError::AuthenticationFailed.into());
         }
 
-        self.rate_limiter.reset(&username.to_lowercase()).await;
+        self.rate_limiter.reset(&username).await;
         Ok(user)
     }
 
@@ -770,7 +768,7 @@ where
         self.ensure_password_login_allowed()?;
         let username = username.trim();
         self.rate_limiter
-            .check_and_record_failure(&username.to_lowercase())
+            .check_and_record_failure(&username)
             .await?;
 
         let user = self.authenticate_user(username, password).await?;
@@ -878,7 +876,7 @@ where
         self.ensure_password_login_allowed()?;
         let username_trimmed = username.trim();
         self.rate_limiter
-            .check_and_record_failure(&username_trimmed.to_lowercase())
+            .check_and_record_failure(&username_trimmed)
             .await?;
 
         let user = self.authenticate_user(username_trimmed, password).await?;
