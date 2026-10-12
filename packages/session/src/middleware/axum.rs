@@ -30,7 +30,7 @@ where
             .headers
             .get("Authorization")
             .and_then(|v| v.to_str().ok())
-            .and_then(|v| v.strip_prefix("Bearer "))
+            .and_then(crate::middleware::bearer_token)
             .ok_or(AuthRejection::MissingHeader)?;
 
         let claims = manager.verify(token).map_err(|e| match e {
@@ -124,7 +124,7 @@ fn extract_token(source: &AuthSource, parts: &Parts) -> Option<String> {
             .headers
             .get("Authorization")
             .and_then(|v| v.to_str().ok())
-            .and_then(|v| v.strip_prefix("Bearer "))
+            .and_then(crate::middleware::bearer_token)
             .map(|s| s.to_string()),
         AuthSource::Cookie(name) => parts
             .headers

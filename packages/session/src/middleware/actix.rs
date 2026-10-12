@@ -75,7 +75,7 @@ where
                     .headers()
                     .get(header::AUTHORIZATION)
                     .and_then(|v| v.to_str().ok())
-                    .and_then(|v| v.strip_prefix("Bearer "))
+                    .and_then(crate::middleware::bearer_token)
                 {
                     match manager.verify(auth) {
                         Ok(claims) => {
@@ -103,17 +103,12 @@ impl FromRequest for TokenClaims {
     fn from_request(req: &HttpRequest, _: &mut actix_web::dev::Payload) -> Self::Future {
         match req.extensions().get::<TokenClaims>() {
             Some(claims) => ok(claims.clone()),
-            None => ok(TokenClaims {
-                sub: String::new(),
-                username: String::new(),
-                token_type: crate::token::TokenType::Access,
-                iat: 0,
-                exp: 0,
-                iss: String::new(),
-                jti: String::new(),
-                sid: None,
-                roles: Vec::new(),
-            }),
+            // Audit R1-SESS-1: fail closed. A request that reached the
+            // handler without verified claims is unauthenticated — handing
+            // the handler an all-empty claims value silently made every
+            // consumer of this extractor an anonymous identity (empty
+            // `sub`, `exp` 0) instead of a 401.
+            None => Err(ErrorUnauthorized("authentication required")),
         }
     }
 }

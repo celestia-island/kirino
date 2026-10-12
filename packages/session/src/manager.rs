@@ -238,7 +238,17 @@ impl TokenManager {
             }
         }
         Err(last_err
-            .map(SessionError::Jwt)
+            .map(|e| {
+                // Audit R1-SESS-8: an expired token gets its own variant so
+                // clients can tell "refresh me" from "sign in again" — the
+                // middleware `Expired` arms were dead code while every
+                // failure surfaced as the generic `Jwt` wrapper.
+                if matches!(e.kind(), jsonwebtoken::errors::ErrorKind::ExpiredSignature) {
+                    SessionError::Expired(chrono::Utc::now())
+                } else {
+                    SessionError::Jwt(e)
+                }
+            })
             .unwrap_or_else(|| SessionError::Keys("no verifying keys configured".into())))
     }
 

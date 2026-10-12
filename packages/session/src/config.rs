@@ -1,5 +1,13 @@
 use zeroize::Zeroizing;
 
+use crate::SessionError;
+
+/// Minimum accepted shared-secret length for [`SessionConfig::try_new`].
+///
+/// HS256 security rests entirely on this secret's entropy; the OWASP
+/// guidance for symmetric signing keys starts at 256 bits (32 bytes).
+pub const MIN_SECRET_BYTES: usize = 32;
+
 /// Configuration for JWT session management.
 ///
 /// Two key profiles exist. The historical one is a **shared secret**
@@ -41,9 +49,51 @@ pub struct SessionConfig {
 }
 
 impl SessionConfig {
+    /// Build a configuration around a shared secret (HS256 profile).
+    ///
+    /// Infallible on purpose: existing deployments and tests construct
+    /// here. A secret that is empty or shorter than [`MIN_SECRET_BYTES`]
+    /// leaves a `tracing` warning behind (audit R1-SESS-7 — a weak HS256
+    /// key is a standing, logged risk, not a silent one); the strict
+    /// constructor is [`SessionConfig::try_new`].
     pub fn new(secret: impl Into<String>) -> Self {
+        Self::from_secret(secret.into())
+    }
+
+    /// Strict constructor: refuses an empty shared secret outright and
+    /// any secret shorter than [`MIN_SECRET_BYTES`] — exactly the keys an
+    /// HS256 brute forcer hopes for.
+    ///
+    /// # Errors
+    ///
+    /// [`SessionError::Other`] describing the rejected secret.
+    pub fn try_new(secret: impl Into<String>) -> Result<Self, SessionError> {
+        let secret = secret.into();
+        if secret.is_empty() {
+            return Err(SessionError::Other(
+                "shared secret is empty; refusing to configure HS256 without a key".into(),
+            ));
+        }
+        if secret.len() < MIN_SECRET_BYTES {
+            return Err(SessionError::Other(format!(
+                "shared secret is {len} bytes; HS256 needs at least {MIN_SECRET_BYTES}",
+                len = secret.len()
+            )));
+        }
+        Ok(Self::from_secret(secret))
+    }
+
+    fn from_secret(secret: String) -> Self {
+        if secret.len() < MIN_SECRET_BYTES {
+            tracing::warn!(
+                target: "kirino_session::config",
+                len = secret.len(),
+                "weak HS256 shared secret (empty or under 32 bytes); \
+                 SessionConfig::try_new refuses it at construction"
+            );
+        }
         Self {
-            secret: Zeroizing::new(secret.into()),
+            secret: Zeroizing::new(secret),
             ed25519: Ed25519Keys::default(),
             access_ttl_secs: 900,
             refresh_ttl_secs: 604_800,
@@ -90,5 +140,30 @@ impl SessionConfig {
     pub fn add_ed25519_verifying_key(mut self, pem: impl Into<String>) -> Self {
         self.ed25519.verifying_pems.push(Zeroizing::new(pem.into()));
         self
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn try_new_refuses_empty_and_short_secrets() {
+        assert!(SessionConfig::try_new("").is_err());
+        assert!(SessionConfig::try_new("short").is_err());
+        assert!(SessionConfig::try_new("a".repeat(MIN_SECRET_BYTES - 1)).is_err());
+    }
+
+    #[test]
+    fn try_new_accepts_a_full_length_secret() {
+        let secret = "a".repeat(MIN_SECRET_BYTES);
+        assert!(SessionConfig::try_new(secret).is_ok());
+    }
+
+    #[test]
+    fn new_stays_infallible_for_legacy_callers() {
+        // The historical constructor must keep working (scepter/arona
+        // construct through it) — weakness is logged, not refused.
+        let _ = SessionConfig::new("test-secret");
     }
 }
