@@ -1158,6 +1158,14 @@ mod tests {
             limiter.check_and_record_failure(" admin ").await.is_err(),
             "whitespace-trimmed case variants share the bucket too"
         );
+        // Audit R1 suggestion: the RESET path normalizes too — three
+        // failures under one case, a success under another must still
+        // clear the shared bucket.
+        limiter.reset("ADMIN").await;
+        assert!(
+            limiter.check_and_record_failure("admin").await.is_ok(),
+            "reset must clear the bucket regardless of key case"
+        );
     }
 
     #[tokio::test]
