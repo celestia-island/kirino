@@ -67,20 +67,24 @@ impl RevocationBackend for DbRevocationStore {
             Ok(Some(row)) => row.try_get::<i64>("jwt_revocations", "not_before").ok(),
             Ok(None) => None,
             Err(e) => {
-                // Fail-closed is impossible for a read (we have no
-                // not_before to compare) — surface loudly and let the
-                // caller decide; the memory layer still covers locally
-                // issued revocations.
-                tracing::error!(key, error = %e, "DB revocation read failed");
+                // R2 review: with this backend installed there is NO
+                // memory layer behind it — a failed read means the
+                // revocation check is blind for this key until the DB
+                // recovers. Surfaced at error so the operator sees the
+                // coverage gap in the trace.
+                tracing::error!(key, error = %e, "DB revocation read failed; revocation check is blind for this key");
                 None
             }
         }
     }
 
     async fn cleanup_before(&self, cutoff: i64) {
+        // R2 review: entries with not_before >= cutoff are still LIVE
+        // (they revoke tokens issued after the cutoff) — only STRICTLY
+        // OLDER entries can never match again and are safe to delete.
         let stmt = Statement::from_sql_and_values(
             self.conn.get_database_backend(),
-            "DELETE FROM jwt_revocations WHERE not_before >= $1",
+            "DELETE FROM jwt_revocations WHERE not_before < $1",
             [cutoff.into()],
         );
         if let Err(e) = self.conn.execute_raw(stmt).await {
