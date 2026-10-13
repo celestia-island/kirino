@@ -2,7 +2,6 @@ use anyhow::{anyhow, Result};
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, sync::Arc};
-use tokio::sync::RwLock;
 
 use jsonwebtoken::{decode, encode, Algorithm, DecodingKey, EncodingKey, Header, Validation};
 
@@ -42,7 +41,51 @@ pub struct JwtManager {
     encoding_key: EncodingKey,
     decoding_key: DecodingKey,
     expiration_hours: i64,
-    revocation: Arc<RwLock<HashMap<String, i64>>>,
+    revocation: Arc<dyn RevocationBackend>,
+}
+
+/// Audit kirino-R1-SESS-4: the revocation-table abstraction. The default
+/// backend ([`MemoryRevocationBackend`]) is PROCESS-LOCAL — multi-replica
+/// deployments must supply a shared backend (see
+/// [`crate::database::db_revocation::DbRevocationStore`], feature
+/// `rbac-db-session`) or revocations will not propagate across replicas.
+#[async_trait::async_trait]
+pub trait RevocationBackend: Send + Sync {
+    /// Record `not_before` for `key` (user id, jti, or `session:<id>`).
+    async fn revoke(&self, key: &str, not_before: i64);
+    /// The recorded `not_before` for `key`, if any.
+    async fn get_not_before(&self, key: &str) -> Option<i64>;
+    /// Drop entries whose `not_before` predates `cutoff` (maintenance —
+    /// entries older than the longest token lifetime can never match).
+    async fn cleanup_before(&self, cutoff: i64);
+}
+
+/// The default process-local backend (audit kirino-R1-SESS-4): single-
+/// replica semantics only, with the documented 50k-entry cap and 7-day
+/// auto-cleanup.
+#[derive(Default)]
+pub struct MemoryRevocationBackend {
+    map: tokio::sync::RwLock<HashMap<String, i64>>,
+}
+
+#[async_trait::async_trait]
+impl RevocationBackend for MemoryRevocationBackend {
+    async fn revoke(&self, key: &str, not_before: i64) {
+        let mut map = self.map.write().await;
+        map.insert(key.to_string(), not_before);
+        if map.len() > REVOCATION_MAX_ENTRIES {
+            let cutoff = not_before - REVOCATION_AUTO_CLEANUP_WINDOW_SECS;
+            map.retain(|_, &mut nb| nb >= cutoff);
+        }
+    }
+
+    async fn get_not_before(&self, key: &str) -> Option<i64> {
+        self.map.read().await.get(key).copied()
+    }
+
+    async fn cleanup_before(&self, cutoff: i64) {
+        self.map.write().await.retain(|_, &mut nb| nb >= cutoff);
+    }
 }
 
 const MIN_JWT_SECRET_LENGTH: usize = 32;
@@ -91,11 +134,20 @@ impl JwtManager {
                  revoked tokens may be replayed after the entry expires"
             );
         }
+        // Audit kirino-R1-SESS-4: make the process-local revocation
+        // semantics visible at startup — multi-replica deployments that
+        // need cross-replica revocation must supply a shared backend via
+        // [`Self::with_revocation_backend`].
+        tracing::info!(
+            backend = "memory",
+            "JWT revocation table is process-local; multi-replica deployments \
+             must supply a shared RevocationBackend for cross-replica revocation"
+        );
         Ok(Self {
             encoding_key: EncodingKey::from_secret(secret.as_bytes()),
             decoding_key: DecodingKey::from_secret(secret.as_bytes()),
             expiration_hours,
-            revocation: Arc::new(RwLock::new(HashMap::new())),
+            revocation: Arc::new(MemoryRevocationBackend::default()),
         })
     }
 
@@ -158,14 +210,13 @@ impl JwtManager {
     /// Returns an error if the token is invalid, expired, or has been revoked.
     pub async fn verify_with_revocation(&self, token: &str) -> Result<Claims> {
         let claims = self.verify(token)?;
-        let revocation = self.revocation.read().await;
-        if let Some(&not_before) = revocation.get(&claims.user_id) {
+        if let Some(not_before) = self.revocation.get_not_before(&claims.user_id).await {
             if claims.iat <= not_before {
                 return Err(anyhow!("token has been revoked"));
             }
         }
         if let Some(ref jti) = claims.jti {
-            if let Some(&not_before) = revocation.get(jti) {
+            if let Some(not_before) = self.revocation.get_not_before(jti).await {
                 if claims.iat <= not_before {
                     return Err(anyhow!("token has been revoked"));
                 }
@@ -173,7 +224,7 @@ impl JwtManager {
         }
         if let Some(ref sid) = claims.session_id {
             let key = format!("session:{sid}");
-            if let Some(&not_before) = revocation.get(&key) {
+            if let Some(not_before) = self.revocation.get_not_before(&key).await {
                 if claims.iat <= not_before {
                     return Err(anyhow!("token has been revoked"));
                 }
@@ -184,34 +235,38 @@ impl JwtManager {
 
     pub async fn revoke_token(&self, jti: &str) {
         let not_before = Utc::now().timestamp();
-        let mut revocation = self.revocation.write().await;
-        revocation.insert(jti.to_string(), not_before);
+        self.revocation.revoke(jti, not_before).await;
     }
 
     pub async fn revoke_all_for_user(&self, user_id: &str) {
         let not_before = Utc::now().timestamp() + 1;
-        let mut revocation = self.revocation.write().await;
-        revocation.insert(user_id.to_string(), not_before);
-        if revocation.len() > REVOCATION_MAX_ENTRIES {
-            let cutoff = not_before - REVOCATION_AUTO_CLEANUP_WINDOW_SECS;
-            revocation.retain(|_, &mut nb| nb >= cutoff);
-        }
+        self.revocation.revoke(user_id, not_before).await;
+    }
+
+    /// Audit kirino-R1-SESS-4: supply a shared revocation backend (e.g.
+    /// the DB-backed store) — required for multi-replica deployments so
+    /// revocations propagate across replicas.
+    pub fn with_revocation_backend(mut self, backend: Arc<dyn RevocationBackend>) -> Self {
+        self.revocation = backend;
+        self
+    }
+
+    /// The active revocation backend (exposed so hosts can run
+    /// maintenance — e.g. the DB store's window cleanup — or downcast to
+    /// a concrete backend for diagnostics).
+    pub fn revocation_backend(&self) -> &Arc<dyn RevocationBackend> {
+        &self.revocation
     }
 
     pub async fn revoke_session(&self, session_id: &str) {
         let not_before = Utc::now().timestamp();
-        let mut revocation = self.revocation.write().await;
-        revocation.insert(format!("session:{session_id}"), not_before);
-        if revocation.len() > REVOCATION_MAX_ENTRIES {
-            let cutoff = not_before - REVOCATION_AUTO_CLEANUP_WINDOW_SECS;
-            revocation.retain(|_, &mut nb| nb >= cutoff);
-        }
+        let key = format!("session:{session_id}");
+        self.revocation.revoke(&key, not_before).await;
     }
 
     pub async fn cleanup_revocation(&self, max_token_lifetime_secs: i64) {
         let cutoff = Utc::now().timestamp() - max_token_lifetime_secs;
-        let mut revocation = self.revocation.write().await;
-        revocation.retain(|_, &mut not_before| not_before >= cutoff);
+        self.revocation.cleanup_before(cutoff).await;
     }
 }
 
