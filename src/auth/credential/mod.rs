@@ -1,5 +1,6 @@
 #[cfg(feature = "auth-jwt")]
 pub mod basic;
+pub use basic::RevocationBackend;
 pub mod one_time;
 pub mod service;
 
