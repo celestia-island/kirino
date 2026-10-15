@@ -256,6 +256,12 @@ pub fn hierarchical_permission(input: TokenStream) -> TokenStream {
                 vec![self.domain(), self.name()]
             }
 
+            /// Audit kirino-R2-2: a BARE DOMAIN pattern (`"plugin"`)
+            /// matches every point in that domain — including
+            /// trust-root points like `plugin.manage`. Grant records
+            /// should key off leaf paths (`plugin.read`, …), never
+            /// bare domains, unless the grant truly intends to
+            /// include trust-root administration.
             pub fn matches_pattern(&self, pattern: &str) -> bool {
                 pattern == self.domain() || pattern == self.name()
             }
