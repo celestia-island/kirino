@@ -56,6 +56,18 @@ impl TotpVerifier {
         self.generate_at(time_step)
     }
 
+    /// Compute the code for an explicit RFC 4226 counter, bypassing the
+    /// wall clock.
+    ///
+    /// Exposed so consumers (and this crate's own RFC test vectors) can
+    /// assert deterministic codes at fixed counters instead of racing the
+    /// 30-second window. Callers doing interactive authentication should
+    /// prefer [`TotpVerifier::verify`], which applies the clock and the
+    /// ±1-step skew window.
+    pub fn code_at(&self, counter: u64) -> Result<String> {
+        self.generate_at(counter)
+    }
+
     fn generate_at(&self, counter: u64) -> Result<String> {
         let code = hotp_code(&self.secret, counter, self.digits)?;
         Ok(format_code(code, self.digits))
@@ -262,5 +274,83 @@ mod tests {
         let code_a = hotp_code(&secret, 42, 6).unwrap();
         let code_b = hotp_code(&secret, 42, 6).unwrap();
         assert_eq!(code_a, code_b);
+    }
+
+    /// RFC 4226 Appendix D test vectors: the shared secret
+    /// `12345678901234567890` (ASCII) with counters 0..=9.
+    #[test]
+    fn rfc4226_appendix_d_hotp_vectors() {
+        let secret = b"12345678901234567890".to_vec();
+        let totp = TotpVerifier::new(secret);
+        let vectors = [
+            (0u64, "755224"),
+            (1, "287082"),
+            (2, "359152"),
+            (3, "969429"),
+            (4, "338314"),
+            (5, "254676"),
+            (6, "287922"),
+            (7, "162583"),
+            (8, "399871"),
+            (9, "520489"),
+        ];
+        for (counter, expected) in vectors {
+            assert_eq!(
+                totp.code_at(counter).unwrap(),
+                expected,
+                "HOTP vector at counter {counter}"
+            );
+        }
+    }
+
+    /// RFC 6238 Appendix B, SHA-1 line: the same shared secret at the
+    /// documented T values. The RFC prints 8-digit codes; the 6-digit code
+    /// is its last six digits (binary mod 10^6 == (binary mod 10^8) mod
+    /// 10^6), asserted independently here.
+    #[test]
+    fn rfc6238_appendix_b_sha1_vectors() {
+        let secret = b"12345678901234567890".to_vec();
+        let totp = TotpVerifier::new(secret);
+        //                        counter      expected 6-digit   (RFC 8-digit)
+        let vectors = [
+            (1u64, "287082"),      // T=59           → 94287082
+            (37037036, "081804"),  // T=1111111109   → 07081804
+            (37037037, "050471"),  // T=1111111111   → 14050471
+            (41152263, "005924"),  // T=1234567890   → 89005924
+            (66666666, "279037"),  // T=2000000000   → 69279037
+            (666666666, "353130"), // T=20000000000  → 65353130
+        ];
+        for (counter, expected) in vectors {
+            assert_eq!(
+                totp.code_at(counter).unwrap(),
+                expected,
+                "RFC 6238 SHA-1 vector at counter {counter}"
+            );
+        }
+    }
+
+    /// A code from a counter far outside the ±1 window must be rejected by
+    /// `verify` — the window is bounded, not a blanket accept.
+    #[test]
+    fn verify_rejects_far_window_code() {
+        let secret = b"12345678901234567890".to_vec();
+        let totp = TotpVerifier::new(secret);
+        let time_step = chrono::Utc::now().timestamp() as u64 / 30;
+        let far = totp.code_at(time_step + 1000).unwrap();
+        if far != totp.code_at(time_step).unwrap() {
+            assert!(
+                !totp.verify(&far).unwrap(),
+                "a code 1000 steps ahead must be rejected"
+            );
+        }
+    }
+
+    /// `code_at` must honor the configured digit count, not silently fall
+    /// back to the default 6.
+    #[test]
+    fn code_at_honors_digit_options() {
+        let totp = TotpVerifier::with_options(b"12345678901234567890".to_vec(), 8, 30);
+        let code = totp.code_at(1).unwrap();
+        assert_eq!(code, "94287082", "RFC 6238 T=59 full 8-digit value");
     }
 }
