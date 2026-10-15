@@ -33,6 +33,14 @@ impl Permission {
     /// this point — `plugin.publish` gates submitting plugins to the
     /// distribution channel, and `plugin.manage` covers trust-root
     /// administration (publisher allowlists, key rotation).
+    ///
+    /// Audit kirino-R2-1: `plugin.manage` is a trust-root operation,
+    /// and the scoped resolver's AdminBypass fires before any deny
+    /// set — every system admin implicitly holds it. Hosts that
+    /// delegate "admin" to tenant or workbench operators should add
+    /// an explicit grant check on the `plugin.manage` RPC surface
+    /// (not rely on AdminBypass) or move trust-root operations into
+    /// their own domain.
     pub const PLUGIN_PATHS: [&'static str; 4] = [
         "plugin.read",
         "plugin.install",
