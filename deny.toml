@@ -171,6 +171,12 @@ registries = [
 # More documentation about the 'bans' section can be found here:
 # https://embarkstudios.github.io/cargo-deny/checks/bans/cfg.html
 [bans]
+
+# TLS policy: rustls with the pure-Rust ring provider only. aws-lc-sys needs
+# NASM (and a C toolchain) installed to build at all — a build-host burden the
+# family removed by pinning every TLS path to ring. Keep it out permanently.
+[[bans.deny]]
+name = "aws-lc-sys"
 # Lint level for when multiple versions of the same crate are detected
 multiple-versions = "warn"
 # Lint level for when a crate version requirement is `*`
