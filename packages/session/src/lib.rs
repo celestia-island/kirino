@@ -37,6 +37,7 @@
 
 mod config;
 mod error;
+pub mod local;
 mod manager;
 pub mod middleware;
 mod one_shot;
