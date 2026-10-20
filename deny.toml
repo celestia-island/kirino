@@ -172,11 +172,6 @@ registries = [
 # https://embarkstudios.github.io/cargo-deny/checks/bans/cfg.html
 [bans]
 
-# TLS policy: rustls with the pure-Rust ring provider only. aws-lc-sys needs
-# NASM (and a C toolchain) installed to build at all — a build-host burden the
-# family removed by pinning every TLS path to ring. Keep it out permanently.
-[[bans.deny]]
-name = "aws-lc-sys"
 # Lint level for when multiple versions of the same crate are detected
 multiple-versions = "warn"
 # Lint level for when a crate version requirement is `*`
@@ -204,14 +199,14 @@ allow = [
 # This is useful for organizations that want to deny all external dependencies by default
 # but allow their own workspace crates without having to explicitly list them
 allow-workspace = false
-# List of crates to deny
-deny = [
+# List of crates to deny (template; live bans use [[bans.deny]] entries)
+#deny = [
     #"ansi_term@0.11.0",
     #{ crate = "ansi_term@0.11.0", reason = "you can specify a reason it is banned" },
     # Wrapper crates can optionally be specified to allow the crate when it
     # is a direct dependency of the otherwise banned crate
     #{ crate = "ansi_term@0.11.0", wrappers = ["this-crate-directly-depends-on-ansi_term"] },
-]
+#]
 
 # List of features to allow/deny
 # Each entry the name of a crate and a version range. If version is
@@ -253,6 +248,12 @@ skip-tree = [
 # This section is considered when running `cargo deny check sources`.
 # More documentation about the 'sources' section can be found here:
 # https://embarkstudios.github.io/cargo-deny/checks/sources/cfg.html
+# TLS policy: rustls with the pure-Rust ring provider only. aws-lc-sys needs
+# NASM (and a C toolchain) installed to build at all — a build-host burden the
+# family removed by pinning every TLS path to ring. Keep it out permanently.
+[[bans.deny]]
+name = "aws-lc-sys"
+
 [sources]
 # Lint level for what to happen when a crate from a crate registry that is not
 # in the allow list is encountered
