@@ -8,7 +8,7 @@
 //! 强制项是 `exp`（验证必查，含 60s leeway）。
 //!
 //! 不属于本模块的：非对称密钥、会话/撤销、权限模型——需要那些就用
-//! [`crate::TokenManager`](manager.rs)。
+//! `kirino_session::TokenManager`（session 包，独立版本线）。
 
 use jsonwebtoken::{Algorithm, DecodingKey, EncodingKey, Header, Validation};
 use serde::de::DeserializeOwned;
