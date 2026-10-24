@@ -1,12 +1,17 @@
 name: npm Release
 
+# Publishes `@celestia-island/kirino`. The trigger is the crate release tag
+# `v<version>` (the same tag `publish.yml` uses for the crates.io line), not the
+# historical `kirino_session-v*` prefix: no tag in this repository ever carried
+# that prefix, so the tag path could never fire and the npm binding silently sat
+# one release behind the crate (0.7.9 vs 0.7.10, 2026-10-24 audit UP-03).
 on:
   push:
-    tags: ["kirino_session-v*"]
+    tags: ["v*"]
   workflow_dispatch:
     inputs:
       version:
-        description: "Version to publish (e.g. 0.5.0)"
+        description: "Version to publish (e.g. 0.7.10)"
         required: true
 
 permissions:
@@ -44,14 +49,27 @@ jobs:
           if [ -n "${{ github.event.inputs.version }}" ]; then
             v="${{ github.event.inputs.version }}"
           else
-            v="${GITHUB_REF_NAME#kirino_session-v}"
+            v="${GITHUB_REF_NAME#v}"
           fi
           echo "version=$v" >> "$GITHUB_OUTPUT"
+      - name: Check whether this version is already on npm
+        id: exists
+        run: |
+          PKG="@celestia-island/kirino"
+          VER="${{ steps.ver.outputs.version }}"
+          if curl -fsS "https://registry.npmjs.org/${PKG}/${VER}" >/dev/null; then
+            echo "published=true" >> "$GITHUB_OUTPUT"
+            echo "::warning::${PKG}@${VER} is already on npm — skipping."
+          else
+            echo "published=false" >> "$GITHUB_OUTPUT"
+          fi
       - name: Bump version
+        if: steps.exists.outputs.published != 'true'
         run: |
           cd packages/web_ts
           npm version "${{ steps.ver.outputs.version }}" --no-git-tag-version --allow-same-version
       - name: Publish
+        if: steps.exists.outputs.published != 'true'
         run: |
           cd packages/web_ts
           pnpm publish --access public --provenance --no-git-checks
