@@ -10,6 +10,19 @@
 //! specific tier always wins regardless of the order the database
 //! returned rows in, and within one tier a deny is sticky.
 //!
+//! TWO deliberate divergences from chest's historical branches (both in
+//! the safe/deterministic direction, both behaviour-visible on migration
+//! — consuming services MUST state them in their migration PRs):
+//!
+//! 1. Same-tier multi-row verdicts: chest was last-wins (DB row order
+//!    dependent); here deny is sticky within a tier.
+//! 2. Unknown `scope` values: chest's match arm ignored them entirely;
+//!    here they take the global tier and DO fold. Because no write-path
+//!    whitelist for `scope` could be located on either service, a
+//!    hand-edited row with a typo'd scope would change from "inert" to
+//!    "effective as global" — consumers that need chest's inertness must
+//!    filter unknown-scope rows before feeding them here.
+//!
 //! Services keep their own tables and queries (the schema belongs to each
 //! service's database); this module is the pure function they feed rows
 //! into. Versioned here so both consumers drift together.
