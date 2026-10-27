@@ -75,8 +75,17 @@ feature-depth = 1
 #   issues HS256 tokens (Validation::new(Algorithm::HS256)) and never calls
 #   the RSA decrypt/unpadding path the timing side channel applies to.
 #   Tracked upstream: https://github.com/RustCrypto/RSA/issues/626
+#
+# RUSTSEC-2026-0387 (constant-time ops timing variability): pulled in by
+#   jsonwebtoken 11 → p256 0.13 → elliptic-curve → crypto-bigint 0.5.5.
+#   Same chain and same disposition as evernight's P0-E closure (#359:
+#   risk accepted, re-review below) — kirino's token paths never exercise
+#   the ECDSA scalar arithmetic the advisory applies to (HS256-only, same
+#   reasoning as RUSTSEC-2023-0071 above). RE-REVIEW: 2026-12-01
+#   (aligned with evernight).
 ignore = [
     "RUSTSEC-2023-0071",
+    "RUSTSEC-2026-0387",
 ]
 # If this is true, then cargo deny will use the git executable to fetch advisory database.
 # If this is false, then it uses a built-in git library.

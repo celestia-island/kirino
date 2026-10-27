@@ -19,7 +19,7 @@
 # Bump both tracks in the same commit that bumps the release versions.
 
 [track]
-cargo = "0.7.10"
+cargo = "0.7.11"
 npm = "0.7.10"
 
 [exempt.cargo]
