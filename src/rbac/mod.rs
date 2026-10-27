@@ -5,6 +5,7 @@ pub mod constraints;
 #[cfg(feature = "rbac-dynamic")]
 pub mod dynamic;
 pub mod engine;
+pub mod grant_resolution;
 #[cfg(feature = "rbac-hierarchy")]
 pub mod hierarchy;
 pub mod identity_subject;
