@@ -67,6 +67,27 @@ impl LocalJwt {
             .map_err(LocalJwtError::Verify)?;
         Ok(data.claims)
     }
+
+    /// 只验证签名、宽免 `exp` 的验证路径。
+    ///
+    /// 宽免只发生在**过期轴**上，不发生在信任轴上：签名仍必须有效，其余
+    /// 一概不放松——本原语的唯一强制项就是 `exp`，所以宽免的也只有它。
+    /// 存在的理由是**续期式**流程：凭一枚已过期的出示令牌换发新令牌，
+    /// 且换发前已在带外重新核查主体生命周期（仓内消费者 =
+    /// `auth::visitor` 的滚动续期）。一切出示路径（presentation）的校验
+    /// 仍必须走严格 [`Self::verify`]；说不出自己流程里带外复查的是哪道
+    /// 生命周期门的调用方，没有资格调用本方法。
+    pub fn verify_lenient<C: DeserializeOwned + ExpClaims>(
+        &self,
+        token: &str,
+    ) -> Result<C, LocalJwtError> {
+        let mut validation = Validation::new(Algorithm::HS256);
+        validation.validate_exp = false;
+        validation.required_spec_claims.clear();
+        let data = jsonwebtoken::decode::<C>(token, &self.decoding, &validation)
+            .map_err(LocalJwtError::Verify)?;
+        Ok(data.claims)
+    }
 }
 
 #[cfg(test)]
@@ -138,5 +159,29 @@ mod tests {
             jwt.sign(&claims(-5)),
             Err(LocalJwtError::MissingExp)
         ));
+    }
+
+    #[test]
+    fn lenient_verify_forgives_only_expiry() {
+        // The renewal-style contract: an expired token stays rejected by the
+        // strict path but decodes through the lenient one, while a broken
+        // signature is rejected by BOTH — leniency is an expiry axis, not a
+        // trust axis.
+        let jwt = LocalJwt::from_secret(b"k");
+        let stale = chrono::Utc::now().timestamp() - 300;
+        let expired = jwt.sign(&claims(stale)).unwrap();
+        assert!(jwt.verify::<AppClaims>(&expired).is_err());
+        assert_eq!(
+            jwt.verify_lenient::<AppClaims>(&expired).unwrap(),
+            claims(stale)
+        );
+
+        // A forged signature is not forgiven.
+        let mut forged = expired.clone();
+        forged.replace_range(0..1, "X");
+        assert!(jwt.verify_lenient::<AppClaims>(&forged).is_err());
+        // A different key is not forgiven either.
+        let other = LocalJwt::from_secret(b"other-key");
+        assert!(other.verify_lenient::<AppClaims>(&expired).is_err());
     }
 }
