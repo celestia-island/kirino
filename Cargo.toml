@@ -21,7 +21,7 @@ members = [
 ]
 
 [workspace.package]
-version = "0.7.11"
+version = "0.8.0"
 
 [lib]
 crate-type = ["rlib"]
@@ -51,7 +51,7 @@ serde = { version = "^1", features = ["derive"] }
 serde_json = "^1"
 # Published family crate -> crates.io per the 2026-10-20 registry-first ruling.
 yuuka = "^0.6"
-kirino-macro = { path = "packages/kirino-macro", version = "0.7.5" }
+kirino-macro = { path = "packages/kirino-macro", version = "0.8" }
 argon2 = { version = "^0.5", optional = true }
 hmac = "^0.13"
 jsonwebtoken = { version = "^11", features = ["rust_crypto"], optional = true }
