@@ -4,9 +4,9 @@
 //!
 //! Some deployments do not want password login: every human identity arrives
 //! through a third-party provider (OAuth / SSO) and the local username +
-//! password pair is never issued. The first family adopter is the ERP
-//! (`easy-hydro-erp`), which keeps Feishu sign-in only; services that keep
-//! passwords (for example `shittim-chest`) stay on
+//! password pair is never issued. The first family adopter is an ERP service
+//! (Feishu sign-in only); services that keep passwords (for example
+//! `shittim-chest`) stay on
 //! [`PasswordLoginPolicy::Enabled`] and see no change at all.
 //!
 //! The switch lives here - the family's auth-primitives layer (kirino) -
