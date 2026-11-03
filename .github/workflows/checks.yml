@@ -47,10 +47,10 @@ jobs:
     name: Verify version consistency
     uses: celestia-island/celestia-devtools/.github/workflows/verify-versions.yml@2e76d373762dc6b36c1ab7625c1c34842c28ad4a
     with:
-      devtools-ref: v2026.11
+      devtools-ref: 5f280203dd6794b9e631978c5984d5a4d4f801b1
 
   family-versions:
     name: Family dependency identity
     uses: celestia-island/celestia-devtools/.github/workflows/family-versions.yml@2e76d373762dc6b36c1ab7625c1c34842c28ad4a
     with:
-      devtools-ref: v2026.11
+      devtools-ref: 5f280203dd6794b9e631978c5984d5a4d4f801b1
