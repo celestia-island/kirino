@@ -3,7 +3,9 @@
 //! Provides:
 //! - JWT token signing and verification with a shared secret (HS256) or
 //!   an Ed25519 key pair, where verify-only services hold no signing key
-//!   (see [`config::SessionConfig`])
+//!   (see [`config::SessionConfig`]); a post-quantum ML-DSA-65 profile
+//!   (FIPS 204 / RFC 9964) is available behind the default-off `mldsa`
+//!   crate feature (needs a toolchain ≥ 1.87 per the ml-dsa MSRV)
 //! - Session persistence via PostgreSQL (optional `postgres` feature)
 //! - Token refresh mechanism (plain, or one-time-use rotation with replay
 //!   detection via [`TokenManager::refresh_rotating`])

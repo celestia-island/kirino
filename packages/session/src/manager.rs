@@ -1,10 +1,24 @@
+use base64::engine::general_purpose::URL_SAFE_NO_PAD as B64U;
+use base64::Engine as _;
 use jsonwebtoken::{decode, encode, Algorithm, DecodingKey, EncodingKey, Header, Validation};
 use uuid::Uuid;
 
-use crate::config::{Ed25519Keys, SessionConfig};
+use crate::config::{Ed25519Keys, MlDsa65Keys, SessionConfig};
 use crate::error::{SessionError, SessionResult};
 use crate::revocation::RefreshRevocationStore;
 use crate::token::{TokenClaims, TokenPair, TokenType};
+
+/// Expiry leeway in seconds for the hand-rolled ML-DSA-65 verify path,
+/// mirroring the `jsonwebtoken` default so both profiles age tokens out
+/// on the same clock.
+#[cfg(feature = "mldsa")]
+const VERIFY_LEEWAY_SECS: i64 = 60;
+
+/// The exact `alg` string this crate mints and accepts for the ML-DSA-65
+/// profile (RFC 9964). Comparison is exact-string on purpose: it is the
+/// alg-confusion guard, not a prefix match.
+#[cfg(feature = "mldsa")]
+const ML_DSA_65_ALG: &str = "ML-DSA-65";
 
 /// The resolved key profile of a [`TokenManager`].
 ///
@@ -22,6 +36,20 @@ enum KeySet {
         /// [`SessionError::SigningUnavailable`] rather than working.
         encoding: Option<EncodingKey>,
         decoding: Vec<DecodingKey>,
+        /// Raw 32-byte public keys, extracted from the same PEMs as
+        /// `decoding` at resolve time, for
+        /// [`TokenManager::jwks`](TokenManager::jwks). Kept alongside the
+        /// decoding keys so the JWKS export can never drift from the keys
+        /// actually used for verification.
+        verifying_raw: Vec<[u8; 32]>,
+    },
+    /// ML-DSA-65 (FIPS 204 / RFC 9964) profile, selected by a non-empty
+    /// `MlDsa65Keys::verifying` in the config. Same shape as
+    /// [`KeySet::Ed25519`]: `signing: None` on verify-only instances.
+    #[cfg(feature = "mldsa")]
+    MlDsa65 {
+        signing: Option<ml_dsa::SigningKey<ml_dsa::MlDsa65>>,
+        verifying: Vec<ml_dsa::VerifyingKey<ml_dsa::MlDsa65>>,
     },
     /// A malformed key found at construction; the message is replayed on
     /// every sign/verify so construction stays infallible and the failure
@@ -31,7 +59,68 @@ enum KeySet {
 }
 
 impl KeySet {
-    fn resolve(ed: &Ed25519Keys, secret: &str) -> Self {
+    fn resolve(ed: &Ed25519Keys, ml: &MlDsa65Keys, secret: &str) -> Self {
+        let ed_configured = ed.signing_pem.is_some() || !ed.verifying_pems.is_empty();
+        let ml_configured = ml.signing_seed.is_some() || !ml.verifying.is_empty();
+        // Profile mutual exclusion: with key material for both asymmetric
+        // profiles the accepted-algorithm set would be ambiguous at verify
+        // time (and at mint time either key could silently win). The only
+        // safe resolution is none at all.
+        if ed_configured && ml_configured {
+            return Self::Broken(
+                "both Ed25519 and ML-DSA-65 key material is configured; a \
+                 manager pins exactly one profile — remove one of the two \
+                 key sets"
+                    .into(),
+            );
+        }
+        // Selection priority from here on: ML-DSA-65 verifying keys, then
+        // Ed25519 verifying keys, then the HS256 shared secret.
+        #[cfg(feature = "mldsa")]
+        {
+            if ml.signing_seed.is_some() && ml.verifying.is_empty() {
+                // Wrong-direction config, mirroring the Ed25519 guard
+                // below: an issuer that configured only its seed would
+                // otherwise silently mint HS256 tokens with the leftover
+                // secret.
+                return Self::Broken(
+                    "an ML-DSA-65 signing seed is configured but no verifying \
+                     key is: add the matching public key with \
+                     `add_mldsa65_verifying_key`"
+                        .into(),
+                );
+            }
+            if !ml.verifying.is_empty() {
+                // `VerifyingKey::decode` accepts any 1952 bytes (FIPS 204
+                // has no cheap pk syntax check); an unusable key stays
+                // inert and fails every signature it is tried against.
+                let verifying = ml
+                    .verifying
+                    .iter()
+                    .map(|raw| {
+                        ml_dsa::VerifyingKey::decode(
+                            &ml_dsa::EncodedVerifyingKey::<ml_dsa::MlDsa65>::from(*raw),
+                        )
+                    })
+                    .collect();
+                let signing = ml.signing_seed.as_ref().map(|seed| {
+                    ml_dsa::SigningKey::<ml_dsa::MlDsa65>::from_seed(&ml_dsa::Seed::from(**seed))
+                });
+                return Self::MlDsa65 { signing, verifying };
+            }
+        }
+        #[cfg(not(feature = "mldsa"))]
+        if ml_configured {
+            // Without the feature there is no ML-DSA keyset to resolve to;
+            // falling back to the shared secret would quietly revive the
+            // exact trust path the config is trying to retire.
+            return Self::Broken(
+                "ML-DSA-65 key material is configured but this build of \
+                 kirino-session lacks the `mldsa` feature; refusing to fall \
+                 back to the HS256 shared-secret profile"
+                    .into(),
+            );
+        }
         if ed.signing_pem.is_some() && ed.verifying_pems.is_empty() {
             // Wrong-direction config: an issuer that configured its private
             // key but no public key would otherwise silently mint HS256
@@ -50,14 +139,32 @@ impl KeySet {
             };
         }
         let mut decoding = Vec::with_capacity(ed.verifying_pems.len());
+        let mut verifying_raw = Vec::with_capacity(ed.verifying_pems.len());
         for (i, pem) in ed.verifying_pems.iter().enumerate() {
-            match DecodingKey::from_ed_pem(pem.as_bytes()) {
-                Ok(key) => decoding.push(key),
-                Err(e) => {
+            match (
+                DecodingKey::from_ed_pem(pem.as_bytes()),
+                ed25519_spki_raw32(pem),
+            ) {
+                (Ok(key), Some(raw)) => {
+                    decoding.push(key);
+                    verifying_raw.push(raw);
+                }
+                (Err(e), _) => {
                     return Self::Broken(format!(
                         "Ed25519 verifying key #{} is not a valid PEM key: {e}",
                         i + 1
                     ))
+                }
+                (Ok(_), None) => {
+                    // jsonwebtoken accepted it but it is not a plain
+                    // Ed25519 SubjectPublicKeyInfo — we could verify with
+                    // it but not publish it, so refuse rather than have
+                    // jwks() and verify() disagree.
+                    return Self::Broken(format!(
+                        "Ed25519 verifying key #{} is not a raw Ed25519 \
+                         SubjectPublicKeyInfo block",
+                        i + 1
+                    ));
                 }
             }
         }
@@ -70,7 +177,11 @@ impl KeySet {
                 }
             },
         };
-        Self::Ed25519 { encoding, decoding }
+        Self::Ed25519 {
+            encoding,
+            decoding,
+            verifying_raw,
+        }
     }
 
     /// The only algorithm this manager accepts. Pinning it per profile is
@@ -81,6 +192,18 @@ impl KeySet {
         match self {
             Self::SharedSecret { .. } => Algorithm::HS256,
             Self::Ed25519 { .. } => Algorithm::EdDSA,
+            #[cfg(feature = "mldsa")]
+            Self::MlDsa65 { .. } => {
+                // The ML-DSA path never consults algorithm(): it pins the
+                // alg string itself (exact match on "ML-DSA-65") inside
+                // its own sign/verify code, which jsonwebtoken's Algorithm
+                // enum cannot express.
+                debug_assert!(
+                    false,
+                    "KeySet::MlDsa65 handles sign/verify without algorithm()"
+                );
+                Algorithm::EdDSA
+            }
             Self::Broken(_) => {
                 // Every sign/verify call site returns the Broken error before
                 // reaching here; keep that invariant loud in debug builds.
@@ -95,6 +218,102 @@ impl KeySet {
     }
 }
 
+/// Extract the raw 32-byte Ed25519 public key from a SubjectPublicKeyInfo
+/// PEM block. An Ed25519 SPKI is a fixed 44-byte DER body whose 12-byte
+/// prefix is constant, so this is a shape check plus a slice — enough for
+/// the JWKS `x` field without pulling in a DER parser.
+fn ed25519_spki_raw32(pem: &str) -> Option<[u8; 32]> {
+    use base64::engine::general_purpose::STANDARD;
+    let mut lines = pem.lines();
+    if !lines.next()?.contains("BEGIN PUBLIC KEY") {
+        return None;
+    }
+    let body: String = lines
+        .take_while(|l| !l.contains("END PUBLIC KEY"))
+        .filter(|l| !l.trim().is_empty())
+        .collect();
+    const ED25519_SPKI_PREFIX: [u8; 12] = [
+        0x30, 0x2a, 0x30, 0x05, 0x06, 0x03, 0x2b, 0x65, 0x70, 0x03, 0x21, 0x00,
+    ];
+    let der = STANDARD.decode(body).ok()?;
+    if der.len() != 44 || der[..12] != ED25519_SPKI_PREFIX {
+        return None;
+    }
+    let mut raw = [0u8; 32];
+    raw.copy_from_slice(&der[12..]);
+    Some(raw)
+}
+
+/// base64url (RFC 7515, no padding) for JWS segments and JWK fields.
+fn b64u_encode(bytes: &[u8]) -> String {
+    B64U.encode(bytes)
+}
+
+/// Decode a base64url (unpadded) JWS segment, mapping decode failures to
+/// [`SessionError::InvalidToken`]. Only the ML-DSA-65 paths parse JWS
+/// segments by hand; the other profiles stay inside `jsonwebtoken`.
+#[cfg(feature = "mldsa")]
+fn b64u_decode(segment: &str) -> SessionResult<Vec<u8>> {
+    B64U.decode(segment)
+        .map_err(|e| SessionError::InvalidToken(format!("invalid base64url segment: {e}")))
+}
+
+/// Mint an ML-DSA-65 compact JWS: `b64url(header).b64url(payload).b64url(sig)`
+/// (RFC 7515 §5.1 / RFC 9964).
+///
+/// The signature is `ml_dsa`'s plain [`Signer`](ml_dsa::Signer) call,
+/// i.e. the FIPS 204 pure mode with an **empty context** — what RFC 9964
+/// requires for the `ML-DSA-65` JOSE alg. The wire signature is the
+/// 3309-byte `EncodedSignature` (FIPS 204 `sigEncode`), base64url
+/// without padding like every other JWS segment.
+#[cfg(feature = "mldsa")]
+fn sign_mldsa65_compact(
+    sk: &ml_dsa::SigningKey<ml_dsa::MlDsa65>,
+    claims: &TokenClaims,
+    kid: Option<&str>,
+) -> SessionResult<String> {
+    use ml_dsa::Signer as _;
+
+    let mut header = serde_json::Map::new();
+    header.insert("alg".into(), ML_DSA_65_ALG.into());
+    header.insert("typ".into(), "JWT".into());
+    if let Some(kid) = kid {
+        header.insert("kid".into(), kid.into());
+    }
+    let header_bytes = serde_json::to_vec(&serde_json::Value::Object(header))
+        .map_err(|e| SessionError::Other(format!("failed to serialize JOSE header: {e}")))?;
+    let payload_bytes = serde_json::to_vec(claims)
+        .map_err(|e| SessionError::Other(format!("failed to serialize token claims: {e}")))?;
+    // RFC 7515 §5.1: the signing input is the ASCII of
+    // b64url(header).b64url(payload).
+    let signing_input = format!(
+        "{}.{}",
+        b64u_encode(&header_bytes),
+        b64u_encode(&payload_bytes)
+    );
+    let sig = sk.sign(signing_input.as_bytes());
+    Ok(format!(
+        "{signing_input}.{}",
+        b64u_encode(sig.encode().as_slice())
+    ))
+}
+
+/// Parse the claims of an `ML-DSA-65`-headed token **without any
+/// signature check**, for [`TokenManager::decode_unverified`]. Returns
+/// `None` for anything that is not clearly an ML-DSA-65 token (the
+/// jsonwebtoken fallback then handles — or rejects — it).
+#[cfg(feature = "mldsa")]
+fn mldsa65_claims_unverified(token: &str) -> Option<TokenClaims> {
+    let h_b64 = token.split('.').next()?;
+    let header: serde_json::Value = serde_json::from_slice(&B64U.decode(h_b64).ok()?).ok()?;
+    if header.get("alg").and_then(|alg| alg.as_str()) != Some(ML_DSA_65_ALG) {
+        return None;
+    }
+    let p_b64 = token.split('.').nth(1)?;
+    let claims = serde_json::from_slice(&B64U.decode(p_b64).ok()?).ok()?;
+    Some(claims)
+}
+
 /// Core JWT token manager — stateless sign/verify.
 ///
 /// Symmetric (HS256 shared secret) by default; asymmetric (Ed25519) when
@@ -107,7 +326,7 @@ pub struct TokenManager {
 
 impl TokenManager {
     pub fn new(config: SessionConfig) -> Self {
-        let keys = KeySet::resolve(&config.ed25519, &config.secret);
+        let keys = KeySet::resolve(&config.ed25519, &config.mldsa65, &config.secret);
         Self { config, keys }
     }
 
@@ -182,16 +401,28 @@ impl TokenManager {
     /// ([`TokenClaims::with_audience`]) or its own verifier — and every
     /// other audience-enforcing service — will reject the token.
     pub fn sign(&self, claims: &TokenClaims) -> SessionResult<String> {
-        let key = match &self.keys {
-            KeySet::SharedSecret { encoding, .. } => encoding,
+        match &self.keys {
+            KeySet::SharedSecret { encoding, .. } => {
+                // The legacy profile keeps its byte format frozen: no kid
+                // is stamped even when one is configured.
+                Ok(encode(&Header::new(Algorithm::HS256), claims, encoding)?)
+            }
             KeySet::Ed25519 {
                 encoding: Some(key),
                 ..
-            } => key,
-            KeySet::Ed25519 { encoding: None, .. } => return Err(SessionError::SigningUnavailable),
-            KeySet::Broken(msg) => return Err(SessionError::Keys(msg.clone())),
-        };
-        Ok(encode(&Header::new(self.keys.algorithm()), claims, key)?)
+            } => {
+                let mut header = Header::new(Algorithm::EdDSA);
+                header.kid = self.config.kid.clone();
+                Ok(encode(&header, claims, key)?)
+            }
+            KeySet::Ed25519 { encoding: None, .. } => Err(SessionError::SigningUnavailable),
+            #[cfg(feature = "mldsa")]
+            KeySet::MlDsa65 { signing, .. } => {
+                let sk = signing.as_ref().ok_or(SessionError::SigningUnavailable)?;
+                sign_mldsa65_compact(sk, claims, self.config.kid.as_deref())
+            }
+            KeySet::Broken(msg) => Err(SessionError::Keys(msg.clone())),
+        }
     }
 
     /// Verify a JWT and return its claims.
@@ -214,11 +445,28 @@ impl TokenManager {
     /// verifying keys the keys are tried in configuration order — the
     /// rotation path — and the last error is reported when none match.
     fn verify_with(&self, token: &str, check_exp: bool) -> SessionResult<TokenClaims> {
-        let decoding: &[DecodingKey] = match &self.keys {
-            KeySet::SharedSecret { decoding, .. } => std::slice::from_ref(decoding),
-            KeySet::Ed25519 { decoding, .. } => decoding,
-            KeySet::Broken(msg) => return Err(SessionError::Keys(msg.clone())),
-        };
+        match &self.keys {
+            #[cfg(feature = "mldsa")]
+            KeySet::MlDsa65 { verifying, .. } => self.verify_mldsa65(token, verifying, check_exp),
+            KeySet::SharedSecret { decoding, .. } => {
+                self.verify_jsonwebtoken(token, std::slice::from_ref(decoding), check_exp)
+            }
+            KeySet::Ed25519 { decoding, .. } => {
+                self.verify_jsonwebtoken(token, decoding, check_exp)
+            }
+            KeySet::Broken(msg) => Err(SessionError::Keys(msg.clone())),
+        }
+    }
+
+    /// The `jsonwebtoken`-backed verify path (HS256 / Ed25519 profiles):
+    /// registered-claim validation plus the per-profile algorithm
+    /// whitelist, trying `decoding` in order.
+    fn verify_jsonwebtoken(
+        &self,
+        token: &str,
+        decoding: &[DecodingKey],
+        check_exp: bool,
+    ) -> SessionResult<TokenClaims> {
         let mut validation = Validation::new(self.keys.algorithm());
         validation.set_issuer(&[&self.config.issuer]);
         validation.validate_exp = check_exp;
@@ -252,10 +500,161 @@ impl TokenManager {
             .unwrap_or_else(|| SessionError::Keys("no verifying keys configured".into())))
     }
 
+    /// The hand-rolled ML-DSA-65 verify path. `jsonwebtoken` cannot
+    /// express the `ML-DSA-65` alg, so this mirrors its contract:
+    /// structural parse → **exact alg whitelist** (the confusion guard —
+    /// anything but the literal `"ML-DSA-65"` is rejected before any key
+    /// is tried) → `kid` targeting → registered claims (issuer, audience
+    /// as a required claim when configured, expiry with the same leeway)
+    /// → signature over the RFC 7515 §5.1 signing input, trying the
+    /// verifying keys in configuration order.
+    #[cfg(feature = "mldsa")]
+    fn verify_mldsa65(
+        &self,
+        token: &str,
+        verifying: &[ml_dsa::VerifyingKey<ml_dsa::MlDsa65>],
+        check_exp: bool,
+    ) -> SessionResult<TokenClaims> {
+        use ml_dsa::Verifier as _;
+
+        let mut segments = token.split('.');
+        let (h_b64, p_b64, s_b64) = match (
+            segments.next(),
+            segments.next(),
+            segments.next(),
+            segments.next(),
+        ) {
+            (Some(h), Some(p), Some(s), None) => (h, p, s),
+            _ => return Err(SessionError::InvalidToken("not a compact JWS".into())),
+        };
+        let header: serde_json::Value = serde_json::from_slice(&b64u_decode(h_b64)?)
+            .map_err(|e| SessionError::InvalidToken(format!("malformed JOSE header: {e}")))?;
+
+        match header.get("alg").and_then(|alg| alg.as_str()) {
+            Some(alg) if alg == ML_DSA_65_ALG => {}
+            other => {
+                return Err(SessionError::InvalidToken(format!(
+                    "algorithm {other:?} is not accepted: this manager only \
+                     takes {ML_DSA_65_ALG} tokens"
+                )))
+            }
+        }
+
+        // kid targeting: a token that carries a kid must carry the
+        // configured one; a token without a kid (or a verifier without
+        // one configured) falls through to the try-order below.
+        let presented_kid = header.get("kid").and_then(|kid| kid.as_str());
+        if let (Some(configured), Some(presented)) = (self.config.kid.as_deref(), presented_kid) {
+            if configured != presented {
+                return Err(SessionError::InvalidToken(format!(
+                    "token kid {presented:?} does not match the configured kid {configured:?}"
+                )));
+            }
+        }
+
+        let claims: TokenClaims = serde_json::from_slice(&b64u_decode(p_b64)?)
+            .map_err(|e| SessionError::InvalidToken(format!("malformed token claims: {e}")))?;
+        if claims.iss != self.config.issuer {
+            return Err(SessionError::InvalidToken(format!(
+                "token issuer {:?} does not match the configured issuer {:?}",
+                claims.iss, self.config.issuer
+            )));
+        }
+        if let Some(expected) = &self.config.audience {
+            // Mirrors the required-claim behavior of the jsonwebtoken
+            // path: a configured audience makes `aud` mandatory.
+            if claims.aud.as_deref() != Some(expected.as_str()) {
+                return Err(SessionError::InvalidToken(
+                    "token audience is missing or does not match the configured one".into(),
+                ));
+            }
+        }
+        if check_exp {
+            let now = chrono::Utc::now().timestamp();
+            if now > claims.exp as i64 + VERIFY_LEEWAY_SECS {
+                return Err(SessionError::Expired(chrono::Utc::now()));
+            }
+        }
+
+        let sig_bytes = b64u_decode(s_b64)?;
+        let sig = ml_dsa::Signature::<ml_dsa::MlDsa65>::try_from(&sig_bytes[..])
+            .map_err(|_| SessionError::InvalidToken("malformed ML-DSA-65 signature".into()))?;
+        // RFC 7515 §5.1: the signed bytes are the ASCII of
+        // b64url(header).b64url(payload) — byte-identical to the token
+        // prefix up to the final dot.
+        let signing_input = format!("{h_b64}.{p_b64}");
+        for key in verifying {
+            if key.verify(signing_input.as_bytes(), &sig).is_ok() {
+                return Ok(claims);
+            }
+        }
+        Err(SessionError::InvalidToken(
+            "signature verification failed against every configured ML-DSA-65 key".into(),
+        ))
+    }
+
     /// Decode a JWT without verifying signature (e.g. for client-side expiry check).
     pub fn decode_unverified(token: &str) -> SessionResult<TokenClaims> {
+        // `jsonwebtoken`'s insecure decode cannot even parse an ML-DSA-65
+        // header (its Algorithm enum has no such variant), so the
+        // ML-DSA-shaped case is handled here — with the same total absence
+        // of signature checking that makes this method "dangerous" in the
+        // first place.
+        #[cfg(feature = "mldsa")]
+        if let Some(claims) = mldsa65_claims_unverified(token) {
+            return Ok(claims);
+        }
         let data = jsonwebtoken::dangerous::insecure_decode::<TokenClaims>(token)?;
         Ok(data.claims)
+    }
+
+    /// Export the public verifying keys as a JWK Set (RFC 7517).
+    ///
+    /// - Ed25519 profile: one `OKP` entry per verifying key
+    ///   (`{"kty":"OKP","crv":"Ed25519","x":…,"alg":"EdDSA","use":"sig"}`),
+    ///   in the same try-order used for verification.
+    /// - ML-DSA-65 profile (RFC 9964): one `AKP` entry per verifying key
+    ///   (`{"kty":"AKP","alg":"ML-DSA-65","pub":…,"use":"sig"}`), `pub`
+    ///   being the base64url of the 1952-byte FIPS 204 encoding.
+    /// - The `kid` from [`SessionConfig::with_kid`] is stamped on every
+    ///   entry when configured.
+    /// - The HS256 profile and a `Broken` keyset publish nothing
+    ///   publishable: `{"keys":[]}`. A shared secret must never leave the
+    ///   process it minted in.
+    pub fn jwks(&self) -> serde_json::Value {
+        let mut keys = Vec::new();
+        match &self.keys {
+            KeySet::SharedSecret { .. } | KeySet::Broken(_) => {}
+            KeySet::Ed25519 { verifying_raw, .. } => {
+                for raw in verifying_raw {
+                    let mut jwk = serde_json::Map::new();
+                    jwk.insert("kty".into(), "OKP".into());
+                    jwk.insert("crv".into(), "Ed25519".into());
+                    jwk.insert("x".into(), b64u_encode(raw).into());
+                    jwk.insert("alg".into(), "EdDSA".into());
+                    jwk.insert("use".into(), "sig".into());
+                    if let Some(kid) = &self.config.kid {
+                        jwk.insert("kid".into(), kid.as_str().into());
+                    }
+                    keys.push(serde_json::Value::Object(jwk));
+                }
+            }
+            #[cfg(feature = "mldsa")]
+            KeySet::MlDsa65 { verifying, .. } => {
+                for key in verifying {
+                    let mut jwk = serde_json::Map::new();
+                    jwk.insert("kty".into(), "AKP".into());
+                    jwk.insert("alg".into(), ML_DSA_65_ALG.into());
+                    jwk.insert("pub".into(), b64u_encode(key.encode().as_slice()).into());
+                    jwk.insert("use".into(), "sig".into());
+                    if let Some(kid) = &self.config.kid {
+                        jwk.insert("kid".into(), kid.as_str().into());
+                    }
+                    keys.push(serde_json::Value::Object(jwk));
+                }
+            }
+        }
+        serde_json::json!({ "keys": keys })
     }
 
     /// Validate a refresh token: signature check, expected token type, and
@@ -602,6 +1001,118 @@ mod tests {
             .unwrap_err();
         assert!(matches!(err, SessionError::Keys(_)), "got: {err:?}");
         assert!(manager.verify("anything").is_err());
+    }
+
+    #[test]
+    fn mixed_ed25519_and_mldsa65_profiles_fail_loudly() {
+        // Both asymmetric profiles on one config: the accepted-algorithm
+        // set would be ambiguous, so the manager must refuse rather than
+        // pick a winner. Runs with or without the `mldsa` feature — the
+        // exclusion check precedes any feature-gated keyset construction.
+        let dummy_mldsa_key = [7u8; 1952];
+        let config = SessionConfig::new("x")
+            .with_ed25519_signing_key(ED_PRIV_A)
+            .add_ed25519_verifying_key(ED_PUB_A)
+            .with_mldsa65_signing_seed(&[9u8; 32])
+            .add_mldsa65_verifying_key(&dummy_mldsa_key);
+        let manager = TokenManager::new(config);
+        let err = manager
+            .sign(&TokenClaims::new(
+                Uuid::new_v4(),
+                "u".into(),
+                TokenType::Access,
+                60,
+                "kirino",
+            ))
+            .unwrap_err();
+        assert!(matches!(err, SessionError::Keys(_)), "got: {err:?}");
+        assert!(manager.verify("any-token").is_err());
+    }
+
+    #[test]
+    fn jwks_exports_okp_keys_for_ed25519() {
+        // Exact field match against RFC 8037's OKP shape; the `x` value is
+        // pinned to the raw key bytes of ED_PUB_A (SPKI body minus its
+        // constant 12-byte prefix), base64url without padding.
+        let manager = TokenManager::new(
+            SessionConfig::new("x")
+                .add_ed25519_verifying_key(ED_PUB_A)
+                .with_kid("gateway-1"),
+        );
+        let jwks = manager.jwks();
+        let entry = &jwks["keys"][0];
+        assert_eq!(entry["kty"], "OKP");
+        assert_eq!(entry["crv"], "Ed25519");
+        assert_eq!(entry["x"], "-OA4Ug8REAhjvduxgwR-bDv3teNNRACYE96JQ5ZTzhA");
+        assert_eq!(entry["alg"], "EdDSA");
+        assert_eq!(entry["use"], "sig");
+        assert_eq!(entry["kid"], "gateway-1");
+        // Exact key set: no extra members beyond the six pinned above.
+        let mut fields: Vec<&str> = entry
+            .as_object()
+            .unwrap()
+            .keys()
+            .map(String::as_str)
+            .collect();
+        fields.sort_unstable();
+        assert_eq!(fields, vec!["alg", "crv", "kid", "kty", "use", "x"]);
+    }
+
+    #[test]
+    fn jwks_lists_ed25519_keys_in_try_order_without_kid_when_unset() {
+        let manager = TokenManager::new(
+            SessionConfig::new("x")
+                .add_ed25519_verifying_key(ED_PUB_A)
+                .add_ed25519_verifying_key(ED_PUB_B),
+        );
+        let jwks = manager.jwks();
+        assert_eq!(jwks["keys"].as_array().unwrap().len(), 2);
+        // Try-order is part of the contract: the JWKS order must match the
+        // verification order the manager itself uses.
+        assert_eq!(
+            jwks["keys"][0]["x"],
+            "-OA4Ug8REAhjvduxgwR-bDv3teNNRACYE96JQ5ZTzhA"
+        );
+        assert_eq!(
+            jwks["keys"][1]["x"],
+            "tCfny0WNxTiKRgsnHuC52XlFV3hH4lFQU_ctz4XRlGU"
+        );
+        for entry in jwks["keys"].as_array().unwrap() {
+            assert!(entry.get("kid").is_none());
+        }
+    }
+
+    #[test]
+    fn jwks_is_empty_for_the_shared_secret_profile() {
+        // A shared secret has nothing publishable: the JWKS of the HS256
+        // profile must be an empty key set, never the secret in any form.
+        let manager = TokenManager::new(SessionConfig::new("test-secret-key-for-unit-tests"));
+        assert_eq!(manager.jwks(), serde_json::json!({ "keys": [] }));
+    }
+
+    #[test]
+    fn hs256_tokens_do_not_carry_kid_even_when_configured() {
+        // The legacy profile's byte format is frozen: a configured kid is
+        // for the asymmetric profiles only.
+        let manager = TokenManager::new(SessionConfig::new("secret").with_kid("k"));
+        let token = manager
+            .sign(&TokenClaims::new(
+                Uuid::new_v4(),
+                "u".into(),
+                TokenType::Access,
+                60,
+                "kirino",
+            ))
+            .unwrap();
+        let h_b64 = token.split('.').next().unwrap();
+        let header = serde_json::from_slice::<serde_json::Value>(
+            &base64::engine::general_purpose::URL_SAFE_NO_PAD
+                .decode(h_b64)
+                .unwrap(),
+        )
+        .unwrap();
+        assert!(header.get("kid").is_none());
+        assert!(manager.verify(&token).is_ok());
     }
 
     #[test]
@@ -974,5 +1485,410 @@ mod tests {
         let token = manager.sign(&claims).unwrap();
         let err = manager.refresh_rotating(&token, &store).await.unwrap_err();
         assert!(matches!(err, SessionError::InvalidToken(_)));
+    }
+
+    /// ML-DSA-65 profile tests (feature `mldsa`). Seeds follow the KAT
+    /// lane (`[i*7+1; 32]`, i = 0/1) plus an arbitrary stranger; FIPS 204
+    /// keygen is deterministic from the seed, so fixtures are stable.
+    #[cfg(all(test, feature = "mldsa"))]
+    mod mldsa65 {
+        use super::super::{b64u_encode, sign_mldsa65_compact};
+        use super::*;
+        use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+        use ml_dsa::{MlDsa65, Signer as _};
+
+        fn keypair(fill: u8) -> ([u8; 32], [u8; 1952]) {
+            use ml_dsa::Keypair as _;
+            let seed = [fill; 32];
+            let sk = ml_dsa::SigningKey::<MlDsa65>::from_seed(&ml_dsa::Seed::from(seed));
+            let mut vk = [0u8; 1952];
+            vk.copy_from_slice(sk.verifying_key().encode().as_slice());
+            (seed, vk)
+        }
+
+        fn claims() -> TokenClaims {
+            TokenClaims::new(
+                Uuid::new_v4(),
+                "u".into(),
+                TokenType::Access,
+                3_600,
+                "kirino",
+            )
+        }
+
+        fn issuer(fill: u8) -> TokenManager {
+            let (seed, vk) = keypair(fill);
+            TokenManager::new(
+                SessionConfig::new("unused-in-mldsa-profile")
+                    .with_mldsa65_signing_seed(&seed)
+                    .add_mldsa65_verifying_key(&vk),
+            )
+        }
+
+        fn header_of(token: &str) -> serde_json::Value {
+            let h_b64 = token.split('.').next().expect("segment");
+            serde_json::from_slice(&URL_SAFE_NO_PAD.decode(h_b64).expect("b64url")).expect("json")
+        }
+
+        #[test]
+        fn mldsa65_issue_and_verify_round_trip() {
+            let manager = issuer(1);
+            let user_id = Uuid::new_v4();
+            let pair = manager
+                .issue_pair(user_id, "alice".into(), vec!["admin".into()])
+                .unwrap();
+
+            let access = manager.verify(&pair.access_token).unwrap();
+            assert_eq!(access.sub, user_id.to_string());
+            assert_eq!(access.username, "alice");
+            assert_eq!(access.roles, vec!["admin".to_string()]);
+            let refresh = manager.verify(&pair.refresh_token).unwrap();
+            assert_eq!(refresh.token_type, TokenType::Refresh);
+
+            // Wire shape: three segments, RFC 9964 alg, FIPS 204 sig size.
+            let segments: Vec<&str> = pair.access_token.split('.').collect();
+            assert_eq!(segments.len(), 3);
+            let header = header_of(&pair.access_token);
+            assert_eq!(header["alg"], "ML-DSA-65");
+            assert_eq!(header["typ"], "JWT");
+            assert_eq!(
+                URL_SAFE_NO_PAD.decode(segments[2]).unwrap().len(),
+                3309,
+                "EncodedSignature<MlDsa65> is 3309 bytes"
+            );
+
+            // The refresh path runs through the profile unmodified.
+            let rotated = manager.refresh(&pair.refresh_token).unwrap();
+            assert_ne!(rotated.access_token, pair.access_token);
+
+            // decode_unverified understands the ML-DSA-65 header shape.
+            let unverified = TokenManager::decode_unverified(&pair.access_token).unwrap();
+            assert_eq!(unverified.sub, user_id.to_string());
+        }
+
+        #[test]
+        fn mldsa65_alg_confusion_matrix() {
+            // Every cell of the profile × token matrix, plus forged-alg
+            // tokens whose signatures are *valid for their own header*:
+            // only the exact-string alg whitelist can reject those.
+            let hs = TokenManager::new(SessionConfig::new("shared"));
+            let ed = TokenManager::new(
+                SessionConfig::new("shared")
+                    .with_ed25519_signing_key(ED_PRIV_A)
+                    .add_ed25519_verifying_key(ED_PUB_A),
+            );
+            let ml = issuer(1);
+
+            let hs_token = hs.sign(&claims()).unwrap();
+            let ed_token = ed.sign(&claims()).unwrap();
+            let ml_token = ml.sign(&claims()).unwrap();
+            assert!(
+                ml.verify(&hs_token).is_err(),
+                "HS256 token must not verify on an ML-DSA-65 manager"
+            );
+            assert!(
+                ml.verify(&ed_token).is_err(),
+                "EdDSA token must not verify on an ML-DSA-65 manager"
+            );
+            assert!(
+                ed.verify(&ml_token).is_err(),
+                "ML-DSA-65 token must not verify on an Ed25519 manager"
+            );
+            assert!(
+                hs.verify(&ml_token).is_err(),
+                "ML-DSA-65 token must not verify on an HS256 manager"
+            );
+
+            let (seed, _) = keypair(1);
+            let sk = ml_dsa::SigningKey::<MlDsa65>::from_seed(&ml_dsa::Seed::from(seed));
+            let payload_b64 = ml_token.split('.').nth(1).unwrap().to_string();
+            for fake_alg in ["ML-DSA-44", "ML-DSA-87", "HS256", "EdDSA", "ml-dsa-65"] {
+                let header = serde_json::json!({ "alg": fake_alg, "typ": "JWT" });
+                let h_b64 = URL_SAFE_NO_PAD.encode(serde_json::to_vec(&header).unwrap());
+                let si = format!("{h_b64}.{payload_b64}");
+                let sig = sk.sign(si.as_bytes());
+                let forged = format!("{si}.{}", URL_SAFE_NO_PAD.encode(sig.encode().as_slice()));
+                let err = ml.verify(&forged).unwrap_err();
+                assert!(
+                    matches!(err, SessionError::InvalidToken(_)),
+                    "{fake_alg}: got {err:?}"
+                );
+            }
+        }
+
+        #[test]
+        fn mldsa65_verify_only_manager_verifies_but_never_mints() {
+            // The PQ gateway shape: public key only. A leaked config from
+            // such a service must not be enough to forge a token.
+            let (_, vk) = keypair(1);
+            let verifier =
+                TokenManager::new(SessionConfig::new("x").add_mldsa65_verifying_key(&vk));
+            let issuer_manager = issuer(1);
+            let pair = issuer_manager
+                .issue_pair(Uuid::new_v4(), "bob".into(), vec![])
+                .unwrap();
+
+            assert_eq!(verifier.verify(&pair.access_token).unwrap().username, "bob");
+            let err = verifier.sign(&claims()).unwrap_err();
+            assert!(
+                matches!(err, SessionError::SigningUnavailable),
+                "got: {err:?}"
+            );
+            assert!(verifier
+                .issue_pair(Uuid::new_v4(), "bob".into(), vec![])
+                .is_err());
+        }
+
+        #[test]
+        fn mldsa65_rejects_tampered_payload_and_signature() {
+            let manager = issuer(1);
+            let token = manager
+                .sign(&TokenClaims::new(
+                    Uuid::new_v4(),
+                    "alice".into(),
+                    TokenType::Access,
+                    3_600,
+                    "kirino",
+                ))
+                .unwrap();
+            let segments: Vec<&str> = token.split('.').collect();
+
+            // (a) payload structural byte: the JSON no longer parses.
+            let mut payload = URL_SAFE_NO_PAD.decode(segments[1]).unwrap();
+            payload[0] ^= 0x01;
+            let tampered = format!(
+                "{}.{}.{}",
+                segments[0],
+                URL_SAFE_NO_PAD.encode(&payload),
+                segments[2]
+            );
+            assert!(manager.verify(&tampered).is_err());
+
+            // (b) payload value byte: JSON stays valid ("Ulice"), so only
+            // the signature check can catch it.
+            let pos = payload
+                .windows(5)
+                .position(|w| w == b"alice")
+                .expect("username value in payload");
+            payload[pos] = b'U';
+            let tampered = format!(
+                "{}.{}.{}",
+                segments[0],
+                URL_SAFE_NO_PAD.encode(&payload),
+                segments[2]
+            );
+            assert!(manager.verify(&tampered).is_err());
+
+            // (c) one signature byte.
+            let mut sig = URL_SAFE_NO_PAD.decode(segments[2]).unwrap();
+            sig[100] ^= 0x01;
+            let tampered = format!(
+                "{}.{}.{}",
+                segments[0],
+                segments[1],
+                URL_SAFE_NO_PAD.encode(&sig)
+            );
+            assert!(manager.verify(&tampered).is_err());
+
+            // Control: the pristine token still verifies.
+            assert!(manager.verify(&token).is_ok());
+        }
+
+        #[test]
+        fn mldsa65_rotation_verifies_tokens_from_both_keys() {
+            // The rollout window: the new key mints while tokens from the
+            // retiring key must keep verifying; a stranger key still fails.
+            let (seed_a, vk_a) = keypair(1);
+            let (seed_b, vk_b) = keypair(8);
+            let current = TokenManager::new(
+                SessionConfig::new("x")
+                    .with_mldsa65_signing_seed(&seed_b)
+                    .add_mldsa65_verifying_key(&vk_a)
+                    .add_mldsa65_verifying_key(&vk_b),
+            );
+            let retiring = TokenManager::new(
+                SessionConfig::new("x")
+                    .with_mldsa65_signing_seed(&seed_a)
+                    .add_mldsa65_verifying_key(&vk_a),
+            );
+            let new_token = current
+                .issue_pair(Uuid::new_v4(), "n".into(), vec![])
+                .unwrap();
+            let old_token = retiring
+                .issue_pair(Uuid::new_v4(), "o".into(), vec![])
+                .unwrap();
+            assert!(current.verify(&new_token.access_token).is_ok());
+            assert!(current.verify(&old_token.access_token).is_ok());
+
+            let (seed_c, vk_c) = keypair(15);
+            let stranger = TokenManager::new(
+                SessionConfig::new("x")
+                    .with_mldsa65_signing_seed(&seed_c)
+                    .add_mldsa65_verifying_key(&vk_c),
+            );
+            let stranger_token = stranger
+                .issue_pair(Uuid::new_v4(), "s".into(), vec![])
+                .unwrap();
+            assert!(current.verify(&stranger_token.access_token).is_err());
+        }
+
+        #[test]
+        fn mldsa65_strict_verify_rejects_expired_and_lenient_does_not() {
+            // The manager-level expiry contract on the hand-rolled path:
+            // 5 minutes past expiry is unambiguously beyond the 60s leeway.
+            let manager = issuer(1);
+            let mut claims = claims();
+            claims.exp = (chrono::Utc::now().timestamp() - 300) as usize;
+            let token = manager.sign(&claims).unwrap();
+
+            assert!(manager.verify(&token).is_err());
+            let lenient = manager.verify_lenient(&token).unwrap();
+            assert_eq!(lenient.sub, claims.sub);
+        }
+
+        #[test]
+        fn mldsa65_rejects_a_foreign_issuer_and_enforces_the_audience() {
+            // Signed by a key this manager trusts, but minted by someone
+            // else; plus the audience boundary (required when configured).
+            let manager = issuer(1);
+            let mut foreign_claims = claims();
+            foreign_claims.iss = "someone-else".into();
+            let foreign = manager.sign(&foreign_claims).unwrap();
+            assert!(manager.verify(&foreign).is_err());
+
+            let (seed, vk) = keypair(1);
+            let strict = TokenManager::new(
+                SessionConfig::new("x")
+                    .with_mldsa65_signing_seed(&seed)
+                    .add_mldsa65_verifying_key(&vk)
+                    .with_audience("chest-api"),
+            );
+            let no_aud = strict.sign(&claims()).unwrap();
+            assert!(strict.verify(&no_aud).is_err());
+            let with_aud = strict.sign(&claims().with_audience("chest-api")).unwrap();
+            assert!(strict.verify(&with_aud).is_ok());
+        }
+
+        #[test]
+        fn mldsa65_jwks_exports_akp_keys() {
+            let (_, vk) = keypair(1);
+            let manager = TokenManager::new(
+                SessionConfig::new("x")
+                    .add_mldsa65_verifying_key(&vk)
+                    .with_kid("pq-1"),
+            );
+            let jwks = manager.jwks();
+            let entry = &jwks["keys"][0];
+            assert_eq!(entry["kty"], "AKP");
+            assert_eq!(entry["alg"], "ML-DSA-65");
+            assert_eq!(entry["pub"], URL_SAFE_NO_PAD.encode(vk));
+            assert_eq!(entry["use"], "sig");
+            assert_eq!(entry["kid"], "pq-1");
+            // Exact key set (RFC 9964 shape) and the pinned b64url size of
+            // a 1952-byte key: 2603 chars, no padding.
+            let mut fields: Vec<&str> = entry
+                .as_object()
+                .unwrap()
+                .keys()
+                .map(String::as_str)
+                .collect();
+            fields.sort_unstable();
+            assert_eq!(fields, vec!["alg", "kid", "kty", "pub", "use"]);
+            assert_eq!(entry["pub"].as_str().unwrap().len(), 2603);
+        }
+
+        #[test]
+        fn mldsa65_kid_targeting_and_no_kid_fallback() {
+            let (seed_a, vk_a) = keypair(1);
+            let (seed_b, vk_b) = keypair(8);
+            let issuer_with_kid = TokenManager::new(
+                SessionConfig::new("x")
+                    .with_mldsa65_signing_seed(&seed_b)
+                    .add_mldsa65_verifying_key(&vk_b)
+                    .with_kid("pq-current"),
+            );
+            let rotation = TokenManager::new(
+                SessionConfig::new("x")
+                    .add_mldsa65_verifying_key(&vk_a)
+                    .add_mldsa65_verifying_key(&vk_b)
+                    .with_kid("pq-current"),
+            );
+
+            // (a) kid-directed: the minted header carries the configured
+            // kid and the same-kid verifier accepts it.
+            let token = issuer_with_kid.sign(&claims()).unwrap();
+            assert_eq!(header_of(&token)["kid"], "pq-current");
+            assert!(rotation.verify(&token).is_ok());
+
+            // (b) no kid on the token (minted by the retiring issuer):
+            // try-order fallback over every verifying key.
+            let kidless_issuer = TokenManager::new(
+                SessionConfig::new("x")
+                    .with_mldsa65_signing_seed(&seed_a)
+                    .add_mldsa65_verifying_key(&vk_a),
+            );
+            let kidless = kidless_issuer.sign(&claims()).unwrap();
+            assert!(header_of(&kidless).get("kid").is_none());
+            assert!(rotation.verify(&kidless).is_ok());
+
+            // (c) a token carrying a *different* kid is rejected outright,
+            // before any key is tried.
+            let other_kid_issuer = TokenManager::new(
+                SessionConfig::new("x")
+                    .with_mldsa65_signing_seed(&seed_b)
+                    .add_mldsa65_verifying_key(&vk_b)
+                    .with_kid("pq-old"),
+            );
+            let mismatched = other_kid_issuer.sign(&claims()).unwrap();
+            let err = rotation.verify(&mismatched).unwrap_err();
+            assert!(matches!(err, SessionError::InvalidToken(_)), "got: {err:?}");
+
+            // (d) a verifier with no configured kid accepts kid-bearing
+            // tokens through the plain try-order.
+            let kidless_verifier =
+                TokenManager::new(SessionConfig::new("x").add_mldsa65_verifying_key(&vk_b));
+            assert!(kidless_verifier.verify(&token).is_ok());
+        }
+
+        #[test]
+        fn mldsa65_signing_seed_without_verifying_keys_fails_loudly() {
+            // The PQ mirror of the Ed25519 wrong-direction guard: a seed
+            // alone must not silently become an HS256 issuer via the
+            // leftover placeholder secret.
+            let manager = TokenManager::new(
+                SessionConfig::new("placeholder").with_mldsa65_signing_seed(&[3u8; 32]),
+            );
+            let err = manager.sign(&claims()).unwrap_err();
+            assert!(matches!(err, SessionError::Keys(_)), "got: {err:?}");
+            assert!(manager.verify("any-token").is_err());
+            assert!(manager
+                .issue_pair(Uuid::new_v4(), "u".into(), vec![])
+                .is_err());
+        }
+
+        #[test]
+        fn mldsa65_sign_helper_is_available_and_rfc9964_shaped() {
+            // Direct pin of the mint shape: the free function must produce
+            // exactly what verify accepts, with kid in the header.
+            let (seed, _) = keypair(1);
+            let sk = ml_dsa::SigningKey::<MlDsa65>::from_seed(&ml_dsa::Seed::from(seed));
+            let token = sign_mldsa65_compact(&sk, &claims(), Some("k1")).unwrap();
+            let header = header_of(&token);
+            assert_eq!(header["alg"], "ML-DSA-65");
+            assert_eq!(header["typ"], "JWT");
+            assert_eq!(header["kid"], "k1");
+            let mut fields: Vec<&str> = header
+                .as_object()
+                .unwrap()
+                .keys()
+                .map(String::as_str)
+                .collect();
+            fields.sort_unstable();
+            assert_eq!(fields, vec!["alg", "kid", "typ"]);
+            // b64u_encode is unpadded base64url.
+            assert!(!b64u_encode(b"\xff\xff\xff").contains('='));
+            let issuer_manager = issuer(1);
+            assert!(issuer_manager.verify(&token).is_ok());
+        }
     }
 }
