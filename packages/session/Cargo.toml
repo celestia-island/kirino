@@ -1,12 +1,13 @@
 [package]
 name = "kirino-session"
-# Parked at the published 0.7.0 on purpose (user decision, 2026-09-26):
-# the 0.8.0 line (Ed25519 profile) ships only as a deliberate release —
-# keeping the declared version equal to what crates.io already has makes
-# the release helper SKIP this crate on a v0.7.x tag instead of leaking
-# the semver-breaking variants onto the 0.7 line. Bump back to 0.8.0 in
-# the release commit when that decision is made.
-version = "0.7.0"
+# 0.8.0 (2026-11-03): the deliberate asymmetric-line release the 0.7.0 park
+# was waiting for — Ed25519 plus the optional ML-DSA-65 profile (feature
+# `mldsa`, RFC 9964 wire format). Semver-breaking relative to 0.7 by design;
+# the park note below is the historical rationale, kept for archaeology:
+#   parked at the published 0.7.0 on purpose (user decision, 2026-09-26) so
+#   the release helper would SKIP this crate on v0.7.x tags; un-parked by the
+#   PQ W1 ruling (PLAN [[pq-kirino]], PR #177).
+version = "0.8.0"
 edition = "2021"
 rust-version = "1.75"
 description = "Distributed session management with JWT and PostgreSQL for kirino"

@@ -1,26 +1,26 @@
 # Version-track baselines for `celestia-devtools verify-versions`.
 #
 # kirino carries three independent version identities by design: the root
-# crate (crates.io `kirino`), the deliberately parked `kirino-session`
-# member, and the npm binding `@celestia-island/kirino`. The root manifest
-# used to have a `[workspace]` table but no `[workspace.package]`, so the
-# gate's baseline inference returned None and the whole cargo track silently
-# skipped (2026-09-26 structural scan S1-1: `ok: true` with zero coverage
-# while npm drifted for a month). The pins below are the override source for
-# that tool generation; the fail-closed devtools update in the same wave
-# additionally falls back to the root `[package].version` and compares the
-# pin against the root's declared line, so a pin left behind by a release
-# bump is drift, not silence. (2026-10-08: the root now declares
-# `[workspace.package] version` and kirino-macro inherits it — the pins
-# remain the explicit npm-track source and the session-park guard below is
-# still the load-bearing entry: without it the deliberate 0.7.0 park would
-# read as drift.)
+# crate (crates.io `kirino`), the `kirino-session` member, and the npm
+# binding `@celestia-island/kirino`. The root manifest used to have a
+# `[workspace]` table but no `[workspace.package]`, so the gate's baseline
+# inference returned None and the whole cargo track silently skipped
+# (2026-09-26 structural scan S1-1: `ok: true` with zero coverage while npm
+# drifted for a month). The pins below are the override source for that tool
+# generation; the fail-closed devtools update in the same wave additionally
+# falls back to the root `[package].version` and compares the pin against
+# the root's declared line, so a pin left behind by a release bump is drift,
+# not silence. (2026-10-08: the root now declares `[workspace.package]
+# version` and kirino-macro inherits it.)
+#
+# 2026-11-03: the session park is LIFTED — the 0.8.0 line (Ed25519 +
+# optional ML-DSA-65, PR #177) shipped as the deliberate release the park
+# was waiting for, and session now carries its own 0.8.x line. No exempt
+# entries remain; the historical park rationale lives in
+# packages/session/Cargo.toml.
 #
 # Bump both tracks in the same commit that bumps the release versions.
 
 [track]
-cargo = "0.9.0"
+cargo = "0.9.1"
 npm = "0.7.10"
-
-[exempt.cargo]
-"packages/session" = "deliberately parked at the published 0.7.0 until the 0.8.0 Ed25519-line release decision (rationale in packages/session/Cargo.toml)"
