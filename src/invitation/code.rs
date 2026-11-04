@@ -95,7 +95,10 @@ mod tests {
                     CODE_ALPHABET.contains(&(ch as u8)),
                     "char {ch} escaped the alphabet"
                 );
-                seen[CODE_ALPHABET.iter().position(|&a| a == ch as u8).expect("in alphabet")] = true;
+                seen[CODE_ALPHABET
+                    .iter()
+                    .position(|&a| a == ch as u8)
+                    .expect("in alphabet")] = true;
             }
         }
         assert!(
