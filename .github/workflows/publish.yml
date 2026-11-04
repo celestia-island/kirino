@@ -5,8 +5,18 @@ on:
     tags: [v*]
 
 jobs:
+  # Semver gate first: a tag whose API diff requires a bigger bump must
+  # never reach crates.io (versioning-audit B2, 2026-11-04; the plana
+  # accident class). Pinned devtools ref per H14.
+  semver-checks:
+    name: Semver API diff (published crates)
+    uses: celestia-island/celestia-devtools/.github/workflows/semver-checks.yml@f39afe4c782e4bcf66d2aca291274624afa615dd
+    with:
+      runs-on-json: '["ubuntu-latest"]'
+
   publish:
     name: Publish to crates.io
+    needs: semver-checks
     runs-on: ubuntu-latest
     timeout-minutes: 15
 
