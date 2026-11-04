@@ -82,7 +82,12 @@ mod tests {
 
     #[test]
     fn generated_codes_stay_inside_the_alphabet() {
-        for _ in 0..1000 {
+        // Coverage assertion: with 2000 codes × 8 chars each, a 32-character
+        // alphabet has probability (31/32)^16000 ≈ e^-500 of missing some
+        // char — so this ALSO kills an index-truncation mutation (& 7 would
+        // light up only the first 8 alphabet chars and fail here).
+        let mut seen = [false; 32];
+        for _ in 0..2000 {
             let code = generate_code(8);
             assert_eq!(code.len(), 8);
             for ch in code.chars() {
@@ -90,8 +95,19 @@ mod tests {
                     CODE_ALPHABET.contains(&(ch as u8)),
                     "char {ch} escaped the alphabet"
                 );
+                seen[CODE_ALPHABET.iter().position(|&a| a == ch as u8).expect("in alphabet")] = true;
             }
         }
+        assert!(
+            seen.iter().all(|s| *s),
+            "2000 codes must cover every alphabet char: {:?}",
+            CODE_ALPHABET
+                .iter()
+                .zip(seen)
+                .filter(|(_, s)| !s)
+                .map(|(a, _)| *a as char)
+                .collect::<Vec<_>>()
+        );
     }
 
     #[test]
@@ -141,6 +157,10 @@ mod tests {
     fn roundtrip_generation_to_verification() {
         for _ in 0..100 {
             let code = generate_code(8);
+            // normalize must be the identity on generated (already
+            // canonical) codes — anything else would break the
+            // verify_code(generate_code(n), n) contract.
+            assert_eq!(normalize_code(&code), code);
             assert!(verify_code(&code, &normalize_code(&code)));
         }
     }
