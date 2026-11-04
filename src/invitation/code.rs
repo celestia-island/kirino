@@ -156,8 +156,13 @@ mod tests {
     #[test]
     fn verification_refuses_wrong_or_empty_codes() {
         let code = generate_code(8);
+        // Pick a replacement that ALWAYS differs from the first char ('Z'
+        // would be a no-op on a code already starting with 'Z' — a 1/32
+        // flake this test carried until the round-6 review caught it).
+        let swap = if code.starts_with('Z') { "Y" } else { "Z" };
         let mut tampered = code.clone();
-        tampered.replace_range(0..1, "Z");
+        tampered.replace_range(0..1, swap);
+        assert_ne!(tampered, code, "the tamper must actually change the code");
         assert!(!verify_code(&tampered, &code));
         assert!(!verify_code("", &code));
         assert!(!verify_code(&code, ""));
