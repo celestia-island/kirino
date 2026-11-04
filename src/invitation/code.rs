@@ -47,9 +47,13 @@ pub fn generate_code(len: usize) -> String {
 
 /// Normalize a hand-typed code into its canonical stored form.
 ///
-/// Strips whitespace and `-`/`_` separators, uppercases, and applies the
-/// Crockford confusable mapping (`i`/`l` → `1`, `o` → `0`, `u` → `v`).
-/// Non-ASCII input passes through unchanged and simply never matches.
+/// Strips Unicode whitespace (including NBSP and ideographic spaces — a
+/// pasted code often carries invisible separators) and ASCII `-`/`_`,
+/// uppercases, and applies the Crockford confusable mapping (`i`/`l` →
+/// `1`, `o` → `0`, `u` → `v`). Other non-ASCII input passes through
+/// unchanged and simply never matches. The separator set targets the
+/// ASCII-hyphen groupings a rendering typically emits; typographic dashes
+/// (en dash etc.) are NOT separators.
 #[must_use]
 pub fn normalize_code(raw: &str) -> String {
     raw.chars()
@@ -65,13 +69,16 @@ pub fn normalize_code(raw: &str) -> String {
 
 /// Check a hand-typed code against its canonical stored form.
 ///
-/// Normalizes `raw` first, so `abcd-2345`, `ABCD 2345` and `ABCD2345` all
-/// verify against the same expected value. Comparison is constant time
+/// BOTH sides are normalized: `raw` as the invitee typed it, and
+/// `expected` so a stored form that drifted from canonical (a lowercase
+/// transcription, a grouped `ABCD-2345` copy) still verifies instead of
+/// failing silently forever. Comparison is constant time
 /// ([`constant_time_eq`](crate::utils::constant_time_eq)) — the code rides
 /// alongside a secret token and must not become a length/prefix oracle.
 #[must_use]
 pub fn verify_code(raw: &str, expected: &str) -> bool {
     let candidate = normalize_code(raw);
+    let expected = normalize_code(expected);
     constant_time_eq(candidate.as_bytes(), expected.as_bytes())
 }
 
@@ -154,6 +161,20 @@ mod tests {
         assert!(!verify_code(&tampered, &code));
         assert!(!verify_code("", &code));
         assert!(!verify_code(&code, ""));
+    }
+
+    #[test]
+    fn verification_normalizes_the_stored_form_too() {
+        // A drifted (non-canonical) stored form — a lowercase transcription,
+        // a grouped copy — must still verify, not fail silently forever.
+        let code = generate_code(8);
+        let lowered = code.to_lowercase();
+        assert!(verify_code(&code, &lowered));
+        assert!(verify_code(&lowered, &lowered));
+        let grouped = format!("{}-{}", &code[..4], &code[4..]);
+        assert!(verify_code(&code, &grouped));
+        // …and normalization stays idempotent, so canonical == canonical.
+        assert!(verify_code(&code, &normalize_code(&code)));
     }
 
     #[test]
