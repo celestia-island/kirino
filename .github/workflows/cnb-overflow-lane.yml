@@ -1,13 +1,16 @@
 name: CNB Overflow Lane
 
 on:
+  # Overflow/mirror sync: runs after a squash merge and on demand, never on the
+  # pull request (2026-11-06 trigger policy).
+  push:
+    branches: [master]
   workflow_dispatch:
     inputs:
       target_sha:
-        description: "Commit SHA (empty = PR head / branch head)"
+        description: "Commit SHA (empty = branch head)"
         type: string
         default: ""
-
 permissions:
   statuses: write
   actions: read
@@ -18,7 +21,7 @@ concurrency:
 
 jobs:
   lane:
-    uses: celestia-island/celestia-devtools/.github/workflows/cnb-overflow.yml@2e76d373762dc6b36c1ab7625c1c34842c28ad4a
+    uses: celestia-island/celestia-devtools/.github/workflows/cnb-overflow.yml@bcf5ed8f3caebe8dbf0a528ab9deecb6d42cf211
     with:
       target_repo: ${{ github.event.repository.name }}
       target_sha: ${{ inputs.target_sha || github.event.pull_request.head.sha || github.sha }}
