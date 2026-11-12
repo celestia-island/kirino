@@ -37,6 +37,7 @@
 //! let verified = manager.verify(&token)?;
 //! ```
 
+pub mod auth_surface;
 mod config;
 mod error;
 mod manager;
