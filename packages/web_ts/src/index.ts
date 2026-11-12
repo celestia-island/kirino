@@ -29,3 +29,4 @@ export function clearToken(): void {
 }
 
 export * from "./passkey";
+export * from "./auth_surface";
