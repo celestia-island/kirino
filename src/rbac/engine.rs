@@ -327,6 +327,11 @@ where
     ///
     /// Collects every leaf permission that the subject can exercise, taking
     /// wildcard grants into account.
+    /// ⚠️ Do NOT pass a store-backed `ScopedGrantResolver` here: the scope
+    /// resolver costs L×(2+G) store round-trips per permission leaf, which
+    /// is quadratic-ish on a real backend. This API exists for in-memory /
+    /// preloaded catalogs; a production caller must batch-load first (or
+    /// wait for a batched resolve API — P2 {#sweep-p2-eval} kirino#3).
     pub async fn resolve_effective_permissions(
         &self,
         ctx: &PermissionContext,
