@@ -112,6 +112,15 @@ Integrators must not assume kirino provides any of the following:
   (Argon2, `auth-password`) and JWTs (`auth-jwt`), but the strength of
   credential issuance, MFA enrollment, and recovery flows is out of scope. A
   `Subject` reaching the engine is assumed already authenticated by the host (B1).
+- **Durability of the TOTP replay mark.** `TotpVerifier::verify` rejects a code
+  it already consumed *within one verifier instance*, which is what a
+  long-lived per-factor verifier needs. A verifier rebuilt per request — the
+  usual server shape — starts with no mark, and a code captured inside the ±1
+  skew window (RFC 6238 §5.1) is then still replayable. Persisting the consumed
+  step and calling `verify_with_guard` (with `MemoryTotpReplayGuard`, or
+  `DbTotpReplayGuard` over a shared `mfa_factors` table) is the integrator's
+  responsibility; kirino provides the CAS contract and fails closed when the
+  mark cannot be recorded.
 - **Timing / side-channel resistance of permission checks.** Decisions use
   `HashSet`/`HashMap` membership tests which are **not** constant-time. Do not
   rely on kirino to hide *which* permission was checked via timing if that is in

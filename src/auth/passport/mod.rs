@@ -6,5 +6,6 @@ pub mod pow;
 #[cfg(feature = "auth-password")]
 pub mod static_password;
 pub mod temporary_whitelist;
+pub mod totp_replay;
 #[cfg(feature = "auth-webauthn")]
 pub mod webauthn;
