@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 env:
@@ -13,12 +13,6 @@ env:
 
 jobs:
   check:
-    # Fork pull requests pay for their own CI: this job is heavy (it compiles,
-    # builds, tests or audits) and a fork's run would spend shared runner time on
-    # untrusted content. The required commit-lint and PR-title checks are the
-    # deliberate exception: they are sub-minute, execute no pull request code, and
-    # hold no secrets.
-    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     name: Check + test (hosted)
     runs-on: ubuntu-latest
     timeout-minutes: 30
@@ -60,12 +54,6 @@ jobs:
         run: cargo test -p kirino-session -p kirino -p kirino-macro
 
   lint:
-    # Fork pull requests pay for their own CI: this job is heavy (it compiles,
-    # builds, tests or audits) and a fork's run would spend shared runner time on
-    # untrusted content. The required commit-lint and PR-title checks are the
-    # deliberate exception: they are sub-minute, execute no pull request code, and
-    # hold no secrets.
-    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     name: fmt + clippy (hosted)
     runs-on: ubuntu-latest
     timeout-minutes: 30
