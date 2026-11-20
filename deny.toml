@@ -83,9 +83,17 @@ feature-depth = 1
 #   the ECDSA scalar arithmetic the advisory applies to (HS256-only, same
 #   reasoning as RUSTSEC-2023-0071 above). RE-REVIEW: 2026-12-01
 #   (aligned with evernight).
+#
+# RUSTSEC-2026-0543 (chrono unmaintained, issued 2026-11-17): chrono is a direct
+#   dependency while the family migration to jiff is in flight (plan:
+#   _reports/chrono-to-jiff-20261120/PLAN.md). No patched chrono release exists,
+#   so the advisory cannot be fixed in-tree; every direct use is being removed
+#   wave by wave. Remove this ignore when this repository's last direct chrono
+#   declaration is gone. EXPIRY: 2027-01-31.
 ignore = [
     "RUSTSEC-2023-0071",
     "RUSTSEC-2026-0387",
+    "RUSTSEC-2026-0543",
 ]
 # If this is true, then cargo deny will use the git executable to fetch advisory database.
 # If this is false, then it uses a built-in git library.
