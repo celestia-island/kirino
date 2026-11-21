@@ -37,7 +37,7 @@ pub struct RealnameInstanceConfig {
 /// boundary), `level` is the tier a successful run grants. A new
 /// consumer MUST re-derive the validation gates — this type carries
 /// data, not policy.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct RealnameProviderConfig {
     #[serde(default = "default_true")]
     pub enabled: bool,
@@ -55,6 +55,21 @@ pub struct RealnameProviderConfig {
     pub settings: std::collections::BTreeMap<String, String>,
 }
 
+/// `Default` agrees with the serde defaults ON PURPOSE: the derived
+/// impl answered `enabled=false, level=""` while parsing `{}` answered
+/// `enabled=true, level="basic"` — an identity master switch must not
+/// flip between those two paths.
+impl Default for RealnameProviderConfig {
+    fn default() -> Self {
+        Self {
+            enabled: default_true(),
+            display_name: String::new(),
+            level: default_level(),
+            settings: Default::default(),
+        }
+    }
+}
+
 fn default_true() -> bool {
     true
 }
@@ -69,6 +84,17 @@ fn default_level() -> String {
 /// `SHA256("realname.v1" ‖ instance_key ‖ identifier)` hex. The domain
 /// prefix keeps digests from colliding across surfaces that share a key,
 /// and the raw identifier is never stored.
+///
+/// CONTRACT — this is a keyed HASH, not a MAC: the plain concatenation
+/// has no length-extension resistance, so it must not be presented (or
+/// depended on) as authenticating. chest's stored digests are exactly
+/// this construction (byte-compat is mandatory — do not "upgrade" to
+/// HMAC without a row migration). Key notes for consumers: the key is a
+/// fixed 32 bytes so the key/identifier boundary is unambiguous, and
+/// the two services only produce matching digests for the same ID if
+/// they derive the SAME 32 bytes (chest uses its instance encryption
+/// key; erp derives from its `ERP_REALNAME_DIGEST_KEY` env — the erp
+/// bridge owns that derivation).
 pub fn digest_subject(instance_key: &[u8; 32], identifier: &str) -> String {
     let mut hasher = sha2::Sha256::new();
     hasher.update(b"realname.v1");
@@ -130,15 +156,21 @@ mod tests {
 
     #[test]
     fn digest_matches_the_chest_shape() {
-        // chest's `digest_subject` is this exact construction; the golden
-        // value is computed here (not hardcoded) but the SHAPE is pinned:
-        // domain prefix first, then the key, then the identifier.
+        // chest's `digest_subject` is this exact construction, pinned to
+        // a GOLDEN HEX (computed independently in Python:
+        // sha256(b"realname.v1" + bytes(32) + b"abc")) — a coordinated
+        // edit of the literals cannot pass, and a cross-check against a
+        // locally rebuilt hasher would agree by construction.
         let key = [0u8; 32];
-        let mut hasher = sha2::Sha256::new();
-        hasher.update(b"realname.v1");
-        hasher.update(key);
-        hasher.update(b"abc");
-        assert_eq!(digest_subject(&key, "abc"), hex::encode(hasher.finalize()));
+        assert_eq!(
+            digest_subject(&key, "abc"),
+            "7fe694483360d4d90fb532502a1d204828d25a42b9a4739b85af27e976d399e3"
+        );
+        let key7 = [7u8; 32];
+        assert_eq!(
+            digest_subject(&key7, "310110199001011234"),
+            "408bc2fdf75fa845c91813aff50b90a23eca8205bc5acf61fea7f8f282553c2e"
+        );
     }
 
     #[test]
@@ -193,6 +225,20 @@ mod tests {
         let cfg = RealnameInstanceConfig::default();
         assert!(!cfg.enabled);
         assert!(cfg.required_for.is_empty());
+    }
+
+    #[test]
+    fn provider_default_agrees_with_the_serde_defaults() {
+        // R3 S2: the derived Default answered `enabled=false, level=""`
+        // while `{}` parsed to `enabled=true, level="basic"` — a master
+        // switch flipping between the two paths is a footgun. The manual
+        // impl removed `derive(Default)`; this pin holds both paths
+        // equal.
+        let derived = RealnameProviderConfig::default();
+        let parsed: RealnameProviderConfig = serde_json::from_str("{}").expect("parse");
+        assert_eq!(derived, parsed);
+        assert!(derived.enabled, "the default provider is enabled");
+        assert_eq!(derived.level, "basic");
     }
 
     #[test]
