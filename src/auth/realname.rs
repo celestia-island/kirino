@@ -90,11 +90,13 @@ fn default_level() -> String {
 /// depended on) as authenticating. chest's stored digests are exactly
 /// this construction (byte-compat is mandatory — do not "upgrade" to
 /// HMAC without a row migration). Key notes for consumers: the key is a
-/// fixed 32 bytes so the key/identifier boundary is unambiguous, and
-/// the two services only produce matching digests for the same ID if
-/// they derive the SAME 32 bytes (chest uses its instance encryption
-/// key; erp derives from its `ERP_REALNAME_DIGEST_KEY` env — the erp
-/// bridge owns that derivation).
+/// fixed 32 bytes so the key/identifier boundary is unambiguous.
+///
+/// erp NOTE: erp's current digest is a DIFFERENT construction (HMAC over
+/// the raw env string, no prefix, key not 32 bytes) and no bridge exists
+/// yet — adopting this module means erp must derive the SAME 32 bytes
+/// its rows will live with and accept that old rows keep the HMAC
+/// values (nothing reads a digest back on either side today).
 pub fn digest_subject(instance_key: &[u8; 32], identifier: &str) -> String {
     let mut hasher = sha2::Sha256::new();
     hasher.update(b"realname.v1");
@@ -103,8 +105,10 @@ pub fn digest_subject(instance_key: &[u8; 32], identifier: &str) -> String {
     hex::encode(hasher.finalize())
 }
 
-/// A display hint that keeps the informative tail and never hands back a
-/// large fraction of the value:
+/// A display hint that keeps the informative tail. The ≥11 band reveals
+/// the phone-conventional head-3+tail-4 (about two thirds of the value —
+/// head 3 is the operator prefix, not subscriber data); the shorter bands
+/// hand back at most half:
 /// * ≥ 11 chars — head 3 + masked middle + tail 4 (an 18-digit ID keeps
 ///   `310***********1234`);
 /// * 8–10 chars — masked head + tail 4;
@@ -120,7 +124,7 @@ pub fn digest_subject(instance_key: &[u8; 32], identifier: &str) -> String {
 /// head-3 prefix is the operator prefix, not subscriber data. chest's
 /// `mask_phone` consumers keep their own wrapper during the lift.
 ///
-/// Mask bands are a contract: every edge below has a test.
+/// Mask bands are a contract: every edge above has a test.
 pub fn mask_identifier(identifier: &str) -> String {
     let chars: Vec<char> = identifier.chars().collect();
     let n = chars.len();
@@ -157,10 +161,12 @@ mod tests {
     #[test]
     fn digest_matches_the_chest_shape() {
         // chest's `digest_subject` is this exact construction, pinned to
-        // a GOLDEN HEX (computed independently in Python:
-        // sha256(b"realname.v1" + bytes(32) + b"abc")) — a coordinated
-        // edit of the literals cannot pass, and a cross-check against a
-        // locally rebuilt hasher would agree by construction.
+        // GOLDEN HEX values computed independently in Python:
+        //   sha256(b"realname.v1" + bytes(32) + b"abc")
+        //   sha256(b"realname.v1" + bytes([7])*32 + b"310110199001011234")
+        // A coordinated edit of the literals cannot pass, and a
+        // cross-check against a locally rebuilt hasher would agree by
+        // construction.
         let key = [0u8; 32];
         assert_eq!(
             digest_subject(&key, "abc"),
@@ -225,6 +231,22 @@ mod tests {
         let cfg = RealnameInstanceConfig::default();
         assert!(!cfg.enabled);
         assert!(cfg.required_for.is_empty());
+    }
+
+    #[test]
+    fn instance_config_serde_defaults_match_the_contract() {
+        // R4-delta M4 survived: dropping `#[serde(default)]` on `enabled`
+        // kept every test green, so the documented "a missing file =
+        // disabled" contract had no guard. Both shapes pinned:
+        // an EMPTY object is the missing-file analogue…
+        let empty: RealnameInstanceConfig = serde_json::from_str("{}").expect("parse");
+        assert!(!empty.enabled, "missing enabled = disabled (the contract)");
+        assert!(empty.required_for.is_empty());
+        // …and a present object parses its fields.
+        let full: RealnameInstanceConfig =
+            serde_json::from_str(r#"{"enabled": true, "required_for": ["topup"]}"#).expect("parse");
+        assert!(full.enabled);
+        assert_eq!(full.required_for, vec!["topup".to_string()]);
     }
 
     #[test]
