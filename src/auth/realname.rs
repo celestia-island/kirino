@@ -3,7 +3,7 @@
 //! **Design (P-3 decision — minimal storage)**: a verified profile stores
 //! only WHAT was verified and WHEN — the provider id, a verification
 //! digest over the subject identifier keyed by the instance key, a masked
-//! display hint, the tier it granted and its timestamp.. Raw identifiers exist transiently in the
+//! display hint, the tier it granted and its timestamp. Raw identifiers exist transiently in the
 //! challenge/verify exchange and nowhere else.
 //!
 //! This module is PURE: no database, no I/O, no feature gates. Each
