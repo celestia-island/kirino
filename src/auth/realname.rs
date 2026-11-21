@@ -90,7 +90,10 @@ fn default_level() -> String {
 /// depended on) as authenticating. chest's stored digests are exactly
 /// this construction (byte-compat is mandatory — do not "upgrade" to
 /// HMAC without a row migration). Key notes for consumers: the key is a
-/// fixed 32 bytes so the key/identifier boundary is unambiguous.
+/// fixed 32 bytes so the key/identifier boundary is unambiguous — and it
+/// must be SECRET and full-entropy: a low-entropy key lets an attacker
+/// who knows the construction offline-enumerate low-entropy identifiers
+/// (a phone number is ~1e10).
 ///
 /// erp NOTE: erp's current digest is a DIFFERENT construction (HMAC over
 /// the raw env string, no prefix, key not 32 bytes) and no bridge exists
@@ -122,7 +125,8 @@ pub fn digest_subject(instance_key: &[u8; 32], identifier: &str) -> String {
 /// edge (10 chars reveal 4, 11 reveal 7): the ≥11 band is the PHONE
 /// shape, where `138****8000` is the conventional rendering and the
 /// head-3 prefix is the operator prefix, not subscriber data. chest's
-/// `mask_phone` consumers keep their own wrapper during the lift.
+/// chest keeps its own independent `mask_phone` (it is the STORED hint
+/// format; this function is not a wrapper over it).
 ///
 /// Mask bands are a contract: every edge above has a test.
 pub fn mask_identifier(identifier: &str) -> String {
