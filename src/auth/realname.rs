@@ -2,8 +2,8 @@
 //!
 //! **Design (P-3 decision — minimal storage)**: a verified profile stores
 //! only WHAT was verified and WHEN — the provider id, a verification
-//! digest over the subject identifier keyed by the instance key, the tier
-//! it granted and its timestamp. Raw identifiers exist transiently in the
+//! digest over the subject identifier keyed by the instance key, a masked
+//! display hint, the tier it granted and its timestamp.. Raw identifiers exist transiently in the
 //! challenge/verify exchange and nowhere else.
 //!
 //! This module is PURE: no database, no I/O, no feature gates. Each
@@ -125,8 +125,8 @@ pub fn digest_subject(instance_key: &[u8; 32], identifier: &str) -> String {
 /// NOTE the disclosure is deliberately NON-monotonic at the 11-char
 /// edge (10 chars reveal 4, 11 reveal 7): the ≥11 band is the PHONE
 /// shape, where `138****8000` is the conventional rendering and the
-/// head-3 prefix is the operator prefix, not subscriber data. chest's
-/// chest keeps its own independent `mask_phone` (it is the STORED hint
+/// head-3 prefix is the operator prefix, not subscriber data. chest
+/// keeps its own independent `mask_phone` (it is the STORED hint
 /// format; this function is not a wrapper over it).
 ///
 /// Mask bands are a contract: every edge above has a test.
