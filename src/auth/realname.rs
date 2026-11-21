@@ -8,7 +8,8 @@
 //!
 //! This module is PURE: no database, no I/O, no feature gates. Each
 //! service keeps its own storage/routing (chest: the `realname_providers`
-//! catalog; erp: the `realname_profiles` adjudication surface).
+//! provider catalog AND the `realname_profiles` rows that hold the digests;
+//! erp: the `realname_profiles` adjudication surface).
 
 use serde::{Deserialize, Serialize};
 use sha2::Digest;
@@ -109,9 +110,9 @@ pub fn digest_subject(instance_key: &[u8; 32], identifier: &str) -> String {
 }
 
 /// A display hint that keeps the informative tail. The ≥11 band reveals
-/// the phone-conventional head-3+tail-4 (about two thirds of the value —
-/// head 3 is the operator prefix, not subscriber data); the shorter bands
-/// hand back at most half:
+/// the phone-conventional head-3+tail-4 (7/11 at the band edge, falling
+/// toward 7/18 for an 18-digit ID — head 3 is the operator prefix, not
+/// subscriber data); the shorter bands hand back at most half:
 /// * ≥ 11 chars — head 3 + masked middle + tail 4 (an 18-digit ID keeps
 ///   `310***********1234`);
 /// * 8–10 chars — masked head + tail 4;
