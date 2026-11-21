@@ -30,14 +30,27 @@ pub struct RealnameInstanceConfig {
 /// One provider's configuration as stored in the catalog. `settings`
 /// carries `${VAR}` references only — resolution happens in memory at
 /// read time, so a secret never rests resolved in the database.
+///
+/// Field semantics follow chest's catalog (the only consumer with a
+/// panel today): `enabled` gates issuing, `display_name` is republished
+/// to browsers (validated non-empty / ≤ 128 chars at chest's admin
+/// boundary), `level` is the tier a successful run grants. A new
+/// consumer MUST re-derive the validation gates — this type carries
+/// data, not policy.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 pub struct RealnameProviderConfig {
     #[serde(default = "default_true")]
     pub enabled: bool,
+    /// Display name shown in the panel. chest's catalog requires it
+    /// (no serde default there); the `serde(default)` here keeps a
+    /// consumer without a panel parsing the same rows.
+    #[serde(default)]
+    pub display_name: String,
     /// Verification tier a successful run grants ("basic"/"advanced").
     #[serde(default = "default_level")]
     pub level: String,
     /// Provider-specific settings (`${VAR}` references only — SR-05).
+    /// The convention is NOT enforced by this type.
     #[serde(default)]
     pub settings: std::collections::BTreeMap<String, String>,
 }
@@ -67,13 +80,21 @@ pub fn digest_subject(instance_key: &[u8; 32], identifier: &str) -> String {
 /// A display hint that keeps the informative tail and never hands back a
 /// large fraction of the value:
 /// * ≥ 11 chars — head 3 + masked middle + tail 4 (an 18-digit ID keeps
-///   `310***…****1234`);
+///   `310***********1234`);
 /// * 8–10 chars — masked head + tail 4;
 /// * 5–7 chars — masked head + tail 2 (a 6-char value must not hand back
 ///   two thirds of itself);
 /// * ≤ 4 chars — all stars.
 ///
-/// Never the raw value.
+/// Never the raw value; the empty input returns the empty string.
+///
+/// NOTE the disclosure is deliberately NON-monotonic at the 11-char
+/// edge (10 chars reveal 4, 11 reveal 7): the ≥11 band is the PHONE
+/// shape, where `138****8000` is the conventional rendering and the
+/// head-3 prefix is the operator prefix, not subscriber data. chest's
+/// `mask_phone` consumers keep their own wrapper during the lift.
+///
+/// Mask bands are a contract: every edge below has a test.
 pub fn mask_identifier(identifier: &str) -> String {
     let chars: Vec<char> = identifier.chars().collect();
     let n = chars.len();
@@ -131,6 +152,30 @@ mod tests {
     }
 
     #[test]
+    fn mask_band_edges_are_exact() {
+        // Every documented edge, computed by hand (R3 M2/M3 survived
+        // without these).
+        assert_eq!(mask_identifier("abcd"), "****"); // n=4: all stars
+        assert_eq!(mask_identifier("abcde"), "***de"); // n=5: tail 2
+        assert_eq!(mask_identifier("abcdef"), "****ef"); // n=6: tail 2
+        assert_eq!(mask_identifier("abcdefg"), "*****fg"); // n=7: tail 2
+        assert_eq!(mask_identifier("abcdefgh"), "****efgh"); // n=8: tail 4
+        assert_eq!(mask_identifier("abcdefghi"), "*****fghi"); // n=9: tail 4
+        assert_eq!(mask_identifier("abcdefghij"), "******ghij"); // n=10: tail 4
+        assert_eq!(
+            mask_identifier("abcdefghijk"),
+            "abc****hijk" // n=11: head 3 + tail 4
+        );
+        // Non-ASCII counts by chars, not bytes.
+        assert_eq!(mask_identifier("张三李四王五"), "****王五");
+    }
+
+    #[test]
+    fn mask_of_the_empty_input_is_empty() {
+        assert_eq!(mask_identifier(""), "");
+    }
+
+    #[test]
     fn mask_shrinks_the_tail_for_short_values() {
         // 6 chars: tail 2 only (4/6 revealed was the R2 measurement).
         let m = mask_identifier("abcdef");
@@ -148,6 +193,21 @@ mod tests {
         let cfg = RealnameInstanceConfig::default();
         assert!(!cfg.enabled);
         assert!(cfg.required_for.is_empty());
+    }
+
+    #[test]
+    fn provider_config_keeps_display_name_through_the_union() {
+        // chest's admin boundary parses its payload into this type: a
+        // field silently dropped here would silently drop the panel
+        // label there (R3 S1).
+        let cfg: RealnameProviderConfig =
+            serde_json::from_str(r#"{"display_name": "支付宝实名", "level": "advanced"}"#)
+                .expect("parse");
+        assert_eq!(cfg.display_name, "支付宝实名");
+        // And the default keeps a panel-less consumer parsing old rows.
+        let bare: RealnameProviderConfig =
+            serde_json::from_str(r#"{"level": "basic"}"#).expect("parse");
+        assert_eq!(bare.display_name, "");
     }
 
     #[test]
