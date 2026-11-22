@@ -45,10 +45,9 @@ pub mod middleware;
 mod one_shot;
 pub mod presence;
 mod revocation;
-mod token;
-
 #[cfg(feature = "postgres")]
-mod store;
+pub mod store;
+mod token;
 
 pub use config::SessionConfig;
 pub use error::{SessionError, SessionResult};

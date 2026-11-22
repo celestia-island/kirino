@@ -31,7 +31,10 @@ chrono = { version = "^0.4", features = ["serde"] }
 tokio = { version = "^1", features = ["sync", "rt"] }
 tracing = { version = "^0.1" }
 thiserror = "^2"
-sea-orm = { version = "^2", optional = true, features = ["sqlx-postgres", "runtime-tokio-rustls"] }
+# Raw-SQL data access goes through the family data layer (lacrymira);
+# the pg executor brings sqlx, so the feature stays optional.
+lacrymira = { version = "^0.1", optional = true }
+lacrymira-pg = { version = "^0.1", optional = true }
 zeroize = { version = "^1", features = ["zeroize_derive"] }
 ml-dsa = { version = "^0.1", optional = true }
 axum = { version = "^0.8", optional = true }
@@ -42,7 +45,7 @@ futures-util = { version = "^0.3", optional = true }
 
 [features]
 default = ["axum"]
-postgres = ["sea-orm"]
+postgres = ["dep:lacrymira", "dep:lacrymira-pg"]
 axum = ["dep:axum", "dep:axum-core"]
 actix = ["dep:actix-web", "dep:actix-rt", "dep:futures-util"]
 # Post-quantum ML-DSA-65 profile (FIPS 204 / RFC 9964). Default-off on
