@@ -18,7 +18,7 @@ pub enum SessionError {
     Io(#[from] std::io::Error),
     #[cfg(feature = "postgres")]
     #[error("database error: {0}")]
-    Db(#[from] sea_orm::DbErr),
+    Db(#[from] lacrymira::Error),
     #[error("{0}")]
     Other(String),
 }

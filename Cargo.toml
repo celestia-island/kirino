@@ -32,7 +32,7 @@ rbac-core = []
 rbac-inmemory = ["rbac-core"]
 rbac-hierarchy = ["rbac-core"]
 rbac-constraints = ["rbac-core"]
-rbac-db-session = ["rbac-core", "dep:sea-orm"]
+rbac-db-session = ["rbac-core", "dep:lacrymira", "dep:lacrymira-pg"]
 rbac-dynamic = ["rbac-core"]
 rbac-full = ["rbac-inmemory", "rbac-hierarchy", "rbac-constraints", "rbac-dynamic", "auth-password", "auth-jwt", "auth-webauthn"]
 auth-password = ["dep:argon2"]
@@ -63,7 +63,10 @@ hex = "^0.4"
 coset = { version = "^0.4", optional = true }
 p256 = { version = "^0.14", features = ["ecdsa", "getrandom"], optional = true }
 tracing = { version = "^0.1", features = ["log"] }
-sea-orm = { version = "^2", features = ["sqlx-postgres", "runtime-tokio-rustls"], optional = true }
+# Raw-SQL data access goes through the family data layer (lacrymira);
+# the pg executor brings sqlx, so the feature stays optional.
+lacrymira = { version = "^0.1", optional = true }
+lacrymira-pg = { version = "^0.1", optional = true }
 
 [dev-dependencies]
 criterion = "^0.8"

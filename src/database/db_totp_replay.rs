@@ -41,10 +41,11 @@
 //! seed the factor row first.
 
 use anyhow::Result;
-use sea_orm::{ConnectionTrait, DatabaseConnection, Statement, TransactionTrait};
 
-use crate::auth::passport::totp_replay::TotpReplayGuard;
-use crate::error::KirinoError;
+use lacrymira::Value;
+use lacrymira_pg::PgExecutor;
+
+use crate::{auth::passport::totp_replay::TotpReplayGuard, database::raw, error::KirinoError};
 
 /// Default factor table (schema contract in the module docs).
 pub const DEFAULT_FACTOR_TABLE: &str = "mfa_factors";
@@ -68,7 +69,7 @@ const SCHEMA_WARMUP_LOCK_KEY: i64 = 0x6b69_7269_6e6f_6d66;
 /// and a consumed step propagates on the next attempt.
 #[derive(Debug, Clone)]
 pub struct DbTotpReplayGuard {
-    conn: DatabaseConnection,
+    conn: PgExecutor,
     factor_table: String,
     factor_id_column: String,
     step_column: String,
@@ -77,7 +78,7 @@ pub struct DbTotpReplayGuard {
 impl DbTotpReplayGuard {
     /// Creates a guard over the default `mfa_factors` shape.
     #[must_use]
-    pub fn new(conn: DatabaseConnection) -> Self {
+    pub fn new(conn: PgExecutor) -> Self {
         Self {
             conn,
             factor_table: DEFAULT_FACTOR_TABLE.to_string(),
@@ -99,7 +100,7 @@ impl DbTotpReplayGuard {
     ///
     /// Returns [`KirinoError::Validation`] for an unusable identifier.
     pub fn with_names(
-        conn: DatabaseConnection,
+        conn: PgExecutor,
         factor_table: &str,
         factor_id_column: &str,
         step_column: &str,
@@ -136,28 +137,26 @@ impl DbTotpReplayGuard {
     ///
     /// Returns the database error when either statement fails.
     pub async fn ensure_schema(&self) -> Result<()> {
-        let backend = self.conn.get_database_backend();
         let (table, id, step) = self.qualified_names();
-        let txn = self.conn.begin().await?;
-        txn.execute_raw(Statement::from_sql_and_values(
-            backend,
+        let mut txn = self.conn.begin().await?;
+        txn.execute(&raw::sql(
             "SELECT pg_advisory_xact_lock($1)",
-            [SCHEMA_WARMUP_LOCK_KEY.into()],
+            vec![Value::I64(SCHEMA_WARMUP_LOCK_KEY)],
         ))
         .await?;
-        txn.execute_raw(Statement::from_string(
-            backend,
+        txn.execute(&raw::sql(
             format!(
                 "CREATE TABLE IF NOT EXISTS {table} ( \
                     {id} TEXT PRIMARY KEY, \
                     {step} BIGINT NULL \
                 )"
             ),
+            Vec::new(),
         ))
         .await?;
-        txn.execute_raw(Statement::from_string(
-            backend,
+        txn.execute(&raw::sql(
             format!("ALTER TABLE {table} ADD COLUMN IF NOT EXISTS {step} BIGINT NULL"),
+            Vec::new(),
         ))
         .await?;
         txn.commit().await?;
@@ -170,7 +169,7 @@ impl DbTotpReplayGuard {
     /// the code. The secret itself lives in the same database, so a broken
     /// connection fails the whole verification anyway — this only makes sure
     /// the failure cannot be mistaken for "not used yet".
-    fn reject_closed(&self, factor_id: &str, error: &sea_orm::DbErr) -> bool {
+    fn reject_closed(&self, factor_id: &str, error: &lacrymira::Error) -> bool {
         tracing::error!(
             factor_id,
             error = %error,
@@ -215,28 +214,26 @@ fn validated_ident(what: &str, name: &str) -> Result<String> {
 impl TotpReplayGuard for DbTotpReplayGuard {
     async fn accept_step(&self, factor_id: &str, step: i64) -> bool {
         let (table, id, step_col) = self.qualified_names();
-        let backend = self.conn.get_database_backend();
 
         // Path 1 — the normal case, and the only one that can happen on a
         // host-owned factor table (its row exists because it holds the
         // secret): advance the mark, but only for a strictly newer step.
         // One statement is the whole check-and-set, so of two concurrent
         // submitters of the same code exactly one gets a row back.
-        let advance = Statement::from_sql_and_values(
-            backend,
+        let advance = raw::sql(
             format!(
                 "UPDATE {table} SET {step_col} = $2 \
                  WHERE {id} = $1 \
                    AND ({step_col} IS NULL OR {step_col} < $2) \
                  RETURNING {step_col}"
             ),
-            [factor_id.into(), step.into()],
+            vec![Value::Text(factor_id.to_string()), Value::I64(step)],
         );
-        match self.conn.query_one_raw(advance).await {
-            Ok(Some(_)) => return true,
+        match self.conn.execute(&advance).await {
+            Ok(reply) if raw::first_row(&reply).is_some() => return true,
             // Either the step is a replay (row there, mark not older) or the
             // factor has no row yet — path 2 decides which.
-            Ok(None) => {}
+            Ok(_) => {}
             Err(e) => return self.reject_closed(factor_id, &e),
         }
 
@@ -244,8 +241,7 @@ impl TotpReplayGuard for DbTotpReplayGuard {
         // a table this guard created itself). Claim it with the same CAS
         // predicate; the `ON CONFLICT` branch keeps the answer correct when
         // another replica inserts the row in the same window.
-        let claim = Statement::from_sql_and_values(
-            backend,
+        let claim = raw::sql(
             format!(
                 "INSERT INTO {table} ({id}, {step_col}) VALUES ($1, $2) \
                  ON CONFLICT ({id}) DO UPDATE SET {step_col} = \
@@ -254,40 +250,39 @@ impl TotpReplayGuard for DbTotpReplayGuard {
                     OR {table}.{step_col} < EXCLUDED.{step_col} \
                  RETURNING {step_col}"
             ),
-            [factor_id.into(), step.into()],
+            vec![Value::Text(factor_id.to_string()), Value::I64(step)],
         );
-        match self.conn.query_one_raw(claim).await {
-            Ok(Some(_)) => true,
+        match self.conn.execute(&claim).await {
+            Ok(reply) => raw::first_row(&reply).is_some(),
             // The row appeared in between and its mark is not older: the
             // concurrent verification won.
-            Ok(None) => false,
             Err(e) => self.reject_closed(factor_id, &e),
         }
     }
 
     async fn last_used_step(&self, factor_id: &str) -> Option<i64> {
         let (table, id, step_col) = self.qualified_names();
-        let stmt = Statement::from_sql_and_values(
-            self.conn.get_database_backend(),
+        let cmd = raw::sql(
             format!("SELECT {step_col} FROM {table} WHERE {id} = $1"),
-            [factor_id.into()],
+            vec![Value::Text(factor_id.to_string())],
         );
-        match self.conn.query_one_raw(stmt).await {
+        match self.conn.execute(&cmd).await {
             // Single-column projection: read it positionally rather than
-            // through `try_get(pre, col)`, whose `pre` prefix is for nested
-            // model decoding, not for schema-qualified names.
-            Ok(Some(row)) => match row.try_get_by_index::<Option<i64>>(0) {
-                Ok(step) => step,
-                Err(e) => {
-                    tracing::error!(
-                        factor_id,
-                        error = %e,
-                        "TOTP replay mark could not be decoded"
-                    );
-                    None
-                }
+            // by name.
+            Ok(reply) => match raw::first_row(&reply).and_then(|(_, row)| row.first()) {
+                Some(v) => match raw::as_opt_i64(v) {
+                    Ok(step) => step,
+                    Err(e) => {
+                        tracing::error!(
+                            factor_id,
+                            error = %e,
+                            "TOTP replay mark could not be decoded"
+                        );
+                        None
+                    }
+                },
+                None => None,
             },
-            Ok(None) => None,
             Err(e) => {
                 tracing::error!(
                     factor_id,
@@ -321,20 +316,22 @@ mod tests {
 
     use std::env;
 
-    use sea_orm::{ConnectionTrait, Database, DatabaseConnection, Statement};
     use uuid::Uuid;
+
+    use lacrymira_pg::PgExecutor;
 
     use super::DbTotpReplayGuard;
     use crate::auth::passport::dynamic_password::TotpVerifier;
     use crate::auth::passport::totp_replay::TotpReplayGuard;
+    use crate::database::raw;
 
     /// Default connection string used when `DATABASE_URL` is unset. Matches
     /// the `docker-compose.yml` and CI service container defaults.
     const DEFAULT_DATABASE_URL: &str = "postgres://kirino:kirino@localhost:5432/kirino_test";
 
-    async fn connect() -> DatabaseConnection {
+    async fn connect() -> PgExecutor {
         let url = env::var("DATABASE_URL").unwrap_or_else(|_| DEFAULT_DATABASE_URL.to_string());
-        Database::connect(url.as_str())
+        PgExecutor::connect(&url)
             .await
             .unwrap_or_else(|e| panic!("failed to connect to PostgreSQL at {url}: {e}"))
     }
@@ -543,18 +540,17 @@ mod tests {
     async fn pg_totp_upgrades_a_preexisting_factor_table() {
         let conn = connect().await;
         let table = format!("totp_legacy_test_{}", Uuid::now_v7().simple());
-        let backend = conn.get_database_backend();
 
         // The pre-upgrade shape: an enrollment row, no replay column.
-        conn.execute_raw(Statement::from_string(
-            backend,
+        conn.execute(&raw::sql(
             format!("CREATE TABLE {table} (id TEXT PRIMARY KEY, secret TEXT NOT NULL)"),
+            Vec::new(),
         ))
         .await
         .expect("create the legacy factor table");
-        conn.execute_raw(Statement::from_string(
-            backend,
+        conn.execute(&raw::sql(
             format!("INSERT INTO {table} (id, secret) VALUES ('factor-legacy', 'enrolled')"),
+            Vec::new(),
         ))
         .await
         .expect("seed an enrolled factor");
@@ -586,9 +582,9 @@ mod tests {
             "the mark must be seeded by the first verification"
         );
 
-        conn.execute_raw(Statement::from_string(
-            backend,
+        conn.execute(&raw::sql(
             format!("DROP TABLE IF EXISTS {table}"),
+            Vec::new(),
         ))
         .await
         .expect("drop the legacy test table");
@@ -611,9 +607,9 @@ mod tests {
 
         // Clean up the per-test table (the name is generated above, never
         // derived from input).
-        conn.execute_raw(Statement::from_string(
-            conn.get_database_backend(),
+        conn.execute(&raw::sql(
             format!("DROP TABLE IF EXISTS {table}"),
+            Vec::new(),
         ))
         .await
         .expect("drop test table");

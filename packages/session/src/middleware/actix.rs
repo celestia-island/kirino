@@ -1,11 +1,12 @@
+use std::{rc::Rc, sync::Arc};
+
 use actix_web::{
     dev::{forward_ready, Service, ServiceRequest, ServiceResponse, Transform},
     error::ErrorUnauthorized,
     http::header,
     Error, FromRequest, HttpMessage, HttpRequest,
 };
-use futures::future::{ok, LocalBoxFuture, Ready};
-use std::{rc::Rc, sync::Arc};
+use futures_util::future::{err, ok, LocalBoxFuture, Ready};
 
 use crate::{SessionError, TokenClaims, TokenManager};
 
@@ -17,14 +18,9 @@ use crate::{SessionError, TokenClaims, TokenManager};
 ///     .app_data(web::Data::new(manager))
 ///     .wrap(JwtMiddleware::default())
 /// ```
+#[derive(Default)]
 pub struct JwtMiddleware {
     _private: (),
-}
-
-impl Default for JwtMiddleware {
-    fn default() -> Self {
-        Self { _private: () }
-    }
 }
 
 impl<S, B> Transform<S, ServiceRequest> for JwtMiddleware
@@ -108,7 +104,7 @@ impl FromRequest for TokenClaims {
             // the handler an all-empty claims value silently made every
             // consumer of this extractor an anonymous identity (empty
             // `sub`, `exp` 0) instead of a 401.
-            None => Err(ErrorUnauthorized("authentication required")),
+            None => err(ErrorUnauthorized("authentication required")),
         }
     }
 }

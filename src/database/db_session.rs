@@ -1,17 +1,22 @@
 use anyhow::Result;
-use async_trait::async_trait;
-use sea_orm::{ConnectionTrait, DatabaseConnection, Statement};
 use uuid::Uuid;
 
-use crate::rbac::store::persistence::{PersistentSessionStore, SessionRow};
+use async_trait::async_trait;
+use lacrymira::Value;
+use lacrymira_pg::PgExecutor;
+
+use crate::{
+    database::raw,
+    rbac::store::persistence::{PersistentSessionStore, SessionRow},
+};
 
 #[derive(Debug, Clone)]
 pub struct DbSessionStore {
-    conn: DatabaseConnection,
+    conn: PgExecutor,
 }
 
 impl DbSessionStore {
-    pub fn new(conn: DatabaseConnection) -> Self {
+    pub fn new(conn: PgExecutor) -> Self {
         Self { conn }
     }
 }
@@ -25,38 +30,36 @@ impl PersistentSessionStore for DbSessionStore {
             .as_ref()
             .map(serde_json::to_string)
             .transpose()?;
-        let stmt = Statement::from_sql_and_values(
-            self.conn.get_database_backend(),
-            "INSERT INTO rbac_sessions (id, subject_id, active_roles, context, expires_at, created_at, updated_at) VALUES ($1, $2, $3::jsonb, $4::jsonb, $5, $6, NOW())",
-            [
-                row.id.to_string().into(),
-                row.subject_id.as_str().into(),
-                roles_json.into(),
-                context_str.into(),
-                row.expires_at.to_rfc3339().into(),
-                row.created_at.to_rfc3339().into(),
+        let cmd = raw::sql(
+            "INSERT INTO rbac_sessions (id, subject_id, active_roles, context, expires_at, created_at) VALUES ($1, $2, $3::jsonb, $4::jsonb, $5, $6, NOW())",
+            vec![
+                Value::Uuid(row.id.to_string()),
+                Value::Text(row.subject_id.clone()),
+                Value::Text(roles_json),
+                context_str.map_or(Value::Null, Value::Text),
+                Value::Timestamp(row.expires_at.to_rfc3339()),
+                Value::Timestamp(row.created_at.to_rfc3339()),
             ],
         );
-        self.conn.execute_raw(stmt.clone()).await?;
+        self.conn.execute(&cmd).await?;
 
         Ok(())
     }
 
     async fn load_session(&self, id: Uuid) -> Result<Option<SessionRow>> {
-        let stmt = Statement::from_sql_and_values(
-            self.conn.get_database_backend(),
+        let cmd = raw::sql(
             "SELECT id, subject_id, active_roles, context, expires_at, created_at FROM rbac_sessions WHERE id = $1",
-            [id.to_string().into()],
+            vec![Value::Uuid(id.to_string())],
         );
-        if let Some(row) = self.conn.query_one_raw(stmt).await? {
+        if let Some((columns, row)) = raw::first_row(&self.conn.execute(&cmd).await?) {
             let active_roles: Vec<String> = {
-                let raw: String = row.try_get("rbac_sessions", "active_roles")?;
-                serde_json::from_str(&raw).map_err(|e| {
+                let raw_json = raw::as_text(raw::cell(columns, row, "active_roles")?)?;
+                serde_json::from_str(&raw_json).map_err(|e| {
                     anyhow::anyhow!("corrupted active_roles JSON for session {}: {e}", id)
                 })?
             };
             let context: Option<serde_json::Value> =
-                match row.try_get::<Option<String>>("rbac_sessions", "context") {
+                match raw::as_opt_text(raw::cell(columns, row, "context")?) {
                     Ok(Some(s)) => Some(serde_json::from_str(&s).map_err(|e| {
                         anyhow::anyhow!("corrupted context JSON for session {}: {e}", id)
                     })?),
@@ -67,13 +70,13 @@ impl PersistentSessionStore for DbSessionStore {
                         None
                     }
                 };
-            let expires_at_str = row.try_get::<String>("rbac_sessions", "expires_at")?;
+            let expires_at_str = raw::as_text(raw::cell(columns, row, "expires_at")?)?;
             let expires_at =
                 chrono::DateTime::parse_from_rfc3339(&expires_at_str)?.with_timezone(&chrono::Utc);
-            let created_at_str = row.try_get::<String>("rbac_sessions", "created_at")?;
+            let created_at_str = raw::as_text(raw::cell(columns, row, "created_at")?)?;
             let created_at =
                 chrono::DateTime::parse_from_rfc3339(&created_at_str)?.with_timezone(&chrono::Utc);
-            let subject_id = row.try_get::<String>("rbac_sessions", "subject_id")?;
+            let subject_id = raw::as_text(raw::cell(columns, row, "subject_id")?)?;
             Ok(Some(SessionRow {
                 id,
                 subject_id,
@@ -89,66 +92,66 @@ impl PersistentSessionStore for DbSessionStore {
     }
 
     async fn delete_session(&self, id: Uuid) -> Result<()> {
-        let stmt = Statement::from_sql_and_values(
-            self.conn.get_database_backend(),
+        let cmd = raw::sql(
             "DELETE FROM rbac_sessions WHERE id = $1",
-            [id.to_string().into()],
+            vec![Value::Uuid(id.to_string())],
         );
-        self.conn.execute_raw(stmt.clone()).await?;
+        self.conn.execute(&cmd).await?;
 
         Ok(())
     }
 
     async fn update_roles(&self, id: Uuid, active_roles: &[String]) -> Result<()> {
         let roles_json = serde_json::to_string(active_roles)?;
-        let stmt = Statement::from_sql_and_values(
-            self.conn.get_database_backend(),
+        let cmd = raw::sql(
             "UPDATE rbac_sessions SET active_roles = $1::jsonb, updated_at = NOW() WHERE id = $2",
-            [roles_json.into(), id.to_string().into()],
+            vec![Value::Text(roles_json), Value::Uuid(id.to_string())],
         );
-        let result = self.conn.execute_raw(stmt.clone()).await?;
-
-        if result.rows_affected() == 0 {
+        if raw::affected(&self.conn.execute(&cmd).await?) == 0 {
             return Err(anyhow::anyhow!("session {} not found", id));
         }
         Ok(())
     }
 
     async fn cleanup_expired(&self) -> Result<usize> {
-        let stmt = Statement::from_string(
-            self.conn.get_database_backend(),
+        let cmd = raw::sql(
             "DELETE FROM rbac_sessions WHERE expires_at < NOW()",
+            Vec::new(),
         );
-        let result = self.conn.execute_raw(stmt.clone()).await?;
-        Ok(result.rows_affected() as usize)
+        let n = raw::affected(&self.conn.execute(&cmd).await?);
+        Ok(n as usize)
     }
 
     async fn load_session_metadata(&self, subject_id: &str) -> Result<Option<SessionRow>> {
-        let stmt = Statement::from_sql_and_values(
-            self.conn.get_database_backend(),
+        let cmd = raw::sql(
             "SELECT id, subject_id, active_roles, context, version, expires_at, created_at FROM rbac_sessions WHERE subject_id = $1 ORDER BY created_at DESC LIMIT 1",
-            [subject_id.to_string().into()],
+            vec![Value::Text(subject_id.to_string())],
         );
-        if let Some(row) = self.conn.query_one_raw(stmt).await? {
-            let version: i64 = row.try_get("rbac_sessions", "version")?;
+        if let Some((columns, row)) = raw::first_row(&self.conn.execute(&cmd).await?) {
+            let version: i64 = raw::as_i64(raw::cell(columns, row, "version")?)?;
             Ok(Some(SessionRow {
-                id: row.try_get("rbac_sessions", "id")?,
-                subject_id: row.try_get("rbac_sessions", "subject_id")?,
-                active_roles: serde_json::from_str(
-                    &row.try_get::<String>("rbac_sessions", "active_roles")?,
-                )?,
-                context: row
-                    .try_get::<Option<String>>("rbac_sessions", "context")?
+                id: raw::as_uuid(raw::cell(columns, row, "id")?)?,
+                subject_id: raw::as_text(raw::cell(columns, row, "subject_id")?)?,
+                active_roles: serde_json::from_str(&raw::as_text(raw::cell(
+                    columns,
+                    row,
+                    "active_roles",
+                )?)?)?,
+                context: raw::as_opt_text(raw::cell(columns, row, "context")?)?
                     .map(|s| serde_json::from_str(&s))
                     .transpose()?,
                 version: version as u64,
-                expires_at: chrono::DateTime::parse_from_rfc3339(
-                    &row.try_get::<String>("rbac_sessions", "expires_at")?,
-                )?
+                expires_at: chrono::DateTime::parse_from_rfc3339(&raw::as_text(raw::cell(
+                    columns,
+                    row,
+                    "expires_at",
+                )?)?)?
                 .with_timezone(&chrono::Utc),
-                created_at: chrono::DateTime::parse_from_rfc3339(
-                    &row.try_get::<String>("rbac_sessions", "created_at")?,
-                )?
+                created_at: chrono::DateTime::parse_from_rfc3339(&raw::as_text(raw::cell(
+                    columns,
+                    row,
+                    "created_at",
+                )?)?)?
                 .with_timezone(&chrono::Utc),
             }))
         } else {
@@ -157,12 +160,14 @@ impl PersistentSessionStore for DbSessionStore {
     }
 
     async fn bump_version(&self, subject_id: &str, version: u64) -> Result<()> {
-        let stmt = Statement::from_sql_and_values(
-            self.conn.get_database_backend(),
+        let cmd = raw::sql(
             "UPDATE rbac_sessions SET version = $1 WHERE subject_id = $2",
-            [(version as i64).into(), subject_id.to_string().into()],
+            vec![
+                Value::I64(version as i64),
+                Value::Text(subject_id.to_string()),
+            ],
         );
-        self.conn.execute_raw(stmt.clone()).await?;
+        self.conn.execute(&cmd).await?;
         Ok(())
     }
 }
@@ -186,34 +191,34 @@ mod tests {
 
     use std::env;
 
-    use sea_orm::{ConnectionTrait, Database, DatabaseConnection, Statement};
     use uuid::Uuid;
 
+    use lacrymira_pg::PgExecutor;
+
     use super::DbSessionStore;
+    use crate::database::raw;
     use crate::rbac::store::persistence::{PersistentSessionStore, SessionRow};
 
     /// Default connection string used when `DATABASE_URL` is unset. Matches the
     /// `docker-compose.yml` and CI service container defaults.
     const DEFAULT_DATABASE_URL: &str = "postgres://kirino:kirino@localhost:5432/kirino_test";
 
-    async fn connect() -> DatabaseConnection {
+    async fn connect() -> PgExecutor {
         let url = env::var("DATABASE_URL").unwrap_or_else(|_| DEFAULT_DATABASE_URL.to_string());
-        Database::connect(url.as_str())
+        PgExecutor::connect(&url)
             .await
             .unwrap_or_else(|e| panic!("failed to connect to PostgreSQL at {url}: {e}"))
     }
 
     /// Creates the `rbac_sessions` table if it does not exist, and truncates it
     /// so each test starts from a clean slate. The DDL mirrors the queries in
-    /// `DbSessionStore` and is emitted directly (no sea-orm entity) so the tests
+    /// `DbSessionStore` and is emitted directly (no ORM entity) so the tests
     /// stay independent of any migration tooling the host application might use.
-    async fn setup_schema(conn: &DatabaseConnection) {
-        // Build the CREATE TABLE from the model. `Schema::create_table_from_entity`
-        // is not available because there is no sea-orm entity here, so emit the
-        // DDL directly to stay aligned with the queries in `DbSessionStore`.
-        let backend = conn.get_database_backend();
-        conn.execute_raw(Statement::from_string(
-            backend,
+    async fn setup_schema(conn: &PgExecutor) {
+        // Build the CREATE TABLE from the model. No ORM entity exists here, so
+        // the DDL is emitted directly to stay aligned with the queries in
+        // `DbSessionStore`.
+        conn.execute(&raw::sql(
             "CREATE TABLE IF NOT EXISTS rbac_sessions ( \
                 id UUID PRIMARY KEY, \
                 subject_id TEXT NOT NULL, \
@@ -223,15 +228,13 @@ mod tests {
                 created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), \
                 updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW() \
             )",
+            Vec::new(),
         ))
         .await
         .expect("create rbac_sessions table");
-        conn.execute_raw(Statement::from_string(
-            backend,
-            "TRUNCATE TABLE rbac_sessions",
-        ))
-        .await
-        .expect("truncate rbac_sessions table");
+        conn.execute(&raw::sql("TRUNCATE TABLE rbac_sessions", Vec::new()))
+            .await
+            .expect("truncate rbac_sessions table");
     }
 
     fn sample_row(id: Uuid) -> SessionRow {
