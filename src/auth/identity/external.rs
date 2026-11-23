@@ -80,15 +80,16 @@ impl ExternalIdentity {
                 KirinoError::Validation("external identity subject is empty".into()).into(),
             );
         }
-        // A present-but-blank issuer is refused rather than normalised to an
-        // empty key: an opaque provider must say `None`.
+        // A present-but-blank issuer, or one with no host, is refused rather
+        // than silently taken for an opaque provider: `None` is the spelling.
         if self
             .issuer
             .as_deref()
-            .is_some_and(|issuer| canonical_issuer(issuer).is_empty())
+            .is_some_and(|issuer| canonical_issuer(issuer).is_none())
         {
             return Err(KirinoError::Validation(
-                "external identity issuer is blank (use None for an opaque provider)".into(),
+                "external identity issuer is blank or has no host (use None for an opaque provider)"
+                    .into(),
             )
             .into());
         }
@@ -107,7 +108,7 @@ impl ExternalIdentity {
     pub fn normalised(&self) -> Self {
         Self {
             provider: self.provider.trim().to_owned(),
-            issuer: self.issuer.as_deref().map(canonical_issuer),
+            issuer: self.issuer.as_deref().and_then(canonical_issuer),
             subject: self.subject.trim().to_owned(),
         }
     }
@@ -116,22 +117,44 @@ impl ExternalIdentity {
 /// Canonical spelling of an issuer URL as far as it matters for identity:
 /// trimmed, without trailing slashes, with the scheme and host lower-cased.
 /// The path keeps its case (paths are case-sensitive).
-fn canonical_issuer(raw: &str) -> String {
+///
+/// `None` when nothing identifies an issuer survives: a blank value, or a
+/// scheme with no host. Such a value is refused by
+/// [`ExternalIdentity::validate`]; [`ExternalIdentity::normalised`] also
+/// collapses it to the opaque (`None`) form, so a store that skipped
+/// validation still cannot mint a third key beside `None`.
+fn canonical_issuer(raw: &str) -> Option<String> {
     let trimmed = raw.trim().trim_end_matches('/');
+    if trimmed.is_empty() {
+        return None;
+    }
+    // A bare scheme ("https:" once the slashes are stripped) names no host.
+    if let Some((scheme, "")) = trimmed.split_once(':') {
+        let scheme_like = !scheme.is_empty()
+            && scheme
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '-' | '.'));
+        if scheme_like {
+            return None;
+        }
+    }
     match trimmed.split_once("://") {
         Some((scheme, rest)) => {
             let (host, path) = match rest.find('/') {
                 Some(at) => (&rest[..at], &rest[at..]),
                 None => (rest, ""),
             };
-            format!(
+            if host.is_empty() {
+                return None;
+            }
+            Some(format!(
                 "{}://{}{}",
                 scheme.to_ascii_lowercase(),
                 host.to_ascii_lowercase(),
                 path
-            )
+            ))
         }
-        None => trimmed.to_owned(),
+        None => Some(trimmed.to_owned()),
     }
 }
 
@@ -433,9 +456,10 @@ mod tests {
 
     #[test]
     fn a_blank_issuer_is_refused_not_normalised_to_an_empty_key() {
-        // MUT:blank-issuer — a present-but-blank issuer must not become a third key
-        // beside `None`; an opaque provider has to say `None`.
-        for blank in ["", "   ", "/", "///"] {
+        // MUT:blank-issuer — a present-but-blank issuer (or one with no host) is
+        // refused; an opaque provider has to say `None`. And even without that
+        // check the key collapses to `None`, so no third key can exist.
+        for blank in ["", "   ", "/", "///", "https://", "https:///"] {
             let who = ExternalIdentity {
                 provider: "example-idp".to_owned(),
                 issuer: Some(blank.to_owned()),
@@ -445,6 +469,11 @@ mod tests {
             assert!(
                 refused.to_string().contains("issuer is blank"),
                 "{blank:?}: {refused}"
+            );
+            assert_eq!(
+                who.normalised().issuer,
+                None,
+                "{blank:?} collapses to the opaque form"
             );
         }
         ExternalIdentity::opaque("example-idp", "sub-1")

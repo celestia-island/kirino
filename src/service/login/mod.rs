@@ -734,7 +734,7 @@ where
     // `static_password::ARGON2_*` or the unknown-user path becomes measurably
     // cheaper than the known-user one, restoring the enumeration oracle. Removing
     // the verification would do the same.
-    const DUMMY_HASH: &str =
+    pub(crate) const DUMMY_HASH: &str =
         "$argon2id$v=19$m=19456,t=2,p=1$AAAAAAAAAAAAAAAAAAAAAA$AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
 
     async fn authenticate_user(&self, username: &str, password: &str) -> Result<UserRecord> {
@@ -1734,14 +1734,98 @@ mod tests {
             assert_eq!(claims.session_id, Some(session.id.to_string()));
         }
 
+        #[tokio::test]
+        async fn a_no_password_login_pays_exactly_one_full_verification() {
+            use crate::auth::passport::static_password::verify_probe;
+
+            let auth = make_auth();
+            let user = auth.register("alice", "Password123!", None).await.unwrap();
+            auth.db
+                .update_password(&user.id, NO_LOCAL_PASSWORD)
+                .await
+                .unwrap();
+            let _ = verify_probe::take();
+
+            let refused = auth.login("alice", "Password123!").await.unwrap_err();
+            assert!(
+                matches!(
+                    refused.downcast_ref::<KirinoError>(),
+                    Some(KirinoError::AuthenticationFailed)
+                ),
+                "expected AuthenticationFailed, got {refused}"
+            );
+            // MUT:refusal-pays-the-cost — the refusal must be the outcome of exactly
+            // one verification, and that verification must be against the
+            // full-cost dummy hash. An early return, a skipped verification or a
+            // cheaper hash each break one of the two halves.
+            assert_eq!(
+                verify_probe::take(),
+                vec![Service::DUMMY_HASH.to_owned()],
+                "exactly one verification, against the dummy hash"
+            );
+        }
+
+        #[tokio::test]
+        async fn a_wrong_password_on_a_real_account_is_verified_against_its_own_hash() {
+            use crate::auth::passport::static_password::verify_probe;
+
+            let auth = make_auth();
+            auth.register("alice", "Password123!", None).await.unwrap();
+            let _ = verify_probe::take();
+
+            let refused = auth.login("alice", "wrong-password").await.unwrap_err();
+            assert!(
+                matches!(
+                    refused.downcast_ref::<KirinoError>(),
+                    Some(KirinoError::AuthenticationFailed)
+                ),
+                "expected AuthenticationFailed, got {refused}"
+            );
+            // MUT:real-accounts-keep-their-hash — a real account is verified against
+            // its own stored hash, never against the dummy.
+            let checked = verify_probe::take();
+            assert_eq!(checked.len(), 1, "exactly one verification");
+            assert!(
+                checked[0].starts_with("$argon2id$"),
+                "a real Argon2id hash: {}",
+                checked[0]
+            );
+            assert_ne!(checked[0], Service::DUMMY_HASH);
+        }
+
+        #[tokio::test]
+        async fn a_no_password_change_pays_exactly_one_full_verification() {
+            use crate::auth::passport::static_password::verify_probe;
+
+            let auth = make_auth();
+            let user = auth.register("alice", "Password123!", None).await.unwrap();
+            auth.db
+                .update_password(&user.id, NO_LOCAL_PASSWORD)
+                .await
+                .unwrap();
+            let _ = verify_probe::take();
+
+            let refused = auth
+                .change_password(&user.id.to_string(), "Password123!", "NewPassword456!")
+                .await
+                .unwrap_err();
+            assert!(
+                matches!(
+                    refused.downcast_ref::<KirinoError>(),
+                    Some(KirinoError::AuthenticationFailed)
+                ),
+                "expected AuthenticationFailed, got {refused}"
+            );
+            assert_eq!(verify_probe::take(), vec![Service::DUMMY_HASH.to_owned()]);
+        }
+
         #[test]
         fn no_password_accounts_are_refused_by_the_verification_itself() {
-            // MUT:refusal-is-the-verification — a no-password account must not be
-            // refused by a branch that returns BEFORE a verification: the refusal
-            // has to be the outcome of verifying against the dummy hash, so its
-            // Argon2id cost cannot be deleted separately from the refusal (an
-            // early `return` with a discarded dummy verification was exactly the
-            // shape an earlier review found unpinnable).
+            // A textual companion to the behavioural pins above: it keeps the
+            // two password functions in the "verify, then refuse on the
+            // outcome" shape and rejects the early-return-with-discarded-
+            // verification form an earlier review found. It is NOT the proof
+            // that the cost is paid — the `verify_probe` tests are.
             let here = include_str!("mod.rs");
             for head in [
                 "    async fn authenticate_user(",

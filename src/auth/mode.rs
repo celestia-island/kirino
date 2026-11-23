@@ -33,8 +33,10 @@
 //! [`LoginPolicy`] is what a service serialises at its login-method discovery
 //! endpoint. It is declared here, in Rust, and the TypeScript binding is
 //! generated from it (the optional `ts` feature); hosts extend it by embedding
-//! and adding their own fields, never by editing this shape. `version` is
-//! bumped on any non-additive change.
+//! and adding their own fields, never by editing this shape. Unknown fields
+//! are ignored on deserialisation, so `validate` checks the fields this
+//! version knows — a consumer that received a newer `version` must not trust
+//! the rest of the document. `version` is bumped on any non-additive change.
 
 use serde::{Deserialize, Serialize};
 
@@ -373,8 +375,9 @@ pub enum LoginPolicyViolation {
     /// Two methods share an id, or a method id is empty or padded.
     #[error("method id {0:?} is empty, padded or not unique")]
     MethodId(String),
-    /// A method's label, or a provider entrance's provider id, is blank —
-    /// the panel would render a nameless row.
+    /// A method's label — for every kind, a row must have a visible name —
+    /// or a provider entrance's provider id, is blank: the panel would
+    /// render a nameless row, or the entrance would route nowhere.
     #[error("method {0:?} has a blank label or provider")]
     BlankMethod(String),
     /// A navigation target is not a same-origin absolute path.
