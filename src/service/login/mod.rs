@@ -763,8 +763,13 @@ where
         // An account without a local password (created through an external
         // sign-in) cannot answer a password prompt: refuse it exactly as a
         // wrong password is refused, instead of parsing the sentinel as a
-        // hash — which would surface as an internal error.
+        // hash — which would surface as an internal error. The dummy
+        // verification is the same timing equalisation as the inactive path
+        // above: without it a no-password account would answer measurably
+        // faster than a wrong password on a normal one, and response time
+        // would become an account-shape oracle.
         if !user.has_usable_password() {
+            let _ = verify_password(password, Self::DUMMY_HASH);
             return Err(KirinoError::AuthenticationFailed.into());
         }
 
@@ -1003,6 +1008,14 @@ where
             .find_by_id(&uid)
             .await?
             .ok_or_else(|| KirinoError::NotFound("user not found".to_string()))?;
+
+        // An account with no local password has nothing to check the old
+        // password against: refuse as a failed verification rather than
+        // letting the sentinel surface as a hash-format error.
+        if !user.has_usable_password() {
+            let _ = verify_password(old_password, Self::DUMMY_HASH);
+            return Err(KirinoError::AuthenticationFailed.into());
+        }
 
         if !verify_password(old_password, &user.password_hash)? {
             return Err(KirinoError::AuthenticationFailed.into());
@@ -1671,7 +1684,9 @@ mod tests {
                 .create_user(&UserRecord {
                     id: sleeper_id,
                     username: "sleeper".to_owned(),
-                    password_hash: NO_LOCAL_PASSWORD.to_owned(),
+                    // A real hash, so the inactive account is refused for being
+                    // inactive — not for lacking a password.
+                    password_hash: hash_password("Password123!").expect("hash"),
                     display_name: None,
                     is_active: false,
                     identity: crate::models::identity::Identity::Basic {
@@ -1716,6 +1731,39 @@ mod tests {
             assert_eq!(result.login.session_id, Some(session.id));
             let claims = auth.verify_token(&result.login.token).await.unwrap();
             assert_eq!(claims.session_id, Some(session.id.to_string()));
+        }
+
+        #[tokio::test]
+        async fn test_account_without_a_local_password_cannot_change_a_password() {
+            let auth = make_auth();
+            let user = auth.register("alice", "Password123!", None).await.unwrap();
+            auth.db
+                .update_password(&user.id, NO_LOCAL_PASSWORD)
+                .await
+                .unwrap();
+
+            // MUT:sentinel-change-refused-cleanly — the credential-change path must
+            // refuse a no-password account as a failed verification, not as an
+            // internal hash-format error.
+            let refused = auth
+                .change_password(&user.id.to_string(), "Password123!", "NewPassword456!")
+                .await
+                .unwrap_err();
+            assert!(
+                matches!(
+                    refused.downcast_ref::<KirinoError>(),
+                    Some(KirinoError::AuthenticationFailed)
+                ),
+                "expected AuthenticationFailed, got {refused}"
+            );
+            // The stored sentinel is untouched.
+            assert!(!auth
+                .db
+                .find_by_id(&user.id)
+                .await
+                .unwrap()
+                .unwrap()
+                .has_usable_password());
         }
 
         #[tokio::test]

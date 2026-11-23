@@ -43,6 +43,31 @@ jobs:
           git diff --exit-code --stat -- packages/web_ts/src/generated
           test -z "$(git ls-files --others --exclude-standard -- packages/web_ts/src/generated)"
 
+  web_ts:
+    name: Check the TypeScript package
+    runs-on: [self-hosted, linux, x64, local]
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "24"
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v6
+        with:
+          version: 11
+      # The contract test under tests/ is only evidence if something runs it:
+      # typecheck (tests included), vitest, then the publish build (which must
+      # not ship test files).
+      - name: Typecheck, test, build
+        run: |
+          cd packages/web_ts
+          pnpm install --frozen-lockfile
+          pnpm run typecheck
+          pnpm test
+          pnpm run build
+          test -z "$(find dist -name '*.test.*')"
+
   verify-versions:
     name: Verify version consistency
     uses: celestia-island/celestia-devtools/.github/workflows/verify-versions.yml@c45f1881e00cb55d0a2a1fcf57b28734ece119bb

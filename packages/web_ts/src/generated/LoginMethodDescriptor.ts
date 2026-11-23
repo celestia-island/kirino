@@ -28,7 +28,9 @@ label: string,
  * path** (`/api/auth/oauth/github`), never an external URL — the
  * navigation target is validated by [`LoginPolicy::validate`] so a
  * tampered or misconfigured row cannot turn the login panel into an
- * open redirect.
+ * open redirect. Consumers use it as a **navigation** target
+ * (`location.href`, an `<a href>`); it is never a fetch or
+ * `Request` URL, whose base-URL rules differ.
  */
 href: string, 
 /**

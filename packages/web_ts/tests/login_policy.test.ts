@@ -36,7 +36,9 @@ const relay: LoginPolicy = {
 describe("login policy contract (generated)", () => {
   it("names the three modes and four auth methods", () => {
     expectTypeOf<AuthMode>().toEqualTypeOf<"local" | "federated" | "relay">();
-    expectTypeOf<AuthMethod["length"]>().toBeNumber();
+    expectTypeOf<AuthMethod>().toEqualTypeOf<
+      "password" | { oauth: { provider: string } } | "relay" | "passkey"
+    >();
   });
 
   it("accepts the three canonical documents", () => {

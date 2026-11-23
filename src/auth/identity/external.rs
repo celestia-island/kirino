@@ -82,6 +82,45 @@ impl ExternalIdentity {
         }
         Ok(())
     }
+
+    /// The canonical form every join key is built from.
+    ///
+    /// Trims `provider` and `subject`, and canonicalises `issuer` (trimmed,
+    /// trailing slashes removed, scheme and host lower-cased). Two identities
+    /// that differ only by such spelling are the **same** identity — without
+    /// this, `" idp "` and `"idp"` would be two keys and two accounts could
+    /// each own "the same" external identity. Every
+    /// [`ExternalIdentityStore`] keys on this form.
+    #[must_use]
+    pub fn normalised(&self) -> Self {
+        Self {
+            provider: self.provider.trim().to_owned(),
+            issuer: self.issuer.as_deref().map(canonical_issuer),
+            subject: self.subject.trim().to_owned(),
+        }
+    }
+}
+
+/// Canonical spelling of an issuer URL as far as it matters for identity:
+/// trimmed, without trailing slashes, with the scheme and host lower-cased.
+/// The path keeps its case (paths are case-sensitive).
+fn canonical_issuer(raw: &str) -> String {
+    let trimmed = raw.trim().trim_end_matches('/');
+    match trimmed.split_once("://") {
+        Some((scheme, rest)) => {
+            let (host, path) = match rest.find('/') {
+                Some(at) => (&rest[..at], &rest[at..]),
+                None => (rest, ""),
+            };
+            format!(
+                "{}://{}{}",
+                scheme.to_ascii_lowercase(),
+                host.to_ascii_lowercase(),
+                path
+            )
+        }
+        None => trimmed.to_owned(),
+    }
 }
 
 /// A stored link between an external identity and a local account.
@@ -108,7 +147,10 @@ pub enum LinkOutcome {
 ///
 /// Implementations must make `link` atomic with respect to the identity key:
 /// two concurrent links of the same identity to different accounts must yield
-/// exactly one [`LinkOutcome::Linked`] and one conflict.
+/// exactly one [`LinkOutcome::Linked`] and one conflict. The key is always
+/// [`ExternalIdentity::normalised`], so spellings that differ only by
+/// surrounding whitespace, a trailing slash or the case of the issuer's
+/// scheme/host refer to one identity.
 #[async_trait]
 pub trait ExternalIdentityStore: Send + Sync {
     /// The local account an external identity is linked to, if any.
@@ -148,16 +190,17 @@ impl InMemoryExternalIdentityStore {
 #[async_trait]
 impl ExternalIdentityStore for InMemoryExternalIdentityStore {
     async fn find_user(&self, identity: &ExternalIdentity) -> Result<Option<LinkedAccount>> {
-        Ok(self.links.read().await.get(identity).cloned())
+        Ok(self.links.read().await.get(&identity.normalised()).cloned())
     }
 
     async fn link(&self, identity: &ExternalIdentity, user_id: Uuid) -> Result<LinkOutcome> {
         identity.validate()?;
+        let key = identity.normalised();
         // One write lock spans the lookup and the insert: the conflict check and
         // the link are a single step, so two concurrent links of one identity to
         // two accounts cannot both succeed.
         let mut links = self.links.write().await;
-        if let Some(existing) = links.get(identity) {
+        if let Some(existing) = links.get(&key) {
             if existing.user_id == user_id {
                 return Ok(LinkOutcome::AlreadyLinked);
             }
@@ -168,9 +211,9 @@ impl ExternalIdentityStore for InMemoryExternalIdentityStore {
             .into());
         }
         links.insert(
-            identity.clone(),
+            key.clone(),
             LinkedAccount {
-                identity: identity.clone(),
+                identity: key,
                 user_id,
                 created_at: Utc::now(),
                 last_login_at: None,
@@ -181,13 +224,11 @@ impl ExternalIdentityStore for InMemoryExternalIdentityStore {
 
     async fn unlink(&self, identity: &ExternalIdentity, user_id: Uuid) -> Result<bool> {
         let mut links = self.links.write().await;
+        let key = identity.normalised();
         // Only the owner may remove a link: a non-owner's call must leave the
         // link in place, so the owner check precedes the removal.
-        if links
-            .get(identity)
-            .is_some_and(|link| link.user_id == user_id)
-        {
-            links.remove(identity);
+        if links.get(&key).is_some_and(|link| link.user_id == user_id) {
+            links.remove(&key);
             Ok(true)
         } else {
             Ok(false)
@@ -203,14 +244,22 @@ impl ExternalIdentityStore for InMemoryExternalIdentityStore {
             .filter(|link| link.user_id == user_id)
             .cloned()
             .collect();
-        // Stable order for callers that show the list: oldest link first.
-        found.sort_by_key(|link| link.created_at);
+        // Stable order for callers that show the list: oldest link first, with
+        // the key as the tie-breaker so links created within the same
+        // timestamp still come out in a reproducible order.
+        found.sort_by(|a, b| {
+            (a.created_at, &a.identity.provider, &a.identity.subject).cmp(&(
+                b.created_at,
+                &b.identity.provider,
+                &b.identity.subject,
+            ))
+        });
         Ok(found)
     }
 
     async fn record_login(&self, identity: &ExternalIdentity) -> Result<()> {
         let mut links = self.links.write().await;
-        if let Some(link) = links.get_mut(identity) {
+        if let Some(link) = links.get_mut(&identity.normalised()) {
             link.last_login_at = Some(Utc::now());
         }
         Ok(())
@@ -274,8 +323,8 @@ mod tests {
             issuer: Some("https://idp.example".to_owned()),
             subject: "s".to_owned(),
         };
-        // MUT:subject-key — the email-looking display text is not part of the key,
-        // the subject is; two subjects stay two identities under one provider.
+        // MUT:issuer-discriminates — the issuer is part of the key: `find_user(&issued)`
+        // below must return the issued form, and `opaque` must stay a different identity.
         let other_subject = identity("example-idp", "sub-2");
         for who in [&opaque, &issued, &other_subject] {
             store.link(who, user).await.expect("link");
@@ -309,6 +358,65 @@ mod tests {
             );
         }
         assert!(store.list_for_user(user).await.expect("list").is_empty());
+    }
+
+    #[tokio::test]
+    async fn spellings_that_differ_only_by_padding_or_issuer_case_are_one_identity() {
+        // MUT:normalised-key — without normalisation these are three keys and three
+        // accounts could each own "the same" identity; they must collapse to one.
+        let store = InMemoryExternalIdentityStore::new();
+        let (a, b, c) = (Uuid::new_v4(), Uuid::new_v4(), Uuid::new_v4());
+        let padded = ExternalIdentity {
+            provider: " example-idp ".to_owned(),
+            issuer: Some(" HTTPS://IDP.Example/tenants/A/ ".to_owned()),
+            subject: " sub-1\t".to_owned(),
+        };
+        let slash = ExternalIdentity {
+            provider: "example-idp".to_owned(),
+            issuer: Some("https://idp.example/tenants/A//".to_owned()),
+            subject: "sub-1".to_owned(),
+        };
+        let lower = ExternalIdentity {
+            provider: "example-idp".to_owned(),
+            issuer: Some("https://idp.example/tenants/A".to_owned()),
+            subject: "sub-1".to_owned(),
+        };
+
+        store.link(&padded, a).await.expect("first link");
+        assert!(store
+            .link(&slash, b)
+            .await
+            .expect_err("second owner is refused")
+            .to_string()
+            .contains("already linked"));
+        assert!(store
+            .link(&lower, c)
+            .await
+            .expect_err("third owner is refused")
+            .to_string()
+            .contains("already linked"));
+        let stored = store
+            .find_user(&lower)
+            .await
+            .expect("lookup")
+            .expect("linked");
+        assert_eq!(stored.user_id, a, "the first owner keeps the identity");
+        assert_eq!(
+            stored.identity, lower,
+            "the stored key is the canonical spelling"
+        );
+        assert_eq!(store.list_for_user(a).await.expect("list").len(), 1);
+
+        // The issuer still discriminates: a different tenant is a different identity.
+        let other_tenant = ExternalIdentity {
+            issuer: Some("https://idp.example/tenants/B".to_owned()),
+            ..lower.clone()
+        };
+        store
+            .link(&other_tenant, b)
+            .await
+            .expect("another tenant is another identity");
+        assert_eq!(store.list_for_user(b).await.expect("list").len(), 1);
     }
 
     #[tokio::test]

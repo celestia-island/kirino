@@ -52,6 +52,14 @@ jobs:
             v="${GITHUB_REF_NAME#v}"
           fi
           echo "version=$v" >> "$GITHUB_OUTPUT"
+      - name: The tag must name the crate's version
+        # This lane publishes whatever the `v*` tag says. A tag that does not
+        # match the workspace version would put a number on npm that the
+        # Cargo manifest and `.versions.toml` never declared.
+        run: |
+          v="${{ steps.ver.outputs.version }}"
+          grep -Eq "^version = \"${v}\"" Cargo.toml || {
+            echo "::error::tag v${v} does not match the crate version in Cargo.toml"; exit 1; }
       - name: Check whether this version is already on npm
         id: exists
         run: |

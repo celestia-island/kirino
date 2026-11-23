@@ -96,11 +96,18 @@ impl AuthMode {
 
     /// Whether the local password method is offered under this mode.
     ///
-    /// `Relay` refuses it structurally — there is no login page to offer it
-    /// on. `Local` and `Federated` leave the choice to the deployment, so the
-    /// projection is the permissive `Enabled`; a `Federated` deployment that
-    /// wants third-party sign-in only layers
-    /// [`PasswordLoginPolicy::Disabled`] on top.
+    /// `Relay` refuses it — there is no login page to offer it on. `Local`
+    /// and `Federated` leave the choice to the deployment, so the projection
+    /// is the permissive `Enabled`; a `Federated` deployment that wants
+    /// third-party sign-in only layers [`PasswordLoginPolicy::Disabled`] on
+    /// top.
+    ///
+    /// The projection is a value for the host to **apply** (through
+    /// `AuthService::with_password_login_policy`); that is what makes the
+    /// refusal precede any credential lookup. Accounts of a relay deployment
+    /// additionally carry the no-local-password sentinel, which refuses a
+    /// password sign-in even on a host that forgot to apply the policy —
+    /// defence in depth, not the primary gate.
     #[must_use]
     pub fn password_login_policy(self) -> PasswordLoginPolicy {
         match self {
@@ -213,7 +220,9 @@ pub enum LoginMethodDescriptor {
         /// path** (`/api/auth/oauth/github`), never an external URL — the
         /// navigation target is validated by [`LoginPolicy::validate`] so a
         /// tampered or misconfigured row cannot turn the login panel into an
-        /// open redirect.
+        /// open redirect. Consumers use it as a **navigation** target
+        /// (`location.href`, an `<a href>`); it is never a fetch or
+        /// `Request` URL, whose base-URL rules differ.
         href: String,
         /// The host's provider id.
         provider: String,
@@ -350,9 +359,14 @@ pub enum LoginPolicyViolation {
     /// `Relay` mode without a relay directive — the UI would have nowhere to go.
     #[error("relay mode without a relay directive")]
     RelayWithoutDirective,
-    /// `password` disagrees with what the mode allows.
+    /// `password` is offered in relay mode — a deployment with no login
+    /// page cannot offer a password card.
     #[error("password is offered in relay mode")]
     PasswordInRelayMode,
+    /// `password` is withheld in local mode — with no provider either, the
+    /// deployment would have no way at all to sign in.
+    #[error("local mode offers neither a password nor a provider")]
+    PasswordMissingInLocalMode,
     /// `Local` mode advertising a provider, or `Federated` advertising none.
     #[error("mode {0} disagrees with the provider methods (found {1})")]
     ProviderCount(AuthMode, usize),
@@ -401,7 +415,9 @@ impl LoginPolicy {
     ///
     /// * `version` is the current one;
     /// * the relay directive is present exactly in `Relay` mode;
-    /// * `Relay` offers no password;
+    /// * `Relay` offers no password, and `Local` offers one (a `Local`
+    ///   deployment with no password and no provider would have no way at
+    ///   all to sign in; `Federated` leaves the choice to the deployment);
     /// * `Local` and `Relay` list no provider and `Federated` lists at least
     ///   one (the designated source is the only provider entrance in relay
     ///   mode);
@@ -410,6 +426,10 @@ impl LoginPolicy {
     ///   is a same-origin absolute path (starts with a single `/`), never an
     ///   external or scheme-relative URL;
     /// * the relay return parameter is non-empty.
+    ///
+    /// The checks run in the order listed and the **first** violation is the
+    /// one reported, so a host can rely on which invariant a given repair
+    /// addresses.
     ///
     /// # Errors
     ///
@@ -429,8 +449,14 @@ impl LoginPolicy {
             (mode, Some(_)) => return Err(LoginPolicyViolation::RelayOutsideRelayMode(mode)),
             (_, None) => {}
         }
-        if self.mode.is_relay() && self.password {
-            return Err(LoginPolicyViolation::PasswordInRelayMode);
+        match self.mode {
+            AuthMode::Relay if self.password => {
+                return Err(LoginPolicyViolation::PasswordInRelayMode);
+            }
+            AuthMode::Local if !self.password => {
+                return Err(LoginPolicyViolation::PasswordMissingInLocalMode);
+            }
+            _ => {}
         }
         let providers = self
             .methods
@@ -834,6 +860,65 @@ mod tests {
         policy
             .validate()
             .expect("non-provider entrances are allowed in relay mode");
+    }
+
+    #[test]
+    fn a_local_deployment_must_offer_its_password() {
+        // MUT:local-needs-password — no password and no provider is a deployment
+        // nobody can sign in to; the document must not validate.
+        let mut policy = LoginPolicy::local();
+        policy.password = false;
+        assert_eq!(
+            policy.validate(),
+            Err(LoginPolicyViolation::PasswordMissingInLocalMode)
+        );
+        // Passkey and custom entrances do not substitute for the password card.
+        policy.methods.push(passkey());
+        assert_eq!(
+            policy.validate(),
+            Err(LoginPolicyViolation::PasswordMissingInLocalMode)
+        );
+        // A federated deployment MAY withhold the password (third-party only).
+        let third_party_only = LoginPolicy {
+            password: false,
+            ..federated(vec![oauth("example-idp")])
+        };
+        third_party_only
+            .validate()
+            .expect("federated without password is consistent");
+    }
+
+    #[test]
+    fn validate_reports_the_first_violation_in_document_order() {
+        // Document order: relay pair → password ↔ mode → provider count → ids → hrefs.
+        let mut policy = LoginPolicy::relay("/x", "r");
+        policy.password = true;
+        policy.methods = vec![oauth("example-idp")];
+        assert_eq!(
+            policy.validate(),
+            Err(LoginPolicyViolation::PasswordInRelayMode)
+        );
+
+        let mut policy = LoginPolicy::local();
+        policy.password = false;
+        policy.methods = vec![oauth("example-idp")];
+        assert_eq!(
+            policy.validate(),
+            Err(LoginPolicyViolation::PasswordMissingInLocalMode)
+        );
+
+        let policy = federated(vec![oauth("")]);
+        let policy = LoginPolicy {
+            methods: policy.methods.clone(),
+            ..policy
+        };
+        let mut policy = policy;
+        policy.methods[0] = LoginMethodDescriptor::oauth("", "https://evil.example", "x");
+        assert_eq!(
+            policy.validate(),
+            Err(LoginPolicyViolation::MethodId(String::new())),
+            "ids are checked before hrefs"
+        );
     }
 
     #[test]
