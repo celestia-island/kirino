@@ -524,7 +524,15 @@ impl LoginPolicy {
 /// and anything without the leading slash is relative to the current page —
 /// neither is a target the login panel was configured with.
 fn check_same_origin_path(what: &'static str, raw: &str) -> Result<(), LoginPolicyViolation> {
-    let same_origin = raw.starts_with('/') && !raw.starts_with("//") && raw != "/";
+    // A backslash is refused like a second slash (browsers normalise `\\` to
+    // `/`, so `/\\evil` would leave the origin), and so are control characters
+    // and the Unicode line separators: the target ends up in a `Location`.
+    let same_origin = raw.starts_with('/')
+        && !raw.starts_with("//")
+        && raw != "/"
+        && !raw
+            .chars()
+            .any(|c| c == '\\' || c.is_control() || matches!(c, '\u{2028}' | '\u{2029}'));
     if same_origin {
         Ok(())
     } else {
@@ -915,6 +923,20 @@ mod tests {
         // A path with a query and a fragment is still a same-origin path.
         let policy = LoginPolicy::relay("/api/auth/relay?x=1#f".to_owned(), "r".to_owned());
         policy.validate().expect("query and fragment are fine");
+        // MUT:no-backslash — browsers turn `/\host` into `//host`; a control
+        // character would end up in a `Location` header.
+        for bad in ["/\\evil.example", "/\nevil", "/\u{2028}x"] {
+            let mut policy = LoginPolicy::relay("/ok".to_owned(), "r".to_owned());
+            policy.relay.as_mut().expect("directive").entry = bad.to_owned();
+            assert_eq!(
+                policy.validate(),
+                Err(LoginPolicyViolation::NotSameOriginPath(
+                    "relay entry",
+                    bad.to_owned()
+                )),
+                "{bad:?} must be refused"
+            );
+        }
     }
 
     #[test]

@@ -182,8 +182,18 @@ pub fn safe_return_path(raw: &str, allowed_origins: &[String]) -> Option<String>
     }
     if let Some(path) = raw.strip_prefix('/') {
         // A single leading slash is a same-origin path; `//host` is
-        // scheme-relative and names a foreign origin.
+        // scheme-relative and names a foreign origin. A backslash is refused
+        // too: browsers normalise a backslash to `/` in URLs, so a path that
+        // starts `/` + backslash + host would be followed as `//host`. Control characters and the
+        // Unicode line separators are refused as well: the value ends up in
+        // a `Location` header.
         if path.is_empty() || path.starts_with('/') {
+            return None;
+        }
+        if raw
+            .chars()
+            .any(|c| c == '\\' || c.is_control() || matches!(c, '\u{2028}' | '\u{2029}'))
+        {
             return None;
         }
         return Some(raw.to_owned());
@@ -234,7 +244,11 @@ impl RelayConfig {
                 .map(|raw| raw.trim().to_owned())
                 .filter(|raw| !raw.is_empty())
         };
-        if RELAY_ENV_VARS.iter().all(|name| value(name).is_none()) {
+        // Fail closed on *presence*, not on content: a relay variable that is
+        // set but blank means "relay was intended", never "no relay" — a
+        // template that sets only a secret must not start up as a local
+        // deployment. (MUT:presence-not-content)
+        if RELAY_ENV_VARS.iter().all(|name| read(name).is_none()) {
             return Ok(None);
         }
         let issuer = value(RELAY_ISSUER_ENV)
@@ -301,7 +315,10 @@ impl RelayConfig {
                         entry.to_owned(),
                     ));
                 }
-                allowed_return_origins.push(origin_of(&parsed));
+                let origin = origin_of(&parsed);
+                if !allowed_return_origins.contains(&origin) {
+                    allowed_return_origins.push(origin);
+                }
             }
         }
         if allowed_return_origins.is_empty() {
@@ -391,6 +408,7 @@ impl RelayConfig {
     pub fn provider_metadata(&self) -> Option<crate::auth::passport::oauth::ProviderMetadata> {
         use crate::auth::passport::oauth::{ProviderMetadata, TokenBody};
         Some(ProviderMetadata {
+            provider: self.provider_id(),
             issuer: Some(self.issuer.to_string().trim_end_matches('/').to_owned()),
             authorize_url: self.authorize_url.clone()?,
             token_url: self.token_url.clone()?,
@@ -398,6 +416,15 @@ impl RelayConfig {
             token_body: TokenBody::Form,
             scopes: self.scopes.clone(),
         })
+    }
+
+    /// The provider id recorded on relay identities: the issuer host.
+    #[must_use]
+    pub fn provider_id(&self) -> String {
+        self.issuer
+            .host_str()
+            .map(str::to_owned)
+            .unwrap_or_else(|| self.issuer.to_string())
     }
 
     /// How this service authenticates at the token endpoint.
@@ -660,6 +687,26 @@ mod tests {
     }
 
     #[test]
+    fn a_present_but_blank_relay_variable_still_means_relay() {
+        // MUT:presence-not-content — a blank secret in a template must not read
+        // as "no relay": the rest of the set is then missing and named.
+        let env = [(RELAY_CLIENT_SECRET_ENV, "   ".to_owned())]
+            .into_iter()
+            .collect();
+        assert!(matches!(
+            RelayConfig::from_env_with(read(&env)).unwrap_err(),
+            RelayConfigError::Missing(RELAY_ISSUER_ENV)
+        ));
+        let env = [(RELAY_BREAK_GLASS_ENV, String::new())]
+            .into_iter()
+            .collect();
+        assert!(matches!(
+            mode_from_env_with(read(&env)).unwrap_err(),
+            RelayConfigError::Missing(RELAY_ISSUER_ENV)
+        ));
+    }
+
+    #[test]
     fn return_addresses_are_same_origin_or_allow_listed() {
         let allowed = ["https://app.example".to_owned()];
         for (raw, expected) in [
@@ -672,6 +719,11 @@ mod tests {
             ("", None),
             ("inbox", None),
             ("https://app.example/", None),
+            // MUT:no-backslash — browsers turn `/\host` into `//host`.
+            ("/\\evil.example/x", None),
+            ("/\nevil", None),
+            ("/\u{2028}inbox", None),
+            ("/in\u{007f}box", None),
         ] {
             assert_eq!(
                 safe_return_path(raw, &allowed).as_deref(),

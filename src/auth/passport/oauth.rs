@@ -22,6 +22,13 @@
 //! * **`state` is one-time and server-side.** [`LoginAttemptStore::take`]
 //!   hands an attempt out exactly once and never an expired one, which is
 //!   what turns a replayed callback into [`CallbackProblem::UnknownState`].
+//! * **Login CSRF is the host's to close, with help from here.** A one-time
+//!   `state` binds the callback to an *attempt*, not to a *browser*: an
+//!   attacker who starts an attempt and lures the victim through it would
+//!   log the victim into the attacker's account. The host must therefore
+//!   bind the attempt to the browser — start with [`begin_with_binding`],
+//!   store the binding in an httpOnly cookie, and present it to [`finish`];
+//!   a mismatch is [`CallbackProblem::BindingMismatch`].
 //! * **The subject is the identity.** Whatever else the provider says, the
 //!   account is keyed by its stable subject — never by an email address.
 //! * **Nothing is logged.** Codes, verifiers and tokens never reach a log
@@ -158,6 +165,9 @@ pub struct LoginAttempt {
     pub return_to: Option<String>,
     /// OIDC `nonce` bound into the ID token when the host asked for one.
     pub nonce: Option<String>,
+    /// A host-chosen value that must come back from the same browser at
+    /// callback time (see the module docs on login CSRF); `None` = unbound.
+    pub browser_binding: Option<String>,
     pub created_at: DateTime<Utc>,
     pub expires_at: DateTime<Utc>,
 }
@@ -253,8 +263,12 @@ pub enum TokenBody {
 /// Where a provider's endpoints are and how it speaks.
 #[derive(Debug, Clone)]
 pub struct ProviderMetadata {
-    /// The provider's issuer, when it is URL-addressed; recorded on the
-    /// identity when the provider's answer carries no `iss`.
+    /// The host's provider id this metadata belongs to; an attempt started
+    /// for another provider is refused (`CallbackProblem::ProviderMismatch`).
+    pub provider: String,
+    /// The provider's issuer, when it is URL-addressed; required when the
+    /// identity comes from an ID token (it is the token's expected `iss`);
+    /// recorded on the identity when the provider's answer carries no `iss`.
     pub issuer: Option<String>,
     /// Authorization endpoint the browser is sent to.
     pub authorize_url: Url,
@@ -360,8 +374,15 @@ pub enum CallbackProblem {
     /// The state is unknown: never issued, already spent, or expired.
     #[error("unknown or already used state")]
     UnknownState,
-    /// The token endpoint answered without an access token.
-    #[error("token endpoint returned no access token")]
+    /// The browser that came back is not the one that started the attempt.
+    #[error("the callback did not come from the browser that started the sign-in")]
+    BindingMismatch,
+    /// The attempt was started for a different provider than the one whose
+    /// metadata was handed to `finish`.
+    #[error("the attempt belongs to another provider")]
+    ProviderMismatch,
+    /// The token endpoint's answer was unusable; the string says why.
+    #[error("token endpoint answer rejected: {0}")]
     TokenInvalid(String),
     /// The identity answer carried no usable subject.
     #[error("provider returned an empty identity")]
@@ -431,10 +452,16 @@ pub struct ProviderIdentity {
 pub fn subject_from_userinfo(claims: &serde_json::Value) -> Option<String> {
     ["sub", "id", "open_id", "openid_id"]
         .iter()
-        .filter_map(|key| claims.get(key).and_then(serde_json::Value::as_str))
-        .map(str::trim)
-        .find(|subject| !subject.is_empty())
-        .map(str::to_owned)
+        .filter_map(|key| claims.get(key))
+        .find_map(|value| match value {
+            // Some providers number their subjects; the digits are the id.
+            serde_json::Value::String(text) => {
+                let text = text.trim();
+                (!text.is_empty()).then(|| text.to_owned())
+            }
+            serde_json::Value::Number(number) => Some(number.to_string()),
+            _ => None,
+        })
 }
 
 fn claim_str(claims: &serde_json::Value, key: &str) -> Option<String> {
@@ -451,7 +478,10 @@ fn identity_from_claims(
     fallback_issuer: Option<&str>,
 ) -> Result<ProviderIdentity, CallbackProblem> {
     let subject = subject_from_userinfo(claims).ok_or(CallbackProblem::IdentityEmpty)?;
-    let issuer = claim_str(claims, "iss").or_else(|| fallback_issuer.map(str::to_owned));
+    // A blank `iss` is no issuer at all: fall back to the metadata's.
+    let issuer = claim_str(claims, "iss")
+        .or_else(|| fallback_issuer.map(str::to_owned))
+        .filter(|issuer| !issuer.trim().is_empty());
     let display_name = claim_str(claims, "name")
         .or_else(|| claim_str(claims, "display_name"))
         .or_else(|| claim_str(claims, "nickname"));
@@ -472,13 +502,16 @@ fn identity_from_claims(
 ///
 /// There is no JWKS fetch here (no sockets); a host that wants key rotation
 /// resolves the keys itself and hands them in. `alg: none` and every
-/// algorithm outside the allow-list are refused by construction.
+/// algorithm outside the allow-list are refused by construction. Issuer and
+/// audience are **required**: an ID token is only meaningful for the party
+/// it was issued to. A `nonce`, when one is expected, must be present in the
+/// token as a string and equal — a token that omits it is refused.
 #[derive(Clone)]
 pub struct IdTokenVerifier {
     decoding_keys: Vec<jsonwebtoken::DecodingKey>,
     algorithms: Vec<jsonwebtoken::Algorithm>,
-    issuer: Option<String>,
-    audience: Option<String>,
+    issuer: String,
+    audience: String,
 }
 
 impl std::fmt::Debug for IdTokenVerifier {
@@ -493,12 +526,13 @@ impl std::fmt::Debug for IdTokenVerifier {
 }
 
 impl IdTokenVerifier {
-    /// Accept tokens signed by any of `keys` with RS256, ES256 or EdDSA.
+    /// Accept tokens signed by any of `keys` with RS256, ES256 or EdDSA,
+    /// issued by `issuer` for `audience`.
     #[must_use]
     pub fn new(
         keys: Vec<jsonwebtoken::DecodingKey>,
-        issuer: Option<String>,
-        audience: Option<String>,
+        issuer: impl Into<String>,
+        audience: impl Into<String>,
     ) -> Self {
         Self {
             decoding_keys: keys,
@@ -507,8 +541,8 @@ impl IdTokenVerifier {
                 jsonwebtoken::Algorithm::ES256,
                 jsonwebtoken::Algorithm::EdDSA,
             ],
-            issuer,
-            audience,
+            issuer: issuer.into(),
+            audience: audience.into(),
         }
     }
 
@@ -538,24 +572,16 @@ impl IdTokenVerifier {
                 let mut validation = jsonwebtoken::Validation::new(*algorithm);
                 validation.validate_exp = true;
                 validation.leeway = 60;
-                if let Some(issuer) = &self.issuer {
-                    validation.set_issuer(&[issuer]);
-                } else {
-                    validation.validate_aud = false;
-                }
-                if let Some(audience) = &self.audience {
-                    validation.set_audience(&[audience]);
-                } else {
-                    validation.validate_aud = false;
-                }
+                validation.set_issuer(&[&self.issuer]);
+                validation.set_audience(&[&self.audience]);
                 match jsonwebtoken::decode::<serde_json::Value>(id_token, key, &validation) {
                     Ok(data) => {
-                        if let (Some(expected), Some(claimed)) = (
-                            nonce,
-                            data.claims.get("nonce").and_then(serde_json::Value::as_str),
-                        ) {
-                            if expected != claimed {
-                                return Err(refuse("nonce mismatch"));
+                        // MUT:nonce-must-be-present — an expected nonce that the
+                        // token omits (or carries as a non-string) is a refusal.
+                        if let Some(expected) = nonce {
+                            match data.claims.get("nonce").and_then(serde_json::Value::as_str) {
+                                Some(claimed) if claimed == expected => {}
+                                _ => return Err(refuse("nonce mismatch")),
                             }
                         }
                         return Ok(data.claims);
@@ -565,6 +591,31 @@ impl IdTokenVerifier {
             }
         }
         Err(refuse(&last))
+    }
+}
+
+/// What the callback handler presents: the provider's query, the browser
+/// binding (when the host bound the attempt) and the ID-token keys.
+#[derive(Debug, Clone, Copy)]
+pub struct Callback<'a> {
+    pub query: &'a CallbackQuery,
+    pub browser_binding: Option<&'a str>,
+    pub id_token_keys: &'a [jsonwebtoken::DecodingKey],
+}
+
+impl<'a> Callback<'a> {
+    /// Bundle what [`finish`] needs from the callback request.
+    #[must_use]
+    pub fn new(
+        query: &'a CallbackQuery,
+        browser_binding: Option<&'a str>,
+        id_token_keys: &'a [jsonwebtoken::DecodingKey],
+    ) -> Self {
+        Self {
+            query,
+            browser_binding,
+            id_token_keys,
+        }
     }
 }
 
@@ -581,6 +632,9 @@ pub struct RelayLogin {
 
 /// Start an authorization request: mint `state` + PKCE and park the attempt.
 ///
+/// Unbound — see the module docs for when a host must use
+/// [`begin_with_binding`] instead.
+///
 /// # Errors
 ///
 /// Whatever the store reports.
@@ -590,6 +644,23 @@ pub async fn begin(
     return_to: Option<String>,
     ttl: Duration,
 ) -> Result<LoginAttempt> {
+    begin_with_binding(store, provider, return_to, None, ttl).await
+}
+
+/// [`begin`] with the attempt bound to the browser: `browser_binding` is a
+/// value the host also stores in an httpOnly cookie and presents to
+/// [`finish`] — the login-CSRF defence described in the module docs.
+///
+/// # Errors
+///
+/// Whatever the store reports.
+pub async fn begin_with_binding(
+    store: &dyn LoginAttemptStore,
+    provider: impl Into<String>,
+    return_to: Option<String>,
+    browser_binding: Option<String>,
+    ttl: Duration,
+) -> Result<LoginAttempt> {
     let now = Utc::now();
     let attempt = LoginAttempt {
         state: random_token(24),
@@ -597,6 +668,7 @@ pub async fn begin(
         pkce: Pkce::generate(),
         return_to,
         nonce: Some(random_token(16)),
+        browser_binding: browser_binding.filter(|binding| !binding.is_empty()),
         created_at: now,
         expires_at: now + ttl,
     };
@@ -620,9 +692,13 @@ pub async fn finish(
     meta: &ProviderMetadata,
     client: &ClientAuth,
     redirect_uri: &Url,
-    query: &CallbackQuery,
-    id_token_keys: &[jsonwebtoken::DecodingKey],
+    callback: Callback<'_>,
 ) -> Result<RelayLogin, CallbackProblem> {
+    let Callback {
+        query,
+        browser_binding,
+        id_token_keys,
+    } = callback;
     if let Some(error) = &query.error {
         return Err(CallbackProblem::ProviderDenied {
             error: error.clone(),
@@ -639,6 +715,19 @@ pub async fn finish(
         .await
         .map_err(|error| CallbackProblem::Transport(error.to_string()))?
         .ok_or(CallbackProblem::UnknownState)?;
+    // The browser that comes back must be the one that started the attempt
+    // (when the host bound it), and the metadata must belong to the provider
+    // the attempt was started for — an attempt for one provider can never be
+    // finished with another's endpoints.
+    // MUT:browser-binding — a bound attempt presented from another browser is refused.
+    if let Some(expected) = &attempt.browser_binding {
+        if browser_binding != Some(expected.as_str()) {
+            return Err(CallbackProblem::BindingMismatch);
+        }
+    }
+    if attempt.provider != meta.provider {
+        return Err(CallbackProblem::ProviderMismatch);
+    }
 
     // The token request: the code, the redirect it was issued for, and the
     // PKCE verifier the authorization request promised. A public client has
@@ -678,11 +767,17 @@ pub async fn finish(
         }
     };
     let token: TokenResponse = serde_json::from_value(token_answer)
-        .map_err(|error| CallbackProblem::TokenInvalid(error.to_string()))?;
+        .map_err(|error| CallbackProblem::TokenInvalid(format!("unreadable answer: {error}")))?;
     if token.access_token.trim().is_empty() {
-        return Err(CallbackProblem::TokenInvalid(
-            "empty access token".to_owned(),
-        ));
+        return Err(CallbackProblem::TokenInvalid("no access token".to_owned()));
+    }
+    // RFC 6749 §7.1: only bearer tokens are usable with `Authorization`.
+    if let Some(token_type) = &token.token_type {
+        if !token_type.eq_ignore_ascii_case("bearer") {
+            return Err(CallbackProblem::TokenInvalid(format!(
+                "unsupported token type {token_type:?}"
+            )));
+        }
     }
 
     // Identity: UserInfo when the provider has one, else a verified ID
@@ -702,8 +797,13 @@ pub async fn finish(
                 "no identity source: ID token present but no verification keys".to_owned(),
             ));
         }
-        let audience = (!client.client_id().is_empty()).then(|| client.client_id().to_owned());
-        IdTokenVerifier::new(id_token_keys.to_vec(), meta.issuer.clone(), audience)
+        // An ID token is only meaningful for a known issuer and audience.
+        let (Some(issuer), true) = (&meta.issuer, !client.client_id().is_empty()) else {
+            return Err(CallbackProblem::TokenInvalid(
+                "ID token needs the provider issuer and a client id to verify against".to_owned(),
+            ));
+        };
+        IdTokenVerifier::new(id_token_keys.to_vec(), issuer.clone(), client.client_id())
             .verify(id_token, attempt.nonce.as_deref())?
     };
     let profile = identity_from_claims(&claims, meta.issuer.as_deref())?;
@@ -731,6 +831,7 @@ mod tests {
 
     fn meta() -> ProviderMetadata {
         ProviderMetadata {
+            provider: "example-idp".to_owned(),
             issuer: Some("https://idp.example".to_owned()),
             authorize_url: Url::parse("https://idp.example/oauth/authorize").expect("url"),
             token_url: Url::parse("https://idp.example/oauth/token").expect("url"),
@@ -838,6 +939,7 @@ mod tests {
             pkce: Pkce::generate(),
             return_to: Some("/inbox".to_owned()),
             nonce: Some("n-1".to_owned()),
+            browser_binding: None,
             created_at: Utc::now(),
             expires_at: Utc::now() + Duration::minutes(5),
         };
@@ -937,8 +1039,7 @@ mod tests {
             &meta(),
             &client,
             &redirect(),
-            &query(&attempt.state),
-            &[],
+            Callback::new(&query(&attempt.state), None, &[]),
         )
         .await
         .expect("finish");
@@ -990,8 +1091,7 @@ mod tests {
             &json_meta,
             &client,
             &redirect(),
-            &query(&attempt.state),
-            &[],
+            Callback::new(&query(&attempt.state), None, &[]),
         )
         .await
         .expect("finish");
@@ -1020,7 +1120,15 @@ mod tests {
             ..Default::default()
         };
         assert!(matches!(
-            finish(&http, &store, &meta(), &client, &redirect(), &denied, &[]).await,
+            finish(
+                &http,
+                &store,
+                &meta(),
+                &client,
+                &redirect(),
+                Callback::new(&denied, None, &[])
+            )
+            .await,
             Err(CallbackProblem::ProviderDenied { .. })
         ));
         let no_state = CallbackQuery {
@@ -1028,10 +1136,17 @@ mod tests {
             ..query(&attempt.state)
         };
         assert_eq!(
-            finish(&http, &store, &meta(), &client, &redirect(), &no_state, &[])
-                .await
-                .unwrap_err()
-                .to_string(),
+            finish(
+                &http,
+                &store,
+                &meta(),
+                &client,
+                &redirect(),
+                Callback::new(&no_state, None, &[])
+            )
+            .await
+            .unwrap_err()
+            .to_string(),
             "callback carries no state"
         );
         let no_code = CallbackQuery {
@@ -1039,10 +1154,17 @@ mod tests {
             ..query(&attempt.state)
         };
         assert_eq!(
-            finish(&http, &store, &meta(), &client, &redirect(), &no_code, &[])
-                .await
-                .unwrap_err()
-                .to_string(),
+            finish(
+                &http,
+                &store,
+                &meta(),
+                &client,
+                &redirect(),
+                Callback::new(&no_code, None, &[])
+            )
+            .await
+            .unwrap_err()
+            .to_string(),
             "callback carries no code"
         );
         assert!(
@@ -1056,8 +1178,7 @@ mod tests {
             &meta(),
             &client,
             &redirect(),
-            &query(&attempt.state),
-            &[],
+            Callback::new(&query(&attempt.state), None, &[]),
         )
         .await
         .expect("first use");
@@ -1069,8 +1190,7 @@ mod tests {
                 &meta(),
                 &client,
                 &redirect(),
-                &query(&attempt.state),
-                &[]
+                Callback::new(&query(&attempt.state), None, &[]),
             )
             .await
             .unwrap_err()
@@ -1135,11 +1255,7 @@ mod tests {
     #[test]
     fn id_tokens_are_verified_on_every_axis() {
         let key = [7u8; 32];
-        let verifier = IdTokenVerifier::new(
-            vec![public_of(&key)],
-            Some("https://idp.example".to_owned()),
-            Some("cid".to_owned()),
-        );
+        let verifier = IdTokenVerifier::new(vec![public_of(&key)], "https://idp.example", "cid");
         let exp = (Utc::now() + Duration::hours(1)).timestamp();
         let good = mint(&key, id_claims(exp, "cid", "n-1"));
         let claims = verifier.verify(&good, Some("n-1")).expect("valid token");
@@ -1209,5 +1325,170 @@ mod tests {
                 .to_string(),
             "ID token rejected: algorithm not allowed"
         );
+    }
+    #[tokio::test]
+    async fn a_bound_attempt_must_come_back_from_the_same_browser() {
+        let store = InMemoryLoginAttemptStore::new();
+        let http = Scripted::new();
+        let client = ClientAuth::Public {
+            client_id: "cid".to_owned(),
+        };
+        let attempt = begin_with_binding(
+            &store,
+            "example-idp",
+            None,
+            Some("browser-1".to_owned()),
+            Duration::minutes(5),
+        )
+        .await
+        .expect("begin");
+        assert_eq!(attempt.browser_binding.as_deref(), Some("browser-1"));
+        // The attempt is spent by the first (foreign) presentation …
+        let foreign = finish(
+            &http,
+            &store,
+            &meta(),
+            &client,
+            &redirect(),
+            Callback::new(&query(&attempt.state), Some("browser-2"), &[]),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(
+            foreign.to_string(),
+            "the callback did not come from the browser that started the sign-in"
+        );
+        assert!(
+            http.form_calls.lock().expect("lock").is_empty(),
+            "no exchange for a foreign browser"
+        );
+        // … so the genuine browser cannot replay it either.
+        let replay = finish(
+            &http,
+            &store,
+            &meta(),
+            &client,
+            &redirect(),
+            Callback::new(&query(&attempt.state), Some("browser-1"), &[]),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(replay.to_string(), "unknown or already used state");
+
+        let attempt = begin_with_binding(
+            &store,
+            "example-idp",
+            None,
+            Some("browser-1".to_owned()),
+            Duration::minutes(5),
+        )
+        .await
+        .expect("begin");
+        finish(
+            &http,
+            &store,
+            &meta(),
+            &client,
+            &redirect(),
+            Callback::new(&query(&attempt.state), Some("browser-1"), &[]),
+        )
+        .await
+        .expect("the same browser passes");
+    }
+
+    #[tokio::test]
+    async fn an_attempt_cannot_be_finished_with_another_providers_metadata() {
+        let store = InMemoryLoginAttemptStore::new();
+        let http = Scripted::new();
+        let client = ClientAuth::Public {
+            client_id: "cid".to_owned(),
+        };
+        let attempt = begin(&store, "provider-a", None, Duration::minutes(5))
+            .await
+            .expect("begin");
+        // MUT:provider-bound — metadata for another provider must not finish the attempt.
+        let err = finish(
+            &http,
+            &store,
+            &meta(),
+            &client,
+            &redirect(),
+            Callback::new(&query(&attempt.state), None, &[]),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(err.to_string(), "the attempt belongs to another provider");
+        assert!(http.form_calls.lock().expect("lock").is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_non_bearer_token_is_refused_and_numeric_subjects_are_accepted() {
+        let store = InMemoryLoginAttemptStore::new();
+        let client = ClientAuth::Public {
+            client_id: "cid".to_owned(),
+        };
+        struct MacOs;
+        #[async_trait]
+        impl HttpFetcher for MacOs {
+            async fn post_form(&self, _: &Url, _: &[(&str, &str)]) -> Result<serde_json::Value> {
+                Ok(serde_json::json!({ "access_token": "at-1", "token_type": "mac" }))
+            }
+            async fn post_json(&self, _: &Url, _: &serde_json::Value) -> Result<serde_json::Value> {
+                unreachable!()
+            }
+            async fn get_bearer(&self, _: &Url, _: &str) -> Result<serde_json::Value> {
+                unreachable!()
+            }
+        }
+        let attempt = begin(&store, "example-idp", None, Duration::minutes(5))
+            .await
+            .expect("begin");
+        // MUT:bearer-only — only bearer tokens may be used with `Authorization`.
+        let err = finish(
+            &MacOs,
+            &store,
+            &meta(),
+            &client,
+            &redirect(),
+            Callback::new(&query(&attempt.state), None, &[]),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "token endpoint answer rejected: unsupported token type \"mac\""
+        );
+
+        // MUT:numeric-subject — a numbered subject is an id, not an empty identity.
+        assert_eq!(
+            subject_from_userinfo(&serde_json::json!({"sub": 12345})).as_deref(),
+            Some("12345")
+        );
+    }
+
+    #[test]
+    fn an_expected_nonce_must_be_present_and_issuer_and_audience_are_required() {
+        let key = [7u8; 32];
+        let verifier = IdTokenVerifier::new(vec![public_of(&key)], "https://idp.example", "cid");
+        let exp = (Utc::now() + Duration::hours(1)).timestamp();
+        // MUT:nonce-omitted — a token that omits the nonce is refused when one is expected.
+        let mut no_nonce = id_claims(exp, "cid", "n-1");
+        no_nonce.as_object_mut().expect("object").remove("nonce");
+        assert!(
+            verifier.verify(&mint(&key, no_nonce), Some("n-1")).is_err(),
+            "omitted nonce"
+        );
+        let mut numeric_nonce = id_claims(exp, "cid", "n-1");
+        numeric_nonce["nonce"] = serde_json::json!(42);
+        assert!(
+            verifier
+                .verify(&mint(&key, numeric_nonce), Some("42"))
+                .is_err(),
+            "non-string nonce"
+        );
+        // A token minted for another audience is refused — there is no "unchecked" mode.
+        assert!(verifier
+            .verify(&mint(&key, id_claims(exp, "other", "n-1")), Some("n-1"))
+            .is_err());
     }
 }
