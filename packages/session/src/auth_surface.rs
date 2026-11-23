@@ -53,15 +53,42 @@ pub struct AuthEndpoint {
 /// by one surface change — drift surfaces through the boot probe, never
 /// as a silent user-facing 403.
 pub const AUTH_ENDPOINTS: &[AuthEndpoint] = &[
-    AuthEndpoint { path: "/api/health", requirement: AuthRequirement::Public },
-    AuthEndpoint { path: "/api/auth/nonce", requirement: AuthRequirement::Public },
-    AuthEndpoint { path: "/api/auth/login-methods", requirement: AuthRequirement::Public },
-    AuthEndpoint { path: "/api/auth/login/begin", requirement: AuthRequirement::CsrfWhenPresent },
-    AuthEndpoint { path: "/api/auth/login", requirement: AuthRequirement::CsrfWhenPresent },
-    AuthEndpoint { path: "/api/auth/org-login", requirement: AuthRequirement::CsrfWhenPresent },
-    AuthEndpoint { path: "/api/auth/passkey/login", requirement: AuthRequirement::CsrfUnlessBearer },
-    AuthEndpoint { path: "/api/auth/mfa/verify", requirement: AuthRequirement::CsrfWhenPresent },
-    AuthEndpoint { path: "/api/auth/token", requirement: AuthRequirement::CsrfRequired },
+    AuthEndpoint {
+        path: "/api/health",
+        requirement: AuthRequirement::Public,
+    },
+    AuthEndpoint {
+        path: "/api/auth/nonce",
+        requirement: AuthRequirement::Public,
+    },
+    AuthEndpoint {
+        path: "/api/auth/login-methods",
+        requirement: AuthRequirement::Public,
+    },
+    AuthEndpoint {
+        path: "/api/auth/login/begin",
+        requirement: AuthRequirement::CsrfWhenPresent,
+    },
+    AuthEndpoint {
+        path: "/api/auth/login",
+        requirement: AuthRequirement::CsrfWhenPresent,
+    },
+    AuthEndpoint {
+        path: "/api/auth/org-login",
+        requirement: AuthRequirement::CsrfWhenPresent,
+    },
+    AuthEndpoint {
+        path: "/api/auth/passkey/login",
+        requirement: AuthRequirement::CsrfUnlessBearer,
+    },
+    AuthEndpoint {
+        path: "/api/auth/mfa/verify",
+        requirement: AuthRequirement::CsrfWhenPresent,
+    },
+    AuthEndpoint {
+        path: "/api/auth/token",
+        requirement: AuthRequirement::CsrfRequired,
+    },
 ];
 
 #[cfg(test)]

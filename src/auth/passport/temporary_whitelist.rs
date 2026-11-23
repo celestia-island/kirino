@@ -63,7 +63,7 @@ impl WhitelistVerifier {
             return 0;
         }
         let now = Instant::now();
-        entries.retain(|e| e.expires_at.map_or(true, |exp| now < exp));
+        entries.retain(|e| e.expires_at.is_none_or(|exp| now < exp));
         before - entries.len()
     }
 

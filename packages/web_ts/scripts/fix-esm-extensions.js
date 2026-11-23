@@ -39,7 +39,9 @@ function rewrite(code) {
 
 let files = 0;
 let rewrites = 0;
-for (const name of readdirSync(distDir)) {
+// `recursive` so that nested output (the generated contract types live in
+// `dist/generated/`) gets the same treatment as the top-level files.
+for (const name of readdirSync(distDir, { recursive: true })) {
   if (!name.endsWith(".js") && !name.endsWith(".d.ts")) continue;
   const file = join(distDir, name);
   const { out, count } = rewrite(readFileSync(file, "utf8"));

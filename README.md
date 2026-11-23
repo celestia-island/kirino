@@ -300,6 +300,46 @@ A service persists the pair (`is_initial`, `changed_at`) next to the password ha
 
 **First user**: the deployment model is invitation-only, with one deliberate exemption — the first account on an empty install may become an administrator without an invitation, because an empty install cannot otherwise be operated. It is opt-in (`AuthService::with_auto_admin_first_user(true)`, off by default) and applies to the first account only; every later account goes through the invitation path.
 
+### Login Modes
+
+Every service that shows a login panel answers the same question — *how may a visitor sign in here?* — with one [`AuthMode`](https://docs.rs/kirino/latest/kirino/auth/mode/enum.AuthMode.html) and the method list that goes with it:
+
+| Mode | Meaning | Login page | Local password |
+|------|---------|------------|----------------|
+| `Local` | Self-contained credentials — the shape of an independently deployed instance | yes | offered |
+| `Federated` | Local credentials **plus** third-party providers; external identities are linked to local accounts | yes, with a channel picker | the deployment's choice |
+| `Relay` | One designated external login source: **no login page of its own**, the browser is sent to the central site with a return address, and the callback mints a local session | no | structurally refused |
+
+The mode is a *summary*, not a second source of truth: [`LoginPolicy::validate`](https://docs.rs/kirino/latest/kirino/auth/mode/struct.LoginPolicy.html#method.validate) refuses any discovery document whose mode disagrees with its own method list, offers a password in relay mode, or carries a navigation target that is not a same-origin path.
+
+```rust
+use kirino::auth::mode::{AuthMode, LoginMethodDescriptor, LoginPolicy, LoginPolicyViolation};
+
+// A federated deployment: password card plus one provider entrance.
+let policy = LoginPolicy {
+    mode: AuthMode::Federated,
+    methods: vec![LoginMethodDescriptor::oauth(
+        "example-idp", "/api/auth/oauth/example-idp", "Sign in with Example",
+    )],
+    ..LoginPolicy::local()
+};
+policy.validate().expect("consistent");
+
+// The mode is derived, never guessed: a relay source excludes everything else.
+assert_eq!(AuthMode::derive(true, 3), AuthMode::Relay);
+assert_eq!(AuthMode::derive(false, 1), AuthMode::Federated);
+assert_eq!(AuthMode::derive(false, 0), AuthMode::Local);
+
+// A relay document that still offers the password card contradicts itself.
+let mut broken = LoginPolicy::relay("/api/auth/relay", "return_to");
+broken.password = true;
+assert_eq!(broken.validate(), Err(LoginPolicyViolation::PasswordInRelayMode));
+```
+
+A sign-in proven elsewhere — the provider callback, the relay source, a passkey assertion — finishes through one entry, `AuthService::complete_login`, which issues exactly the token a password sign-in would and, unlike the password path, consults neither the password switch nor the rate limiter. Which local account an external identity maps to is the host's policy, recorded through the `ExternalIdentityStore` trait: the provider's stable subject is the key (never an email address), one external identity belongs to exactly one account, and nothing is provisioned implicitly.
+
+With the `ts` feature, the wire types are exported as TypeScript bindings (`cargo test -p kirino --lib --features ts export_bindings`) into `packages/web_ts/src/generated/`, so the npm package `@celestia-island/kirino` ships the contract as types instead of a hand-written copy.
+
 ### Dynamic Authorization
 
 On top of static RBAC, kirino provides a runtime risk-scoring layer inspired by NIST SP 800-207/162 and DO-178C:
@@ -357,6 +397,8 @@ rbac-full = [                      # All features enabled
 ]
 auth-password = ["dep:argon2"]     # Argon2 password hashing
 auth-jwt = ["dep:jsonwebtoken"]    # JWT token issuance/verification
+auth-webauthn = ["dep:coset", "dep:p256"]  # WebAuthn assertion/attestation verification
+ts = ["dep:ts-rs"]                 # Generate TypeScript bindings for the wire-contract types
 ```
 
 ## Design Philosophy

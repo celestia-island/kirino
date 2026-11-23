@@ -387,9 +387,8 @@ impl<P: Permission + Send + Sync> GrantResolver<P> for ScopedGrantResolver<P> {
         let mut best: Option<(Attachment, &ScopedGrant<P>)> = None;
         for (attachment, grant) in &candidates {
             if grant.scope.applies_to(ctx) && grant_matches(&grant.permission, permission) {
-                let more_specific = best.map_or(true, |(_, b)| {
-                    grant.scope.specificity() > b.scope.specificity()
-                });
+                let more_specific =
+                    best.is_none_or(|(_, b)| grant.scope.specificity() > b.scope.specificity());
                 if more_specific {
                     best = Some((*attachment, grant));
                 }

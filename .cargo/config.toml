@@ -1,0 +1,8 @@
+# ts-rs writes generated bindings relative to `TS_RS_EXPORT_DIR`
+# (its default is `./bindings`). Anchor that directory at the crate root so
+# every `#[ts(export_to = "...")]` path reads as repo-relative and the
+# generated TypeScript lands in `packages/web_ts/src/generated/`, where the
+# npm package picks it up. `relative = true` makes cargo resolve the value
+# against this file's directory, so it holds in any checkout.
+[env]
+TS_RS_EXPORT_DIR = { value = ".", relative = true }

@@ -33,6 +33,16 @@ jobs:
       - name: Run tests
         run: cargo test -p kirino-session -p kirino -p kirino-macro
 
+      - name: Generated TypeScript bindings are up to date
+        # The `ts` feature turns every `#[ts(export)]` into an export test that
+        # rewrites `packages/web_ts/src/generated/*.ts` from the Rust
+        # declarations. A committed binding that lags its declaration — or a
+        # new type whose binding was never committed — shows up here.
+        run: |
+          cargo test -p kirino --lib --features ts export_bindings
+          git diff --exit-code --stat -- packages/web_ts/src/generated
+          test -z "$(git ls-files --others --exclude-standard -- packages/web_ts/src/generated)"
+
   verify-versions:
     name: Verify version consistency
     uses: celestia-island/celestia-devtools/.github/workflows/verify-versions.yml@c45f1881e00cb55d0a2a1fcf57b28734ece119bb

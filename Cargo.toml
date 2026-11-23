@@ -21,7 +21,7 @@ members = [
 ]
 
 [workspace.package]
-version = "0.9.4"
+version = "0.9.5"
 
 [lib]
 crate-type = ["rlib"]
@@ -38,6 +38,8 @@ rbac-full = ["rbac-inmemory", "rbac-hierarchy", "rbac-constraints", "rbac-dynami
 auth-password = ["dep:argon2"]
 auth-jwt = ["dep:jsonwebtoken"]
 auth-webauthn = ["dep:coset", "dep:p256"]
+# TypeScript bindings for the wire contract types (generated; never hand-written).
+ts = ["dep:ts-rs"]
 
 [dependencies]
 anyhow = "^1"
@@ -62,6 +64,7 @@ sha2 = "^0.11"
 hex = "^0.4"
 coset = { version = "^0.4", optional = true }
 p256 = { version = "^0.14", features = ["ecdsa", "getrandom"], optional = true }
+ts-rs = { version = "^12", optional = true }
 tracing = { version = "^0.1", features = ["log"] }
 # Raw-SQL data access goes through the family data layer (lacrymira);
 # the pg executor brings sqlx, so the feature stays optional.
