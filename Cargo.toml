@@ -65,8 +65,8 @@ p256 = { version = "^0.14", features = ["ecdsa", "getrandom"], optional = true }
 tracing = { version = "^0.1", features = ["log"] }
 # Raw-SQL data access goes through the family data layer (lacrymira);
 # the pg executor brings sqlx, so the feature stays optional.
-lacrymira = { version = "^0.1", optional = true }
-lacrymira-pg = { version = "^0.1", optional = true }
+lacrymira = { version = "^0.2", optional = true }
+lacrymira-pg = { version = "^0.2", optional = true }
 
 [dev-dependencies]
 criterion = "^0.8"

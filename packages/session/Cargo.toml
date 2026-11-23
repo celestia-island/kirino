@@ -33,8 +33,8 @@ tracing = { version = "^0.1" }
 thiserror = "^2"
 # Raw-SQL data access goes through the family data layer (lacrymira);
 # the pg executor brings sqlx, so the feature stays optional.
-lacrymira = { version = "^0.1", optional = true }
-lacrymira-pg = { version = "^0.1", optional = true }
+lacrymira = { version = "^0.2", optional = true }
+lacrymira-pg = { version = "^0.2", optional = true }
 zeroize = { version = "^1", features = ["zeroize_derive"] }
 ml-dsa = { version = "^0.1", optional = true }
 axum = { version = "^0.8", optional = true }
