@@ -11,7 +11,7 @@ import type { RelayDirective } from "./RelayDirective";
  */
 export type LoginPolicy = { 
 /**
- * The wire version ([`LOGIN_POLICY_VERSION`]).
+ * The wire version (currently `1`).
  */
 version: number, 
 /**

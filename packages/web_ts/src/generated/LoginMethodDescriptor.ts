@@ -12,7 +12,7 @@
  * ```
  *
  * The password card is not a method — it is the base card, announced by
- * [`LoginPolicy::password`] — so it has no variant.
+ * the policy's `password` flag — so it has no variant.
  */
 export type LoginMethodDescriptor = { "kind": "oauth", 
 /**
@@ -26,7 +26,7 @@ label: string,
 /**
  * Where the browser starts the method: a **same-origin absolute
  * path** (`/api/auth/oauth/github`), never an external URL — the
- * navigation target is validated by [`LoginPolicy::validate`] so a
+ * navigation target is validated by `LoginPolicy::validate` so a
  * tampered or misconfigured row cannot turn the login panel into an
  * open redirect. Consumers use it as a **navigation** target
  * (`location.href`, an `<a href>`); it is never a fetch or

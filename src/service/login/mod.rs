@@ -761,19 +761,18 @@ where
         }
 
         // An account without a local password (created through an external
-        // sign-in) cannot answer a password prompt: refuse it exactly as a
-        // wrong password is refused, instead of parsing the sentinel as a
-        // hash — which would surface as an internal error. The dummy
-        // verification is the same timing equalisation as the inactive path
-        // above: without it a no-password account would answer measurably
-        // faster than a wrong password on a normal one, and response time
-        // would become an account-shape oracle.
-        if !user.has_usable_password() {
-            let _ = verify_password(password, Self::DUMMY_HASH);
-            return Err(KirinoError::AuthenticationFailed.into());
-        }
-
-        if !verify_password(password, &user.password_hash)? {
+        // sign-in) cannot answer a password prompt. It is refused BY the
+        // verification below, against the dummy hash: the refusal and its
+        // Argon2id cost are one statement, so a no-password account answers
+        // neither faster nor with a different error than a wrong password on
+        // a normal one (no account-shape timing oracle, and the sentinel is
+        // never parsed as a hash — which would surface as an internal error).
+        let hash = if user.has_usable_password() {
+            user.password_hash.as_str()
+        } else {
+            Self::DUMMY_HASH
+        };
+        if !verify_password(password, hash)? {
             return Err(KirinoError::AuthenticationFailed.into());
         }
 
@@ -1009,15 +1008,16 @@ where
             .await?
             .ok_or_else(|| KirinoError::NotFound("user not found".to_string()))?;
 
-        // An account with no local password has nothing to check the old
-        // password against: refuse as a failed verification rather than
-        // letting the sentinel surface as a hash-format error.
-        if !user.has_usable_password() {
-            let _ = verify_password(old_password, Self::DUMMY_HASH);
-            return Err(KirinoError::AuthenticationFailed.into());
-        }
-
-        if !verify_password(old_password, &user.password_hash)? {
+        // An account with no local password is refused BY the verification,
+        // against the dummy hash — the same failed-verification answer and
+        // the same cost as a wrong old password, never an internal
+        // hash-format error from parsing the sentinel.
+        let current = if user.has_usable_password() {
+            user.password_hash.as_str()
+        } else {
+            Self::DUMMY_HASH
+        };
+        if !verify_password(old_password, current)? {
             return Err(KirinoError::AuthenticationFailed.into());
         }
 
@@ -1731,6 +1731,44 @@ mod tests {
             assert_eq!(result.login.session_id, Some(session.id));
             let claims = auth.verify_token(&result.login.token).await.unwrap();
             assert_eq!(claims.session_id, Some(session.id.to_string()));
+        }
+
+        #[test]
+        fn no_password_accounts_are_refused_by_the_verification_itself() {
+            // MUT:refusal-is-the-verification — a no-password account must not be
+            // refused by a branch that returns BEFORE a verification: the refusal
+            // has to be the outcome of verifying against the dummy hash, so its
+            // Argon2id cost cannot be deleted separately from the refusal (an
+            // early `return` with a discarded dummy verification was exactly the
+            // shape an earlier review found unpinnable).
+            let here = include_str!("mod.rs");
+            for head in [
+                "    async fn authenticate_user(",
+                "    pub async fn change_password(",
+            ] {
+                let start = here.find(head).expect("function head");
+                let rest = &here[start + head.len()..];
+                let end = rest
+                    .find("\n    pub async fn ")
+                    .or_else(|| rest.find("\n    async fn "))
+                    .or_else(|| rest.find("\n    pub fn "))
+                    .or_else(|| rest.find("\n    fn "))
+                    .expect("next item");
+                let body = &rest[..end];
+                assert!(
+                    body.contains("} else {\n            Self::DUMMY_HASH\n        };"),
+                    "{head:?} must verify a no-password account against the dummy hash"
+                );
+                // The unpinnable shape: a discarded dummy verification next to an
+                // early return. (The pre-existing inactive-account branch keeps its
+                // own `let _ = verify_password(password, &user.password_hash)`.)
+                assert!(
+                    !body.contains("let _ = verify_password(password, Self::DUMMY_HASH)")
+                        && !body
+                            .contains("let _ = verify_password(old_password, Self::DUMMY_HASH)"),
+                    "{head:?} must not refuse a no-password account before a verification"
+                );
+            }
         }
 
         #[tokio::test]

@@ -199,7 +199,7 @@ impl AuthMethod {
 /// ```
 ///
 /// The password card is not a method — it is the base card, announced by
-/// [`LoginPolicy::password`] — so it has no variant.
+/// the policy's `password` flag — so it has no variant.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[cfg_attr(
@@ -218,7 +218,7 @@ pub enum LoginMethodDescriptor {
         label: String,
         /// Where the browser starts the method: a **same-origin absolute
         /// path** (`/api/auth/oauth/github`), never an external URL — the
-        /// navigation target is validated by [`LoginPolicy::validate`] so a
+        /// navigation target is validated by `LoginPolicy::validate` so a
         /// tampered or misconfigured row cannot turn the login panel into an
         /// open redirect. Consumers use it as a **navigation** target
         /// (`location.href`, an `<a href>`); it is never a fetch or
@@ -331,7 +331,7 @@ pub struct RelayDirective {
     ts(export, export_to = "packages/web_ts/src/generated/")
 )]
 pub struct LoginPolicy {
-    /// The wire version ([`LOGIN_POLICY_VERSION`]).
+    /// The wire version (currently `1`).
     pub version: u8,
     /// The mode — the summary of everything below.
     pub mode: AuthMode,
@@ -411,25 +411,24 @@ impl LoginPolicy {
 
     /// Refuse a document that disagrees with itself.
     ///
-    /// Invariants (all of them, so a UI can rely on each):
+    /// Invariants (all of them, so a UI can rely on each), in the order
+    /// they are checked — the **first** violation is the one reported, so a
+    /// host can rely on which invariant a given repair addresses:
     ///
-    /// * `version` is the current one;
-    /// * the relay directive is present exactly in `Relay` mode;
-    /// * `Relay` offers no password, and `Local` offers one (a `Local`
-    ///   deployment with no password and no provider would have no way at
-    ///   all to sign in; `Federated` leaves the choice to the deployment);
-    /// * `Local` and `Relay` list no provider and `Federated` lists at least
-    ///   one (the designated source is the only provider entrance in relay
-    ///   mode);
-    /// * method ids are non-empty and unique;
-    /// * every navigation target — each method `href` and the relay `entry` —
-    ///   is a same-origin absolute path (starts with a single `/`), never an
-    ///   external or scheme-relative URL;
-    /// * the relay return parameter is non-empty.
-    ///
-    /// The checks run in the order listed and the **first** violation is the
-    /// one reported, so a host can rely on which invariant a given repair
-    /// addresses.
+    /// 1. `version` is the current one;
+    /// 2. the relay directive is present exactly in `Relay` mode, and in
+    ///    `Relay` mode its return parameter is non-blank and its entry a
+    ///    same-origin absolute path;
+    /// 3. `Relay` offers no password and `Local` offers one (a `Local`
+    ///    deployment with no password and no provider would have no way at
+    ///    all to sign in; `Federated` leaves the choice to the deployment);
+    /// 4. `Local` and `Relay` list no provider and `Federated` lists at least
+    ///    one (the designated source is the only provider entrance in relay
+    ///    mode);
+    /// 5. method ids are non-empty, unpadded (`" idp "` is refused) and
+    ///    unique;
+    /// 6. every method `href` is a same-origin absolute path (starts with a
+    ///    single `/`), never an external or scheme-relative URL.
     ///
     /// # Errors
     ///
@@ -441,7 +440,7 @@ impl LoginPolicy {
         match (self.mode, &self.relay) {
             (AuthMode::Relay, None) => return Err(LoginPolicyViolation::RelayWithoutDirective),
             (AuthMode::Relay, Some(directive)) => {
-                if directive.return_param.is_empty() {
+                if directive.return_param.trim().is_empty() {
                     return Err(LoginPolicyViolation::ReturnParam);
                 }
                 check_same_origin_path("relay entry", &directive.entry)?;
@@ -485,12 +484,17 @@ impl LoginPolicy {
             }
             _ => {}
         }
+        // Ids first, then navigation targets: the documented order.
         let mut seen = std::collections::HashSet::new();
         for method in &self.methods {
             let id = method.id();
-            if id.is_empty() || !seen.insert(id) {
+            // Padded ids are refused outright: `" idp "` and `"idp"` must not be
+            // two methods, and a blank id names nothing.
+            if id.is_empty() || id.trim() != id || !seen.insert(id) {
                 return Err(LoginPolicyViolation::MethodId(id.to_owned()));
             }
+        }
+        for method in &self.methods {
             check_same_origin_path("method href", method.href())?;
         }
         Ok(())
@@ -800,6 +804,18 @@ mod tests {
             Err(LoginPolicyViolation::MethodId(String::new()))
         );
 
+        // MUT:unpadded-ids — a padded id is refused, not silently kept as a second method.
+        let policy = federated(vec![oauth(" idp ")]);
+        assert_eq!(
+            policy.validate(),
+            Err(LoginPolicyViolation::MethodId(" idp ".to_owned()))
+        );
+        let policy = federated(vec![oauth("idp"), oauth(" idp ")]);
+        assert_eq!(
+            policy.validate(),
+            Err(LoginPolicyViolation::MethodId(" idp ".to_owned()))
+        );
+
         let policy = federated(vec![oauth("example-idp")]);
         let mut policy = policy;
         policy.methods[0] =
@@ -890,34 +906,56 @@ mod tests {
 
     #[test]
     fn validate_reports_the_first_violation_in_document_order() {
-        // Document order: relay pair → password ↔ mode → provider count → ids → hrefs.
-        let mut policy = LoginPolicy::relay("/x", "r");
+        // 2. relay pair: the return parameter is checked before the entry path …
+        let policy = LoginPolicy::relay("https://evil.example", "   ");
+        assert_eq!(policy.validate(), Err(LoginPolicyViolation::ReturnParam));
+        // … and both before the password ↔ mode rule (3).
+        let mut policy = LoginPolicy::relay("https://evil.example", "r");
         policy.password = true;
-        policy.methods = vec![oauth("example-idp")];
         assert_eq!(
             policy.validate(),
-            Err(LoginPolicyViolation::PasswordInRelayMode)
+            Err(LoginPolicyViolation::NotSameOriginPath(
+                "relay entry",
+                "https://evil.example".to_owned()
+            ))
         );
-
+        // 3 before 4: a Local document with neither password nor provider reports
+        // the missing password, not the provider count.
         let mut policy = LoginPolicy::local();
         policy.password = false;
-        policy.methods = vec![oauth("example-idp")];
         assert_eq!(
             policy.validate(),
             Err(LoginPolicyViolation::PasswordMissingInLocalMode)
         );
-
-        let policy = federated(vec![oauth("")]);
-        let policy = LoginPolicy {
-            methods: policy.methods.clone(),
-            ..policy
+        // 5 before 6: a later method's bad id outranks an earlier method's bad href.
+        let mut policy = LoginPolicy {
+            mode: AuthMode::Federated,
+            methods: vec![oauth("example-idp"), oauth("")],
+            ..LoginPolicy::local()
         };
-        let mut policy = policy;
-        policy.methods[0] = LoginMethodDescriptor::oauth("", "https://evil.example", "x");
+        policy.methods[0] =
+            LoginMethodDescriptor::oauth("example-idp", "https://evil.example", "x");
         assert_eq!(
             policy.validate(),
             Err(LoginPolicyViolation::MethodId(String::new())),
             "ids are checked before hrefs"
+        );
+        // 6: with every id sound, the href is reported.
+        let mut policy = LoginPolicy {
+            mode: AuthMode::Federated,
+            methods: vec![
+                LoginMethodDescriptor::oauth("example-idp", "/ok", "x"),
+                oauth("other"),
+            ],
+            ..LoginPolicy::local()
+        };
+        policy.methods[1] = LoginMethodDescriptor::oauth("other", "//evil.example", "x");
+        assert_eq!(
+            policy.validate(),
+            Err(LoginPolicyViolation::NotSameOriginPath(
+                "method href",
+                "//evil.example".to_owned()
+            ))
         );
     }
 

@@ -42,6 +42,8 @@ jobs:
           cargo test -p kirino --lib --features ts export_bindings
           git diff --exit-code --stat -- packages/web_ts/src/generated
           test -z "$(git ls-files --others --exclude-standard -- packages/web_ts/src/generated)"
+          # A type exported without `export_to` lands at the crate root instead.
+          test -z "$(git ls-files --others --exclude-standard -- '*.ts')"
 
   web_ts:
     name: Check the TypeScript package

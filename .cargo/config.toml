@@ -3,6 +3,8 @@
 # every `#[ts(export_to = "...")]` path reads as repo-relative and the
 # generated TypeScript lands in `packages/web_ts/src/generated/`, where the
 # npm package picks it up. `relative = true` makes cargo resolve the value
-# against this file's directory, so it holds in any checkout.
+# against this file's directory, so it holds in any checkout. The anchor also
+# means a `#[ts(export)]` type without an `export_to` would write `<TypeName>.ts`
+# at the crate root — the checks workflow fails on any untracked `*.ts`.
 [env]
 TS_RS_EXPORT_DIR = { value = ".", relative = true }

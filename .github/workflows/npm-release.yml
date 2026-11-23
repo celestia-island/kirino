@@ -56,10 +56,14 @@ jobs:
         # This lane publishes whatever the `v*` tag says. A tag that does not
         # match the workspace version would put a number on npm that the
         # Cargo manifest and `.versions.toml` never declared.
+        env:
+          # Through `env`, never inline: the tag name is untrusted input and
+          # must not be interpolated into the script body (it would be parsed
+          # as shell / regex syntax). `-F` matches it as a literal.
+          TAG_VERSION: ${{ steps.ver.outputs.version }}
         run: |
-          v="${{ steps.ver.outputs.version }}"
-          grep -Eq "^version = \"${v}\"" Cargo.toml || {
-            echo "::error::tag v${v} does not match the crate version in Cargo.toml"; exit 1; }
+          grep -Fqx "version = \"${TAG_VERSION}\"" Cargo.toml || {
+            echo "::error::tag v${TAG_VERSION} does not match the crate version in Cargo.toml"; exit 1; }
       - name: Check whether this version is already on npm
         id: exists
         run: |
