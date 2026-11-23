@@ -340,6 +340,34 @@ A sign-in proven elsewhere — the provider callback, the relay source, a passke
 
 With the `ts` feature, the wire types are exported as TypeScript bindings (`cargo test -p kirino --lib --features ts export_bindings`) into `packages/web_ts/src/generated/`, so the npm package `@celestia-island/kirino` ships the contract as types instead of a hand-written copy.
 
+#### Relay and providers
+
+Relay mode is a deployment shape, so it is **read from the environment** with family-wide names and no service prefix — `AUTH_RELAY_ISSUER`, `AUTH_RELAY_CLIENT_ID`, `AUTH_RELAY_CLIENT_SECRET` (absent = public client), `AUTH_RELAY_REDIRECT_URL` (its path ends in `/callback`; the entry route is the same path without the suffix), `AUTH_RELAY_RETURN_ORIGINS` (the exact origins a return address may name), plus optional `AUTH_RELAY_AUTHORIZE_URL` / `_TOKEN_URL` / `_USERINFO_URL` (otherwise resolved from the issuer's OIDC discovery document) and `AUTH_RELAY_SCOPES` / `_RETURN_PARAM` / `_BREAK_GLASS`. `RelayConfig::from_env` answers `Ok(None)` when none of them is set and an error naming the variable when the set is incomplete or malformed: it never falls back to a local login.
+
+```rust
+use kirino::auth::mode::AuthMode;
+use kirino::auth::relay::{mode_from_env_with, RelayConfig};
+
+// Nothing configured: local mode, no relay.
+let none = |_name: &str| None;
+assert!(RelayConfig::from_env_with(none).unwrap().is_none());
+assert_eq!(mode_from_env_with(none).unwrap(), AuthMode::Local);
+
+// A complete relay set: the published discovery document validates as-is.
+let env = |name: &str| match name {
+    "AUTH_RELAY_ISSUER" => Some("https://auth.example".to_owned()),
+    "AUTH_RELAY_CLIENT_ID" => Some("app".to_owned()),
+    "AUTH_RELAY_REDIRECT_URL" => Some("https://app.example/api/auth/relay/callback".to_owned()),
+    "AUTH_RELAY_RETURN_ORIGINS" => Some("https://app.example".to_owned()),
+    _ => None,
+};
+let relay = RelayConfig::from_env_with(env).unwrap().expect("configured");
+relay.login_policy().validate().unwrap();
+assert_eq!(mode_from_env_with(env).unwrap(), AuthMode::Relay);
+```
+
+The protocol side lives in `kirino::auth::passport::oauth` behind the `auth-oauth` feature: authorization-code with **PKCE S256 always on**, a one-time server-side `state` (`LoginAttemptStore`), the token exchange, and ID-token verification on signature, expiry, issuer, audience and nonce. kirino opens no socket — every network call goes through the `HttpFetcher` trait, which the host or a platform adapter implements — and keeps no provider-specific quirks: endpoints and the token-body encoding are data (`ProviderMetadata`), not code paths. `finish` turns the callback into an `ExternalIdentity` keyed by the provider's stable subject, which the host then resolves to an account and signs in through `complete_login`.
+
 ### Dynamic Authorization
 
 On top of static RBAC, kirino provides a runtime risk-scoring layer inspired by NIST SP 800-207/162 and DO-178C:
@@ -398,6 +426,7 @@ rbac-full = [                      # All features enabled
 auth-password = ["dep:argon2"]     # Argon2 password hashing
 auth-jwt = ["dep:jsonwebtoken"]    # JWT token issuance/verification
 auth-webauthn = ["dep:coset", "dep:p256"]  # WebAuthn assertion/attestation verification
+auth-oauth = ["dep:base64", "dep:subtle", "auth-jwt"]  # OAuth relying-party core (PKCE, state, token exchange)
 ts = ["dep:ts-rs"]                 # Generate TypeScript bindings for the wire-contract types
 ```
 

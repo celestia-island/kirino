@@ -21,7 +21,7 @@ members = [
 ]
 
 [workspace.package]
-version = "0.9.5"
+version = "0.9.6"
 
 [lib]
 crate-type = ["rlib"]
@@ -34,12 +34,16 @@ rbac-hierarchy = ["rbac-core"]
 rbac-constraints = ["rbac-core"]
 rbac-db-session = ["rbac-core", "dep:lacrymira", "dep:lacrymira-pg"]
 rbac-dynamic = ["rbac-core"]
-rbac-full = ["rbac-inmemory", "rbac-hierarchy", "rbac-constraints", "rbac-dynamic", "auth-password", "auth-jwt", "auth-webauthn"]
+rbac-full = ["rbac-inmemory", "rbac-hierarchy", "rbac-constraints", "rbac-dynamic", "auth-password", "auth-jwt", "auth-webauthn", "auth-oauth"]
 auth-password = ["dep:argon2"]
 auth-jwt = ["dep:jsonwebtoken"]
 auth-webauthn = ["dep:coset", "dep:p256"]
 # TypeScript bindings for the wire contract types (generated; never hand-written).
 ts = ["dep:ts-rs"]
+# Relay (designated external login source): the relying-party protocol core
+# (PKCE, state, token exchange, ID-token verification). Off by default;
+# transport is injected by the host (kirino opens no sockets).
+auth-oauth = ["dep:base64", "dep:subtle", "auth-jwt"]
 
 [dependencies]
 anyhow = "^1"
@@ -65,6 +69,12 @@ hex = "^0.4"
 coset = { version = "^0.4", optional = true }
 p256 = { version = "^0.14", features = ["ecdsa", "getrandom"], optional = true }
 ts-rs = { version = "^12", optional = true }
+# URL parsing for the always-on relay configuration; small and already
+# present transitively.
+url = "^2"
+base64 = { version = "^0.22", optional = true }
+# Constant-time comparison for the PKCE verifier check; already in the graph.
+subtle = { version = "^2", optional = true }
 tracing = { version = "^0.1", features = ["log"] }
 # Raw-SQL data access goes through the family data layer (lacrymira);
 # the pg executor brings sqlx, so the feature stays optional.
@@ -73,6 +83,8 @@ lacrymira-pg = { version = "^0.2", optional = true }
 
 [dev-dependencies]
 criterion = "^0.8"
+# Test-only: mints ID tokens signed with a freshly generated Ed25519 key.
+ed25519-dalek = "^2"
 tokio = { version = "^1", features = ["rt", "macros", "time", "sync"] }
 
 [[bench]]

@@ -2,6 +2,8 @@ pub mod biometric;
 pub mod captcha;
 pub mod dynamic_password;
 pub mod key_pair;
+#[cfg(feature = "auth-oauth")]
+pub mod oauth;
 pub mod pow;
 #[cfg(feature = "auth-password")]
 pub mod static_password;
