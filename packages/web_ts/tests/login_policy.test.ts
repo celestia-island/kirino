@@ -2,9 +2,11 @@ import { describe, expect, expectTypeOf, it } from "vitest";
 
 import type { AuthMethod, AuthMode, LoginPolicy } from "../src/index.js";
 
-// The three canonical documents from the Rust `kirino::auth::mode` docs. They
-// are typed against the GENERATED bindings, so a regenerated binding that
-// drifts from the wire shape the service serialises stops compiling here.
+// The three canonical documents from the Rust `kirino::auth::mode` docs,
+// typed against the GENERATED bindings.
+// MUT:wire-shape-typed — a binding that drifts from the wire shape the service
+// serialises never typechecks here (a renamed field or a changed literal turns
+// `pnpm run typecheck` red on exactly this file).
 const local: LoginPolicy = { version: 1, mode: "local", password: true, methods: [] };
 
 const federated: LoginPolicy = {
