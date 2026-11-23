@@ -5,7 +5,7 @@ edition = "2021"
 description = "Procedural macros for kirino — hierarchical permission derivation"
 license-file = "../../LICENSE"
 repository = "https://github.com/celestia-island/kirino"
-rust-version = "1.75"
+rust-version = "1.94"
 
 [lints]
 workspace = true

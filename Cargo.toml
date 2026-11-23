@@ -9,7 +9,7 @@ readme = "README.md"
 documentation = "https://docs.rs/kirino"
 categories = ["authentication"]
 keywords = ["rbac", "authentication", "authorization", "zero-trust", "anomaly-detection"]
-rust-version = "1.75"
+rust-version = "1.94"
 
 [lints]
 workspace = true

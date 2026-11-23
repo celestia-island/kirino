@@ -46,5 +46,5 @@ All tests should pass without errors.
 
 ## Requirements
 
-- Rust 1.75+ (edition 2021)
+- Rust 1.94+ (edition 2021)
 - Optional: PostgreSQL (for `rbac-sql`), Redis (for `rbac-redis`), SeaORM CLI (for `rbac-sea-orm`)

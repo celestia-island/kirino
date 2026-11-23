@@ -378,7 +378,7 @@ It does **not** prescribe:
 
 ## Requirements
 
-- Rust 1.75+ (edition 2021)
+- Rust 1.94+ (edition 2021)
 - Tokio async runtime
 
 ## License
