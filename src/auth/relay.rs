@@ -155,6 +155,25 @@ fn parse_url(raw: &str, name: &'static str) -> Result<Url, RelayConfigError> {
     Ok(url)
 }
 
+/// Characters a navigation target must never contain: a backslash (browsers
+/// read it as a slash, so `/` + backslash + host leaves the origin), control
+/// characters, the line/paragraph separators, and the format characters that
+/// reshape how a path is displayed or ordered.
+pub(crate) fn is_unsafe_in_a_location(c: char) -> bool {
+    c == '\\'
+        || c.is_control()
+        || matches!(
+            c,
+            '\u{2028}'
+                | '\u{2029}'
+                | '\u{00AD}'
+                | '\u{200B}'..='\u{200F}'
+                | '\u{202A}'..='\u{202E}'
+                | '\u{2066}'..='\u{2069}'
+                | '\u{FEFF}'
+        )
+}
+
 /// `scheme://host[:port]` of a URL, the form an allow-list entry takes.
 #[must_use]
 pub fn origin_of(url: &Url) -> String {
@@ -170,10 +189,12 @@ pub fn origin_of(url: &Url) -> String {
 /// Normalise a return address the browser asked for.
 ///
 /// `Some(path)` for a same-origin absolute path (`/inbox?x=1`, never `//host`,
-/// `/`, blank) or for an absolute URL whose origin is on the allow-list
-/// (reduced to its path, query and fragment). `None` for anything else — a
-/// foreign origin is never forwarded. The result is what the relay carries
-/// in its signed state and where the browser lands afterwards.
+/// a backslash, control or format characters, `/`, blank) or for an absolute
+/// URL whose origin is on the allow-list (reduced to its path, query and
+/// fragment). `None` for anything else — a foreign origin is never
+/// forwarded. The result is what the host carries through its signed state
+/// (the host's job — nothing here signs) and where the browser lands
+/// afterwards.
 #[must_use]
 pub fn safe_return_path(raw: &str, allowed_origins: &[String]) -> Option<String> {
     let raw = raw.trim();
@@ -184,16 +205,15 @@ pub fn safe_return_path(raw: &str, allowed_origins: &[String]) -> Option<String>
         // A single leading slash is a same-origin path; `//host` is
         // scheme-relative and names a foreign origin. A backslash is refused
         // too: browsers normalise a backslash to `/` in URLs, so a path that
-        // starts `/` + backslash + host would be followed as `//host`. Control characters and the
-        // Unicode line separators are refused as well: the value ends up in
-        // a `Location` header.
+        // starts `/` + backslash + host would be followed as `//host`. Control
+        // characters, the Unicode line separators and the format characters
+        // that reshape display (soft hyphen, zero-width marks, bidi
+        // controls, BOM) are refused as well: the value ends up in a
+        // `Location` header and may be shown to a user.
         if path.is_empty() || path.starts_with('/') {
             return None;
         }
-        if raw
-            .chars()
-            .any(|c| c == '\\' || c.is_control() || matches!(c, '\u{2028}' | '\u{2029}'))
-        {
+        if raw.chars().any(is_unsafe_in_a_location) {
             return None;
         }
         return Some(raw.to_owned());
@@ -724,6 +744,10 @@ mod tests {
             ("/\nevil", None),
             ("/\u{2028}inbox", None),
             ("/in\u{007f}box", None),
+            // MUT:no-format-chars — zero-width and bidi marks reshape a shown path.
+            ("/in\u{200b}box", None),
+            ("/\u{202e}xp", None),
+            ("/in\u{feff}box", None),
         ] {
             assert_eq!(
                 safe_return_path(raw, &allowed).as_deref(),

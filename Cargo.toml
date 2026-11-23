@@ -69,8 +69,8 @@ hex = "^0.4"
 coset = { version = "^0.4", optional = true }
 p256 = { version = "^0.14", features = ["ecdsa", "getrandom"], optional = true }
 ts-rs = { version = "^12", optional = true }
-# URL parsing for the always-on relay configuration; small and already
-# present transitively.
+# URL parsing for the always-on relay configuration; small, and already in
+# the lock graph through other dependencies.
 url = "^2"
 base64 = { version = "^0.22", optional = true }
 # Constant-time comparison for the PKCE verifier check; already in the graph.
