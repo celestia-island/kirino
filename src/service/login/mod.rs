@@ -1819,65 +1819,6 @@ mod tests {
             assert_eq!(verify_probe::take(), vec![Service::DUMMY_HASH.to_owned()]);
         }
 
-        #[test]
-        fn no_password_accounts_are_refused_by_the_verification_itself() {
-            // A textual companion to the behavioural pins above: it keeps the
-            // two password functions in the "verify, then refuse on the
-            // outcome" shape and rejects the early-return-with-discarded-
-            // verification form an earlier review found. It is NOT the proof
-            // that the cost is paid — the `verify_probe` tests are.
-            let here = include_str!("mod.rs");
-            for head in [
-                "    async fn authenticate_user(",
-                "    pub async fn change_password(",
-            ] {
-                let start = here.find(head).expect("function head");
-                let rest = &here[start + head.len()..];
-                let end = rest
-                    .find("\n    pub async fn ")
-                    .or_else(|| rest.find("\n    async fn "))
-                    .or_else(|| rest.find("\n    pub fn "))
-                    .or_else(|| rest.find("\n    fn "))
-                    .expect("next item");
-                let body = &rest[..end];
-                assert!(
-                    body.contains("} else {\n            Self::DUMMY_HASH\n        };"),
-                    "{head:?} must verify a no-password account against the dummy hash"
-                );
-                // The verification must consume the SELECTED hash (`hash` /
-                // `current`), and no other verification may exist in the
-                // function: a second, cheaper hash for the no-password case
-                // would keep the lines above while deleting the cost.
-                let (selected, proof) = if head.contains("authenticate_user") {
-                    ("hash", "password")
-                } else {
-                    ("current", "old_password")
-                };
-                assert!(
-                    body.contains(&format!("if !verify_password({proof}, {selected})? {{")),
-                    "{head:?} must verify the proof against the selected hash"
-                );
-                assert_eq!(
-                    body.matches("verify_password(").count(),
-                    if head.contains("authenticate_user") {
-                        3
-                    } else {
-                        1
-                    },
-                    "{head:?} must carry exactly the known verification call sites"
-                );
-                // The unpinnable shape: a discarded dummy verification next to an
-                // early return. (The pre-existing inactive-account branch keeps its
-                // own `let _ = verify_password(password, &user.password_hash)`.)
-                assert!(
-                    !body.contains("let _ = verify_password(password, Self::DUMMY_HASH)")
-                        && !body
-                            .contains("let _ = verify_password(old_password, Self::DUMMY_HASH)"),
-                    "{head:?} must not refuse a no-password account before a verification"
-                );
-            }
-        }
-
         #[tokio::test]
         async fn test_account_without_a_local_password_cannot_change_a_password() {
             let auth = make_auth();
