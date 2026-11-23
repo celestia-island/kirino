@@ -342,7 +342,7 @@ With the `ts` feature, the wire types are exported as TypeScript bindings (`carg
 
 #### Relay and providers
 
-Relay mode is a deployment shape, so it is **read from the environment** with family-wide names and no service prefix — `AUTH_RELAY_ISSUER`, `AUTH_RELAY_CLIENT_ID`, `AUTH_RELAY_CLIENT_SECRET` (absent = public client), `AUTH_RELAY_REDIRECT_URL` (its path ends in `/callback`; the entry route is the same path without the suffix), `AUTH_RELAY_RETURN_ORIGINS` (the exact origins a return address may name), plus optional `AUTH_RELAY_AUTHORIZE_URL` / `_TOKEN_URL` / `_USERINFO_URL` (otherwise resolved from the issuer's OIDC discovery document) and `AUTH_RELAY_SCOPES` / `_RETURN_PARAM` / `_BREAK_GLASS`. `RelayConfig::from_env` answers `Ok(None)` when none of them is set and an error naming the variable when the set is incomplete or malformed: it never falls back to a local login.
+Relay mode is a deployment shape, so it is **read from the environment** with family-wide names and no service prefix — `AUTH_RELAY_ISSUER`, `AUTH_RELAY_CLIENT_ID`, `AUTH_RELAY_CLIENT_SECRET` (absent = public client), `AUTH_RELAY_REDIRECT_URL` (its path ends in `/callback`; the entry route is the same path without the suffix), `AUTH_RELAY_RETURN_ORIGINS` (the exact origins a return address may name), plus optional `AUTH_RELAY_AUTHORIZE_URL` / `_TOKEN_URL` / `_USERINFO_URL` (otherwise resolved from the issuer's OIDC discovery document) and `AUTH_RELAY_SCOPES` / `_RETURN_PARAM` / `_BREAK_GLASS`; and `AUTH_MODE`, the optional explicit mode, which must agree with the relay configuration (`local` or `federated` beside a configured relay source, or `relay` without one, is a start-up error). `RelayConfig::from_env` answers `Ok(None)` when none of them is set and an error naming the variable when the set is incomplete or malformed: it never falls back to a local login.
 
 ```rust
 use kirino::auth::mode::AuthMode;
@@ -421,7 +421,7 @@ rbac-constraints = ["rbac-core"]   # RBAC2 constraint models (SSD/DSD)
 rbac-dynamic = ["rbac-core"]       # Dynamic risk-based authorization
 rbac-full = [                      # All features enabled
     "rbac-inmemory", "rbac-hierarchy", "rbac-constraints",
-    "rbac-dynamic", "auth-password", "auth-jwt"
+    "rbac-dynamic", "auth-password", "auth-jwt", "auth-webauthn", "auth-oauth"
 ]
 auth-password = ["dep:argon2"]     # Argon2 password hashing
 auth-jwt = ["dep:jsonwebtoken"]    # JWT token issuance/verification
