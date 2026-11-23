@@ -46,5 +46,5 @@ cargo test
 
 ## 要件
 
-- Rust 1.75+（edition 2021）
+- Rust 1.94+（edition 2021）
 - オプション：PostgreSQL（`rbac-sql` 用）、Redis（`rbac-redis` 用）、SeaORM CLI（`rbac-sea-orm` 用）

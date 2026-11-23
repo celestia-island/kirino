@@ -11,7 +11,7 @@ name = "kirino-session"
 #   PQ W1 ruling (PLAN [[pq-kirino]], PR #177).
 version = "0.8.0"
 edition = "2021"
-rust-version = "1.75"
+rust-version = "1.94"
 description = "Distributed session management with JWT and PostgreSQL for kirino"
 license-file = "../../LICENSE"
 repository = "https://github.com/celestia-island/kirino"
@@ -49,8 +49,9 @@ postgres = ["dep:lacrymira", "dep:lacrymira-pg"]
 axum = ["dep:axum", "dep:axum-core"]
 actix = ["dep:actix-web", "dep:actix-rt", "dep:futures-util"]
 # Post-quantum ML-DSA-65 profile (FIPS 204 / RFC 9964). Default-off on
-# purpose: the crate's `rust-version` stays 1.75 for everything else,
-# while `mldsa` needs a toolchain >= 1.87 (ml-dsa MSRV).
+# purpose: it used to be gated by toolchain floor (ml-dsa MSRV >= 1.87
+# vs. the crate's old 1.75 floor); the crate floor is now 1.94, so that
+# reason no longer applies — flipping the default is a separate decision.
 mldsa = ["dep:ml-dsa"]
 
 [dev-dependencies]
