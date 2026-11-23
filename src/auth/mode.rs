@@ -218,7 +218,7 @@ pub enum LoginMethodDescriptor {
         label: String,
         /// Where the browser starts the method: a **same-origin absolute
         /// path** (`/api/auth/oauth/github`), never an external URL — the
-        /// navigation target is validated by `LoginPolicy::validate` so a
+        /// navigation target is checked when the policy is validated, so a
         /// tampered or misconfigured row cannot turn the login panel into an
         /// open redirect. Consumers use it as a **navigation** target
         /// (`location.href`, an `<a href>`); it is never a fetch or
@@ -370,9 +370,13 @@ pub enum LoginPolicyViolation {
     /// `Local` mode advertising a provider, or `Federated` advertising none.
     #[error("mode {0} disagrees with the provider methods (found {1})")]
     ProviderCount(AuthMode, usize),
-    /// Two methods share an id, or a method id is empty.
-    #[error("method id {0:?} is empty or not unique")]
+    /// Two methods share an id, or a method id is empty or padded.
+    #[error("method id {0:?} is empty, padded or not unique")]
     MethodId(String),
+    /// A method's label, or a provider entrance's provider id, is blank —
+    /// the panel would render a nameless row.
+    #[error("method {0:?} has a blank label or provider")]
+    BlankMethod(String),
     /// A navigation target is not a same-origin absolute path.
     #[error("{0} is not a same-origin absolute path: {1:?}")]
     NotSameOriginPath(&'static str, String),
@@ -426,7 +430,7 @@ impl LoginPolicy {
     ///    one (the designated source is the only provider entrance in relay
     ///    mode);
     /// 5. method ids are non-empty, unpadded (`" idp "` is refused) and
-    ///    unique;
+    ///    unique, and every label (and every provider id) is non-blank;
     /// 6. every method `href` is a same-origin absolute path (starts with a
     ///    single `/`), never an external or scheme-relative URL.
     ///
@@ -492,6 +496,17 @@ impl LoginPolicy {
             // two methods, and a blank id names nothing.
             if id.is_empty() || id.trim() != id || !seen.insert(id) {
                 return Err(LoginPolicyViolation::MethodId(id.to_owned()));
+            }
+            let blank_label = match method {
+                LoginMethodDescriptor::Oauth { label, .. }
+                | LoginMethodDescriptor::Passkey { label, .. }
+                | LoginMethodDescriptor::Custom { label, .. } => label.trim().is_empty(),
+            };
+            let blank_provider = method
+                .provider()
+                .is_some_and(|provider| provider.trim().is_empty());
+            if blank_label || blank_provider {
+                return Err(LoginPolicyViolation::BlankMethod(id.to_owned()));
             }
         }
         for method in &self.methods {
@@ -802,6 +817,39 @@ mod tests {
         assert_eq!(
             policy.validate(),
             Err(LoginPolicyViolation::MethodId(String::new()))
+        );
+
+        // MUT:blank-method-fields — a nameless row, or a provider entrance whose
+        // provider routes nowhere, is refused rather than rendered empty.
+        let mut policy = federated(vec![oauth("example-idp")]);
+        policy.methods[0] = LoginMethodDescriptor::oauth("example-idp", "/ok", "   ");
+        assert_eq!(
+            policy.validate(),
+            Err(LoginPolicyViolation::BlankMethod("example-idp".to_owned()))
+        );
+        let mut policy = federated(vec![oauth("example-idp")]);
+        policy.methods[0] = LoginMethodDescriptor::Oauth {
+            id: "example-idp".to_owned(),
+            label: "Example".to_owned(),
+            href: "/ok".to_owned(),
+            provider: "  ".to_owned(),
+            icon: None,
+        };
+        assert_eq!(
+            policy.validate(),
+            Err(LoginPolicyViolation::BlankMethod("example-idp".to_owned()))
+        );
+        let mut policy = LoginPolicy::local();
+        policy.methods.push(passkey());
+        policy.methods[0] = LoginMethodDescriptor::Passkey {
+            id: "passkey".to_owned(),
+            label: "\t".to_owned(),
+            href: "/api/auth/passkey/login".to_owned(),
+            icon: None,
+        };
+        assert_eq!(
+            policy.validate(),
+            Err(LoginPolicyViolation::BlankMethod("passkey".to_owned()))
         );
 
         // MUT:unpadded-ids — a padded id is refused, not silently kept as a second method.

@@ -367,10 +367,11 @@ pub struct UserRecord {
 /// The `password_hash` of an account that has no local password.
 ///
 /// Accounts created through an external sign-in (a provider, the relay
-/// source) carry this sentinel instead of a hash: it is not a PHC string, so
-/// [`verify_password`] can never match it and the password sign-in path
-/// refuses the account by construction. [`UserRecord::has_usable_password`]
-/// is the predicate that reads it.
+/// source) carry this sentinel instead of a hash. It is never handed to
+/// [`verify_password`]: the password paths read it through
+/// [`UserRecord::has_usable_password`] and answer such an account by
+/// verifying against the dummy hash — a failed sign-in that costs exactly
+/// what a wrong password costs, never an internal hash-format error.
 pub const NO_LOCAL_PASSWORD: &str = "!no-local-password!";
 
 impl std::fmt::Debug for UserRecord {
@@ -1758,6 +1759,28 @@ mod tests {
                 assert!(
                     body.contains("} else {\n            Self::DUMMY_HASH\n        };"),
                     "{head:?} must verify a no-password account against the dummy hash"
+                );
+                // The verification must consume the SELECTED hash (`hash` /
+                // `current`), and no other verification may exist in the
+                // function: a second, cheaper hash for the no-password case
+                // would keep the lines above while deleting the cost.
+                let (selected, proof) = if head.contains("authenticate_user") {
+                    ("hash", "password")
+                } else {
+                    ("current", "old_password")
+                };
+                assert!(
+                    body.contains(&format!("if !verify_password({proof}, {selected})? {{")),
+                    "{head:?} must verify the proof against the selected hash"
+                );
+                assert_eq!(
+                    body.matches("verify_password(").count(),
+                    if head.contains("authenticate_user") {
+                        3
+                    } else {
+                        1
+                    },
+                    "{head:?} must carry exactly the known verification call sites"
                 );
                 // The unpinnable shape: a discarded dummy verification next to an
                 // early return. (The pre-existing inactive-account branch keeps its

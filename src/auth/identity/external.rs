@@ -80,6 +80,18 @@ impl ExternalIdentity {
                 KirinoError::Validation("external identity subject is empty".into()).into(),
             );
         }
+        // A present-but-blank issuer is refused rather than normalised to an
+        // empty key: an opaque provider must say `None`.
+        if self
+            .issuer
+            .as_deref()
+            .is_some_and(|issuer| canonical_issuer(issuer).is_empty())
+        {
+            return Err(KirinoError::Validation(
+                "external identity issuer is blank (use None for an opaque provider)".into(),
+            )
+            .into());
+        }
         Ok(())
     }
 
@@ -417,6 +429,27 @@ mod tests {
             .await
             .expect("another tenant is another identity");
         assert_eq!(store.list_for_user(b).await.expect("list").len(), 1);
+    }
+
+    #[test]
+    fn a_blank_issuer_is_refused_not_normalised_to_an_empty_key() {
+        // MUT:blank-issuer — a present-but-blank issuer must not become a third key
+        // beside `None`; an opaque provider has to say `None`.
+        for blank in ["", "   ", "/", "///"] {
+            let who = ExternalIdentity {
+                provider: "example-idp".to_owned(),
+                issuer: Some(blank.to_owned()),
+                subject: "sub-1".to_owned(),
+            };
+            let refused = who.validate().expect_err("blank issuer is refused");
+            assert!(
+                refused.to_string().contains("issuer is blank"),
+                "{blank:?}: {refused}"
+            );
+        }
+        ExternalIdentity::opaque("example-idp", "sub-1")
+            .validate()
+            .expect("None is the spelling for an opaque provider");
     }
 
     #[tokio::test]
