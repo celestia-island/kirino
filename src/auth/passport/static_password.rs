@@ -115,6 +115,27 @@ pub fn hash_password(password: &str) -> Result<String> {
     Ok(hash.to_string())
 }
 
+/// Test-only record of every hash [`verify_password`] went on to verify, so
+/// a test can assert that a refusal actually paid for a verification — and
+/// against which hash — instead of trusting the shape of the calling code.
+#[cfg(test)]
+pub(crate) mod verify_probe {
+    use std::cell::RefCell;
+
+    thread_local! {
+        static CHECKED: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
+    }
+
+    pub(crate) fn record(hash: &str) {
+        CHECKED.with_borrow_mut(|checked| checked.push(hash.to_owned()));
+    }
+
+    /// The hashes verified since the last call, oldest first.
+    pub(crate) fn take() -> Vec<String> {
+        CHECKED.with_borrow_mut(std::mem::take)
+    }
+}
+
 /// Verifies a password against an Argon2id hash string.
 ///
 /// # Errors
@@ -122,6 +143,10 @@ pub fn hash_password(password: &str) -> Result<String> {
 /// Returns an error if `hash` is not a valid PHC hash string.
 pub fn verify_password(password: &str, hash: &str) -> Result<bool> {
     let parsed = PasswordHash::new(hash).map_err(|e| anyhow!("invalid hash format: {e}"))?;
+    // Recorded only once the hash parsed: a malformed hash never reaches
+    // the Argon2id work, so it must not count as a paid verification.
+    #[cfg(test)]
+    verify_probe::record(hash);
     Ok(argon2_instance()
         .verify_password(password.as_bytes(), &parsed)
         .is_ok())

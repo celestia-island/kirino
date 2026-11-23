@@ -45,18 +45,41 @@ jobs:
       - name: Resolve version
         id: ver
         shell: bash
+        # Every version value — the dispatch input and the tag name — is
+        # untrusted input. It reaches the script only through `env`, never by
+        # `${{ }}` interpolation into the script body (that is command
+        # injection), and must be a single line before anything consumes it.
+        env:
+          DISPATCH_VERSION: ${{ github.event.inputs.version }}
+          TAG_NAME: ${{ github.ref_name }}
         run: |
-          if [ -n "${{ github.event.inputs.version }}" ]; then
-            v="${{ github.event.inputs.version }}"
+          if [ -n "${DISPATCH_VERSION}" ]; then
+            v="${DISPATCH_VERSION}"
           else
-            v="${GITHUB_REF_NAME#v}"
+            v="${TAG_NAME#v}"
           fi
+          case "${v}" in
+            *$'\n'*|*$'\r'*) echo "::error::version must be a single line"; exit 1;;
+          esac
           echo "version=$v" >> "$GITHUB_OUTPUT"
+      - name: The tag must name the crate's version
+        # This lane publishes whatever the `v*` tag says. A tag that does not
+        # match the workspace version would put a number on npm that the
+        # Cargo manifest and `.versions.toml` never declared.
+        env:
+          # Through `env`, never inline: the tag name is untrusted input and
+          # must not be interpolated into the script body (it would be parsed
+          # as shell / regex syntax). `-F` matches it as a literal.
+          TAG_VERSION: ${{ steps.ver.outputs.version }}
+        run: |
+          grep -Fqx "version = \"${TAG_VERSION}\"" Cargo.toml || {
+            echo "::error::tag v${TAG_VERSION} does not match the crate version in Cargo.toml"; exit 1; }
       - name: Check whether this version is already on npm
         id: exists
+        env:
+          VER: ${{ steps.ver.outputs.version }}
         run: |
           PKG="@celestia-island/kirino"
-          VER="${{ steps.ver.outputs.version }}"
           if curl -fsS "https://registry.npmjs.org/${PKG}/${VER}" >/dev/null; then
             echo "published=true" >> "$GITHUB_OUTPUT"
             echo "::warning::${PKG}@${VER} is already on npm — skipping."
@@ -65,9 +88,11 @@ jobs:
           fi
       - name: Bump version
         if: steps.exists.outputs.published != 'true'
+        env:
+          VER: ${{ steps.ver.outputs.version }}
         run: |
           cd packages/web_ts
-          npm version "${{ steps.ver.outputs.version }}" --no-git-tag-version --allow-same-version
+          npm version "${VER}" --no-git-tag-version --allow-same-version
       - name: Publish
         if: steps.exists.outputs.published != 'true'
         run: |

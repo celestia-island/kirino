@@ -13,6 +13,7 @@ use uuid::Uuid;
 use self::policy::PasswordLoginPolicy;
 #[cfg(feature = "auth-jwt")]
 use crate::auth::credential::basic::JwtManager;
+use crate::auth::mode::AuthMethod;
 #[cfg(feature = "auth-password")]
 use crate::auth::passport::static_password::{hash_password, verify_password};
 #[cfg(feature = "rbac-dynamic")]
@@ -363,6 +364,16 @@ pub struct UserRecord {
     pub updated_at: chrono::DateTime<Utc>,
 }
 
+/// The `password_hash` of an account that has no local password.
+///
+/// Accounts created through an external sign-in (a provider, the relay
+/// source) carry this sentinel instead of a hash. It is never handed to
+/// [`verify_password`]: the password paths read it through
+/// [`UserRecord::has_usable_password`] and answer such an account by
+/// verifying against the dummy hash — a failed sign-in that costs exactly
+/// what a wrong password costs, never an internal hash-format error.
+pub const NO_LOCAL_PASSWORD: &str = "!no-local-password!";
+
 impl std::fmt::Debug for UserRecord {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("UserRecord")
@@ -391,6 +402,16 @@ impl UserRecord {
             updated_at: self.updated_at,
         }
     }
+
+    /// Whether this account can sign in with a local password.
+    ///
+    /// `false` for an account created through an external sign-in, whose
+    /// hash is the [`NO_LOCAL_PASSWORD`] sentinel. A login panel uses this to
+    /// avoid offering a password prompt the account cannot answer.
+    #[must_use]
+    pub fn has_usable_password(&self) -> bool {
+        self.password_hash != NO_LOCAL_PASSWORD
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -413,6 +434,20 @@ pub struct LoginResult {
     pub roles: Vec<String>,
     #[cfg(feature = "auth-jwt")]
     pub session_id: Option<uuid::Uuid>,
+}
+
+/// A sign-in finished through [`AuthService::complete_login`]: the login
+/// result every sign-in path yields, plus how identity was proven.
+///
+/// [`LoginResult`] itself is deliberately left untouched — it is a public
+/// struct with public fields, and adding one would break every consumer that
+/// names its fields — so the method travels beside it.
+#[derive(Debug, Clone)]
+pub struct CompletedLogin {
+    /// The login result, identical in shape to what a password sign-in yields.
+    pub login: LoginResult,
+    /// How identity was proven.
+    pub method: AuthMethod,
 }
 
 /// Authentication service: registration, login, JWT issuance and password change.
@@ -699,7 +734,7 @@ where
     // `static_password::ARGON2_*` or the unknown-user path becomes measurably
     // cheaper than the known-user one, restoring the enumeration oracle. Removing
     // the verification would do the same.
-    const DUMMY_HASH: &str =
+    pub(crate) const DUMMY_HASH: &str =
         "$argon2id$v=19$m=19456,t=2,p=1$AAAAAAAAAAAAAAAAAAAAAA$AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
 
     async fn authenticate_user(&self, username: &str, password: &str) -> Result<UserRecord> {
@@ -726,7 +761,19 @@ where
             return Err(KirinoError::AuthenticationFailed.into());
         }
 
-        if !verify_password(password, &user.password_hash)? {
+        // An account without a local password (created through an external
+        // sign-in) cannot answer a password prompt. It is refused BY the
+        // verification below, against the dummy hash: the refusal and its
+        // Argon2id cost are one statement, so a no-password account answers
+        // neither faster nor with a different error than a wrong password on
+        // a normal one (no account-shape timing oracle, and the sentinel is
+        // never parsed as a hash — which would surface as an internal error).
+        let hash = if user.has_usable_password() {
+            user.password_hash.as_str()
+        } else {
+            Self::DUMMY_HASH
+        };
+        if !verify_password(password, hash)? {
             return Err(KirinoError::AuthenticationFailed.into());
         }
 
@@ -791,6 +838,130 @@ where
         })
     }
 
+    /// Finish a sign-in whose identity was proven elsewhere.
+    ///
+    /// The single entry every externally-authenticated sign-in goes through
+    /// once the local account is known — a provider callback, the relay
+    /// source, a passkey assertion. It resolves the account, refuses an
+    /// inactive one, and issues exactly the token [`login`](Self::login)
+    /// would: same roles, same permissions, same `user_id` claim. It never
+    /// changes roles and never consults the password policy or the rate
+    /// limiter — the caller has already authenticated the visitor by another
+    /// means, and the password switch says nothing about those.
+    ///
+    /// Deciding *which* account an external identity maps to (and whether an
+    /// unknown one is provisioned, refused or offered a bind step) is the
+    /// caller's policy; this method starts after that decision.
+    ///
+    /// # Errors
+    ///
+    /// [`KirinoError::Validation`] for a malformed id,
+    /// [`KirinoError::NotFound`] for no such account,
+    /// [`KirinoError::AuthenticationFailed`] for an inactive account.
+    pub async fn complete_login(
+        &self,
+        user_id: &str,
+        method: AuthMethod,
+    ) -> Result<CompletedLogin> {
+        let user = self.load_active_user(user_id).await?;
+        let (roles, perm_names) = self
+            .fetch_user_roles_and_perms(&user.id.to_string())
+            .await?;
+
+        let token = self.jwt.issue_with_options(
+            &user.id.to_string(),
+            &user.username,
+            roles.clone(),
+            perm_names,
+            None,
+        )?;
+
+        Ok(CompletedLogin {
+            login: LoginResult {
+                token,
+                user_id: user.id.to_string(),
+                username: user.username.clone(),
+                display_name: user.display_name.clone(),
+                roles,
+                session_id: None,
+            },
+            method,
+        })
+    }
+
+    /// [`complete_login`](Self::complete_login) with a server-side session.
+    ///
+    /// Mirrors [`login_with_session`](Self::login_with_session) the way
+    /// `complete_login` mirrors `login`: the session is created with the
+    /// account's effective roles and bound into the token's session claim.
+    ///
+    /// # Errors
+    ///
+    /// As [`complete_login`](Self::complete_login), plus whatever the
+    /// session manager reports.
+    pub async fn complete_login_with_session<SM>(
+        &self,
+        user_id: &str,
+        method: AuthMethod,
+        session_mgr: &SM,
+        session_ttl: chrono::Duration,
+    ) -> Result<(CompletedLogin, crate::rbac::session::Session<StringSubject>)>
+    where
+        SM: crate::rbac::session::SessionManager<StringSubject>,
+    {
+        let user = self.load_active_user(user_id).await?;
+        let (roles, perm_names) = self
+            .fetch_user_roles_and_perms(&user.id.to_string())
+            .await?;
+
+        let active_roles: HashSet<String> = roles.iter().cloned().collect();
+        let subject = StringSubject::new(user.id.to_string());
+        let session = session_mgr
+            .create_session(&subject, active_roles, session_ttl)
+            .await?;
+
+        let token = self.jwt.issue_with_options(
+            &user.id.to_string(),
+            &user.username,
+            roles.clone(),
+            perm_names,
+            Some(session.id.to_string()),
+        )?;
+
+        Ok((
+            CompletedLogin {
+                login: LoginResult {
+                    token,
+                    user_id: user.id.to_string(),
+                    username: user.username.clone(),
+                    display_name: user.display_name.clone(),
+                    roles,
+                    session_id: Some(session.id),
+                },
+                method,
+            },
+            session,
+        ))
+    }
+
+    /// Resolve a user id to an **active** account, or refuse.
+    ///
+    /// Shared by `complete_login` and `complete_login_with_session` so both
+    /// refuse the same accounts for the same reasons.
+    async fn load_active_user(&self, user_id: &str) -> Result<UserRecord> {
+        let uid = Uuid::parse_str(user_id)
+            .map_err(|_| KirinoError::Validation("invalid user_id".to_string()))?;
+        let user = self
+            .db
+            .find_by_id(&uid)
+            .await?
+            .ok_or_else(|| KirinoError::NotFound("user not found".to_string()))?;
+        if !user.is_active {
+            return Err(KirinoError::AuthenticationFailed.into());
+        }
+        Ok(user)
+    }
+
     pub async fn verify_token(
         &self,
         token: &str,
@@ -838,7 +1009,16 @@ where
             .await?
             .ok_or_else(|| KirinoError::NotFound("user not found".to_string()))?;
 
-        if !verify_password(old_password, &user.password_hash)? {
+        // An account with no local password is refused BY the verification,
+        // against the dummy hash — the same failed-verification answer and
+        // the same cost as a wrong old password, never an internal
+        // hash-format error from parsing the sentinel.
+        let current = if user.has_usable_password() {
+            user.password_hash.as_str()
+        } else {
+            Self::DUMMY_HASH
+        };
+        if !verify_password(old_password, current)? {
             return Err(KirinoError::AuthenticationFailed.into());
         }
 
@@ -1365,6 +1545,373 @@ mod tests {
             auth.change_password(&user.id.to_string(), "Password123!", "NewPassword456!")
                 .await
                 .unwrap();
+        }
+    }
+
+    #[cfg(all(feature = "auth-password", feature = "auth-jwt"))]
+    mod complete_login {
+        use super::*;
+        use crate::{
+            database::memory::InMemoryUserDatabase,
+            rbac::{
+                permission::Permission, session::InMemorySessionManager,
+                store::memory::InMemoryAssignmentStore, subject::StringSubject,
+            },
+        };
+
+        type Service = AuthService<
+            InMemoryUserDatabase,
+            Permission,
+            InMemoryAssignmentStore<StringSubject, Permission>,
+        >;
+
+        fn make_auth() -> Service {
+            AuthService::new(
+                InMemoryUserDatabase::new(),
+                "test-secret-that-is-at-least-32-bytes-long",
+                24,
+                build_default_engine(),
+                "admin",
+                "viewer",
+            )
+            .unwrap()
+        }
+
+        fn make_session_mgr() -> InMemorySessionManager<StringSubject, Permission> {
+            InMemorySessionManager::new(InMemoryAssignmentStore::new())
+        }
+
+        #[tokio::test]
+        async fn test_complete_login_issues_the_token_password_login_would() {
+            let auth = make_auth();
+            let user = auth.register("alice", "Password123!", None).await.unwrap();
+            let via_password = auth.login("alice", "Password123!").await.unwrap();
+
+            let method = AuthMethod::Oauth {
+                provider: "example-idp".to_owned(),
+            };
+            let result = auth
+                .complete_login(&user.id.to_string(), method.clone())
+                .await
+                .unwrap();
+
+            // MUT:same-token-shape — externally proven sign-ins must carry the same
+            // identity and roles the password path issues, only the method differs.
+            assert_eq!(result.login.user_id, via_password.user_id);
+            assert_eq!(result.login.username, via_password.username);
+            assert_eq!(result.login.display_name, via_password.display_name);
+            assert_eq!(result.login.roles, via_password.roles);
+            assert_eq!(result.method, method);
+            assert_eq!(result.login.session_id, None);
+
+            // In this claim set `sub` is the username and the id rides `user_id`.
+            let claims = auth.verify_token(&result.login.token).await.unwrap();
+            assert_eq!(claims.sub, "alice");
+            assert_eq!(claims.user_id, result.login.user_id);
+        }
+
+        #[tokio::test]
+        async fn test_complete_login_ignores_the_password_switch() {
+            // The password switch says nothing about sign-ins proven elsewhere;
+            // a relay-only deployment (password refused) must still be able to
+            // finish an externally proven sign-in.
+            let auth = make_auth().with_password_login_policy(PasswordLoginPolicy::Disabled);
+            let user = auth.register("alice", "Password123!", None).await.unwrap();
+            assert!(auth.login("alice", "Password123!").await.is_err());
+
+            let result = auth
+                .complete_login(&user.id.to_string(), AuthMethod::Relay)
+                .await
+                .expect("externally proven sign-in is not subject to the password switch");
+            assert_eq!(result.method, AuthMethod::Relay);
+            assert_eq!(result.login.username, "alice");
+        }
+
+        #[tokio::test]
+        async fn test_complete_login_ignores_the_rate_limiter() {
+            // MUT:limiter-independent — once the limiter has locked the username,
+            // the password path is refused and the external path is not.
+            let auth = make_auth().with_rate_limiter(LoginRateLimiter::new(1, 300, 900));
+            let user = auth.register("alice", "Password123!", None).await.unwrap();
+            assert!(auth
+                .rate_limiter
+                .check_and_record_failure("alice")
+                .await
+                .is_ok());
+            assert!(
+                auth.rate_limiter
+                    .check_and_record_failure("alice")
+                    .await
+                    .is_err(),
+                "the limiter is now closed"
+            );
+            assert!(
+                auth.login("alice", "Password123!").await.is_err(),
+                "password path is locked out"
+            );
+
+            let result = auth
+                .complete_login(&user.id.to_string(), AuthMethod::Relay)
+                .await
+                .expect("externally proven sign-in is not subject to the password limiter");
+            assert_eq!(result.login.username, "alice");
+        }
+
+        #[tokio::test]
+        async fn test_complete_login_refuses_malformed_unknown_and_inactive() {
+            let auth = make_auth();
+            auth.register("alice", "Password123!", None).await.unwrap();
+
+            let malformed = auth
+                .complete_login("not-a-uuid", AuthMethod::Relay)
+                .await
+                .unwrap_err();
+            assert!(
+                malformed.to_string().contains("invalid user_id"),
+                "{malformed}"
+            );
+
+            let unknown = auth
+                .complete_login(&Uuid::new_v4().to_string(), AuthMethod::Relay)
+                .await
+                .unwrap_err();
+            assert!(unknown.to_string().contains("user not found"), "{unknown}");
+
+            // MUT:inactive-refused — a deactivated account must not be signed in
+            // through the external path any more than through the password path.
+            let sleeper_id = Uuid::new_v4();
+            let now = Utc::now();
+            auth.db
+                .create_user(&UserRecord {
+                    id: sleeper_id,
+                    username: "sleeper".to_owned(),
+                    // A real hash, so the inactive account is refused for being
+                    // inactive — not for lacking a password.
+                    password_hash: hash_password("Password123!").expect("hash"),
+                    display_name: None,
+                    is_active: false,
+                    identity: crate::models::identity::Identity::Basic {
+                        id: sleeper_id,
+                        created_at: now,
+                    },
+                    created_at: now,
+                    updated_at: now,
+                })
+                .await
+                .expect("create inactive account");
+            let inactive = auth
+                .complete_login(&sleeper_id.to_string(), AuthMethod::Passkey)
+                .await
+                .unwrap_err();
+            assert!(
+                matches!(
+                    inactive.downcast_ref::<KirinoError>(),
+                    Some(KirinoError::AuthenticationFailed)
+                ),
+                "expected AuthenticationFailed, got {inactive}"
+            );
+        }
+
+        #[tokio::test]
+        async fn test_complete_login_with_session_binds_a_real_session() {
+            let auth = make_auth();
+            let user = auth.register("alice", "Password123!", None).await.unwrap();
+            let sessions = make_session_mgr();
+
+            let (result, session) = auth
+                .complete_login_with_session(
+                    &user.id.to_string(),
+                    AuthMethod::Relay,
+                    &sessions,
+                    chrono::Duration::minutes(5),
+                )
+                .await
+                .unwrap();
+
+            assert_eq!(result.method, AuthMethod::Relay);
+            assert_eq!(result.login.session_id, Some(session.id));
+            let claims = auth.verify_token(&result.login.token).await.unwrap();
+            assert_eq!(claims.session_id, Some(session.id.to_string()));
+        }
+
+        #[tokio::test]
+        async fn a_no_password_login_pays_exactly_one_full_verification() {
+            use crate::auth::passport::static_password::verify_probe;
+
+            let auth = make_auth();
+            let user = auth.register("alice", "Password123!", None).await.unwrap();
+            auth.db
+                .update_password(&user.id, NO_LOCAL_PASSWORD)
+                .await
+                .unwrap();
+            let _ = verify_probe::take();
+
+            let refused = auth.login("alice", "Password123!").await.unwrap_err();
+            assert!(
+                matches!(
+                    refused.downcast_ref::<KirinoError>(),
+                    Some(KirinoError::AuthenticationFailed)
+                ),
+                "expected AuthenticationFailed, got {refused}"
+            );
+            // MUT:refusal-pays-the-cost — the refusal must be the outcome of exactly
+            // one verification, and that verification must be against the
+            // full-cost dummy hash. An early return, a skipped verification or a
+            // cheaper hash each break one of the two halves.
+            assert_eq!(
+                verify_probe::take(),
+                vec![Service::DUMMY_HASH.to_owned()],
+                "exactly one verification, against the dummy hash"
+            );
+        }
+
+        #[tokio::test]
+        async fn a_wrong_password_on_a_real_account_is_verified_against_its_own_hash() {
+            use crate::auth::passport::static_password::verify_probe;
+
+            let auth = make_auth();
+            auth.register("alice", "Password123!", None).await.unwrap();
+            let _ = verify_probe::take();
+
+            let refused = auth.login("alice", "wrong-password").await.unwrap_err();
+            assert!(
+                matches!(
+                    refused.downcast_ref::<KirinoError>(),
+                    Some(KirinoError::AuthenticationFailed)
+                ),
+                "expected AuthenticationFailed, got {refused}"
+            );
+            // MUT:real-accounts-keep-their-hash — a real account is verified against
+            // its own stored hash, never against the dummy.
+            let checked = verify_probe::take();
+            assert_eq!(checked.len(), 1, "exactly one verification");
+            assert!(
+                checked[0].starts_with("$argon2id$"),
+                "a real Argon2id hash: {}",
+                checked[0]
+            );
+            assert_ne!(checked[0], Service::DUMMY_HASH);
+        }
+
+        #[tokio::test]
+        async fn a_no_password_change_pays_exactly_one_full_verification() {
+            use crate::auth::passport::static_password::verify_probe;
+
+            let auth = make_auth();
+            let user = auth.register("alice", "Password123!", None).await.unwrap();
+            auth.db
+                .update_password(&user.id, NO_LOCAL_PASSWORD)
+                .await
+                .unwrap();
+            let _ = verify_probe::take();
+
+            let refused = auth
+                .change_password(&user.id.to_string(), "Password123!", "NewPassword456!")
+                .await
+                .unwrap_err();
+            assert!(
+                matches!(
+                    refused.downcast_ref::<KirinoError>(),
+                    Some(KirinoError::AuthenticationFailed)
+                ),
+                "expected AuthenticationFailed, got {refused}"
+            );
+            assert_eq!(verify_probe::take(), vec![Service::DUMMY_HASH.to_owned()]);
+        }
+
+        #[tokio::test]
+        async fn test_account_without_a_local_password_cannot_change_a_password() {
+            let auth = make_auth();
+            let user = auth.register("alice", "Password123!", None).await.unwrap();
+            auth.db
+                .update_password(&user.id, NO_LOCAL_PASSWORD)
+                .await
+                .unwrap();
+
+            // MUT:sentinel-change-refused-cleanly — the credential-change path must
+            // refuse a no-password account as a failed verification, not as an
+            // internal hash-format error.
+            let refused = auth
+                .change_password(&user.id.to_string(), "Password123!", "NewPassword456!")
+                .await
+                .unwrap_err();
+            assert!(
+                matches!(
+                    refused.downcast_ref::<KirinoError>(),
+                    Some(KirinoError::AuthenticationFailed)
+                ),
+                "expected AuthenticationFailed, got {refused}"
+            );
+            // The stored sentinel is untouched.
+            assert!(!auth
+                .db
+                .find_by_id(&user.id)
+                .await
+                .unwrap()
+                .unwrap()
+                .has_usable_password());
+        }
+
+        #[tokio::test]
+        async fn test_account_without_a_local_password_cannot_password_login() {
+            let auth = make_auth();
+            let user = auth.register("alice", "Password123!", None).await.unwrap();
+            assert!(
+                auth.db
+                    .find_by_id(&user.id)
+                    .await
+                    .unwrap()
+                    .unwrap()
+                    .has_usable_password(),
+                "a registered account has a password"
+            );
+
+            // Turn the account into an externally-provisioned one: no hash.
+            auth.db
+                .update_password(&user.id, NO_LOCAL_PASSWORD)
+                .await
+                .unwrap();
+            let stored = auth.db.find_by_id(&user.id).await.unwrap().unwrap();
+            assert!(!stored.has_usable_password());
+
+            // MUT:sentinel-refused-cleanly — the password path must refuse the
+            // account as a failed sign-in, not as an internal "invalid hash" error.
+            let refused = auth.login("alice", "Password123!").await.unwrap_err();
+            assert!(
+                matches!(
+                    refused.downcast_ref::<KirinoError>(),
+                    Some(KirinoError::AuthenticationFailed)
+                ),
+                "expected AuthenticationFailed, got {refused}"
+            );
+            let refused_ws = auth
+                .login_with_session(
+                    "alice",
+                    "Password123!",
+                    &make_session_mgr(),
+                    chrono::Duration::minutes(1),
+                )
+                .await
+                .unwrap_err();
+            assert!(
+                matches!(
+                    refused_ws.downcast_ref::<KirinoError>(),
+                    Some(KirinoError::AuthenticationFailed)
+                ),
+                "expected AuthenticationFailed, got {refused_ws}"
+            );
+
+            // The external path is exactly how such an account signs in.
+            let result = auth
+                .complete_login(
+                    &user.id.to_string(),
+                    AuthMethod::Oauth {
+                        provider: "example-idp".to_owned(),
+                    },
+                )
+                .await
+                .unwrap();
+            assert_eq!(result.login.user_id, user.id.to_string());
         }
     }
 
