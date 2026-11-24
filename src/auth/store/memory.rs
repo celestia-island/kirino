@@ -265,7 +265,8 @@ mod tests {
     /// window: the reader clones the payload under the read lock, then
     /// deletes without consulting the result.
     ///
-    /// This is the witness for the pin above. It is deterministic where a
+    /// This demonstrates the defect shape on a hand-written store; it does not
+    /// exercise `MemoryConsumableStore` (the pin above does). It is deterministic where a
     /// scheduling-based control was not: the spin holds the window open on
     /// every core count, and on a `current_thread` runtime it goes red
     /// (the tasks never overlap, so only one racer ever reads) — which is

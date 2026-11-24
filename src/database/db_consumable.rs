@@ -418,10 +418,16 @@ mod tests {
         );
     }
 
+    /// On its own table (R6): a sibling lane instance sweeping the shared
+    /// table would delete this case's expired row first and the assertion
+    /// "I swept it" would go red on correct code — 6% with two instances.
     #[tokio::test]
     #[ignore]
     async fn db_consumable_sweep_removes_only_expired_rows() {
-        let store = store().await;
+        let table = format!("kirino_consumables_sw{}", uuid::Uuid::now_v7().simple());
+        let store =
+            DbConsumableStore::<String>::with_table(conn().await, &table).expect("identifier");
+        store.ensure_schema().await.expect("ensure schema");
         let dead = unique_token();
         let live = unique_token();
         let now = Utc::now();
@@ -433,16 +439,20 @@ mod tests {
             .put(&live, "y".to_string(), now + Duration::seconds(60), now)
             .await
             .expect("park");
-        let removed = store.sweep(Utc::now()).await.expect("sweep");
-        assert!(
-            removed >= 1,
-            "the expired row was swept (removed {removed})"
-        );
+        // Exactly the one expired row, not "at least one".
+        assert_eq!(store.sweep(now).await.expect("sweep"), 1);
         assert_eq!(
-            store.claim(&live, Utc::now()).await.expect("claim"),
+            store.claim(&live, now).await.expect("claim"),
             Claim::Won("y".to_string()),
             "a live row survives the sweep"
         );
+        let _ = store
+            .conn
+            .execute(&raw::sql(
+                format!("DROP TABLE IF EXISTS {table}"),
+                Vec::new(),
+            ))
+            .await;
     }
 
     /// The `now` parameter drives liveness on this backend too (R4: a DB
