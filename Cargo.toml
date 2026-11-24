@@ -34,10 +34,15 @@ rbac-hierarchy = ["rbac-core"]
 rbac-constraints = ["rbac-core"]
 rbac-db-session = ["rbac-core", "dep:lacrymira", "dep:lacrymira-pg"]
 rbac-dynamic = ["rbac-core"]
-rbac-full = ["rbac-inmemory", "rbac-hierarchy", "rbac-constraints", "rbac-dynamic", "auth-password", "auth-jwt", "auth-webauthn", "auth-oauth"]
+rbac-full = ["rbac-inmemory", "rbac-hierarchy", "rbac-constraints", "rbac-dynamic", "auth-password", "auth-jwt", "auth-webauthn", "auth-oauth", "store-db"]
 auth-password = ["dep:argon2"]
 auth-jwt = ["dep:jsonwebtoken"]
 auth-webauthn = ["dep:coset", "dep:p256"]
+# DB-backed single-use credential store: the atomic claim is one SQL
+# statement, so a credential parked on one replica is claimable from any
+# other. Off by default; a single-replica deployment uses the in-memory
+# store in `auth::store::memory`.
+store-db = ["dep:lacrymira", "dep:lacrymira-pg"]
 # TypeScript bindings for the wire contract types (generated; never hand-written).
 ts = ["dep:ts-rs"]
 # Relay (designated external login source): the relying-party protocol core

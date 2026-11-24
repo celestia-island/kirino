@@ -13,10 +13,15 @@ pub mod db_revocation;
 #[cfg(feature = "rbac-db-session")]
 pub mod db_totp_replay;
 
-/// Shared glue for the raw-SQL stores (feature `rbac-db-session`): builds
-/// lacrymira `Command::Sql` values and reads typed cells back out of
-/// `Reply::Rows` without any ORM entity machinery.
-#[cfg(feature = "rbac-db-session")]
+/// DB-backed single-use credential store (feature `store-db`): the atomic
+/// claim is one `DELETE … RETURNING`.
+#[cfg(feature = "store-db")]
+pub mod db_consumable;
+
+/// Shared glue for the raw-SQL stores (features `rbac-db-session` /
+/// `store-db`): builds lacrymira `Command::Sql` values and reads typed cells
+/// back out of `Reply::Rows` without any ORM entity machinery.
+#[cfg(any(feature = "rbac-db-session", feature = "store-db"))]
 pub(crate) mod raw {
     use anyhow::Result;
     use lacrymira::{Command, Dialect, Reply, Value};
@@ -69,6 +74,8 @@ pub(crate) mod raw {
         }
     }
 
+    // Used by the rbac stores only; `store-db` alone must not need them.
+    #[cfg(feature = "rbac-db-session")]
     /// [`as_text`] with SQL NULL mapped to `None`.
     pub(crate) fn as_opt_text(v: &Value) -> Result<Option<String>> {
         match v {
@@ -86,6 +93,8 @@ pub(crate) mod raw {
         }
     }
 
+    // Used by the rbac stores only; `store-db` alone must not need them.
+    #[cfg(feature = "rbac-db-session")]
     /// [`as_i64`] with SQL NULL mapped to `None`.
     pub(crate) fn as_opt_i64(v: &Value) -> Result<Option<i64>> {
         match v {
@@ -94,6 +103,8 @@ pub(crate) mod raw {
         }
     }
 
+    // Used by the rbac stores only; `store-db` alone must not need them.
+    #[cfg(feature = "rbac-db-session")]
     /// UUID value parsed back into [`uuid::Uuid`] (accepts text form too).
     pub(crate) fn as_uuid(v: &Value) -> Result<uuid::Uuid> {
         match v {
@@ -102,5 +113,31 @@ pub(crate) mod raw {
                 .map_err(|e| anyhow::anyhow!("invalid UUID {s:?}: {e}")),
             other => Err(anyhow::anyhow!("expected a UUID value, got {other:?}")),
         }
+    }
+
+    /// Validate a host-chosen SQL identifier (table or column name).
+    ///
+    /// Identifiers cannot be bound as parameters, so callers interpolate them
+    /// into the statement. Only a plain PostgreSQL identifier is therefore
+    /// accepted — ASCII letters, digits and `_`, not starting with a digit,
+    /// at most [`MAX_IDENT_LEN`] bytes — and anything else is rejected rather
+    /// than quoted into the SQL.
+    pub(crate) fn ident(what: &str, raw_value: &str) -> Result<String> {
+        /// Longest identifier PostgreSQL accepts.
+        const MAX_IDENT_LEN: usize = 63;
+        let trimmed = raw_value.trim();
+        let ok = !trimmed.is_empty()
+            && trimmed.len() <= MAX_IDENT_LEN
+            && !trimmed.starts_with(|c: char| c.is_ascii_digit())
+            && trimmed
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '_');
+        if !ok {
+            return Err(crate::error::KirinoError::Validation(format!(
+                "{what} {raw_value:?} is not a plain PostgreSQL identifier"
+            ))
+            .into());
+        }
+        Ok(trimmed.to_string())
     }
 }
