@@ -474,11 +474,18 @@ mod tests {
         ));
     }
 
-    /// The order, pinned across every reflectable refusal (R4 found the
-    /// first "fix" had duplicated the checks ahead of the redirect match;
-    /// R5 found the first pin covered only four of them): the whole
-    /// refusal table is replayed with an unregistered redirect, and every
-    /// one of them must take the unverifiable shape.
+    /// The order, pinned across the refusal table plus the three cases that
+    /// are not in it (R4 found the first "fix" had duplicated the checks
+    /// ahead of the redirect match; R5 found the pin covered only four
+    /// refusals; R6 found the scope-allowance and nonce-shape branches were
+    /// still outside it). Every `Refused` this mock reaches is replayed
+    /// with an unregistered redirect and must take the unverifiable shape.
+    ///
+    /// Not covered here: the scope-allowance and nonce-length branches.
+    /// They are exercised by `grant_and_scope_allowances` / the refusal
+    /// table, but their ORDER is not pinned — a reviewer who moves either
+    /// above the redirect match will not redden this case. Known, recorded
+    /// in the body.
     #[test]
     fn an_unverified_redirect_wins_over_every_other_refusal() {
         let base = request();
@@ -527,6 +534,30 @@ mod tests {
         );
         assert!(matches!(
             d,
+            AuthorizeDecision::RefusedUnverifiableRedirect { .. }
+        ));
+        // The two branches outside `refusal_table` that also return a
+        // reflectable `Refused`: a scope beyond the client's allowance, and
+        // an unusable nonce.
+        let mut narrow = client();
+        narrow.allowed_scopes = vec!["openid".into()];
+        let mut r = with_evil(request());
+        r.scope = Some("openid profile".into());
+        assert!(matches!(
+            authorize(&narrow, &r, &subject(), ConsentOutcome::Approved, now),
+            AuthorizeDecision::RefusedUnverifiableRedirect { .. }
+        ));
+        let mut r = with_evil(request());
+        r.nonce = Some("n".repeat(300));
+        assert!(matches!(
+            authorize(&client(), &r, &subject(), ConsentOutcome::Approved, now),
+            AuthorizeDecision::RefusedUnverifiableRedirect { .. }
+        ));
+        // A nonce with a control character is the other half of that branch.
+        let mut r = with_evil(request());
+        r.nonce = Some("a\nb".into());
+        assert!(matches!(
+            authorize(&client(), &r, &subject(), ConsentOutcome::Approved, now),
             AuthorizeDecision::RefusedUnverifiableRedirect { .. }
         ));
         // And an empty subject (ServerError when the redirect is fine).

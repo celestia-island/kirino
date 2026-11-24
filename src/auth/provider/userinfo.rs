@@ -24,9 +24,11 @@ pub struct SubjectProfile {
     pub picture: Option<String>,
     pub locale: Option<String>,
     pub email: Option<String>,
-    /// Required by the spec whenever `email` is emitted. The host says
-    /// whether it has verified the address; an unverified address is still
-    /// emitted (clients may want it) but never claimed as verified.
+    /// Emitted when the host knows it. OIDC Core §5.1 defines it as a
+    /// boolean and §5.4 lists it as OPTIONAL — there is no "required when
+    /// `email` is present" rule, and this provider does not invent one: a
+    /// host that does not know omits it, and a client that needs the
+    /// distinction must treat absence as "unverified".
     pub email_verified: Option<bool>,
 }
 

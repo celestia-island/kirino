@@ -108,7 +108,7 @@ impl std::fmt::Debug for TokenResponse {
 pub const DEFAULT_ACCESS_TTL_SECS: i64 = 3600;
 
 /// Everything the orchestration needs that is not the request.
-pub struct TokenContext<'a, S: ConsumableStore<CodeGrant>> {
+pub struct TokenContext<'a, S: ConsumableStore<CodeGrant> + ?Sized> {
     pub registry: &'a dyn ClientRegistry,
     /// Where authorization codes are parked.
     pub codes: &'a S,
@@ -273,7 +273,7 @@ pub fn verify_access_token(
 #[allow(clippy::too_many_arguments)]
 pub async fn authorization_code_grant(
     req: &TokenRequest,
-    ctx: &TokenContext<'_, impl ConsumableStore<CodeGrant>>,
+    ctx: &TokenContext<'_, impl ConsumableStore<CodeGrant> + ?Sized>,
 ) -> Result<TokenResponse, ProviderError> {
     let client =
         authenticate_client(ctx.registry, &req.client_id, req.client_secret.as_deref()).await?;
@@ -327,7 +327,7 @@ pub async fn authorization_code_grant(
 async fn mint_tokens(
     grant: &CodeGrant,
     client: &ClientRecord,
-    ctx: &TokenContext<'_, impl ConsumableStore<CodeGrant>>,
+    ctx: &TokenContext<'_, impl ConsumableStore<CodeGrant> + ?Sized>,
 ) -> Result<TokenResponse, ProviderError> {
     let access = ctx.access_signer.sign(
         &ctx.issuer,
@@ -388,7 +388,7 @@ pub const REFRESH_TTL_SECS: i64 = 7 * 24 * 3600;
 /// already-rotated refresh token.
 pub async fn refresh_token_grant(
     req: &TokenRequest,
-    ctx: &TokenContext<'_, impl ConsumableStore<CodeGrant>>,
+    ctx: &TokenContext<'_, impl ConsumableStore<CodeGrant> + ?Sized>,
 ) -> Result<TokenResponse, ProviderError> {
     let client =
         authenticate_client(ctx.registry, &req.client_id, req.client_secret.as_deref()).await?;
@@ -1262,6 +1262,53 @@ MCowBQYDK2VwAyEAPH53IpxGc7yhGj/Hb6390oc/ij0hPzepMo9gsUIKRXU=
             retry.is_ok(),
             "the refresh token must survive our own mint failure: {retry:?}"
         );
+    }
+
+    /// The host shape a downstream service actually uses: a store behind a
+    /// trait object. R6 found `TokenContext<S>`'s implicit `Sized` made
+    /// `Arc<dyn ConsumableStore<CodeGrant>>` unrepresentable — the doc on
+    /// `ConsumableStore` promises that shape, and the first host (ERP P2)
+    /// would have hit it.
+    #[tokio::test]
+    async fn a_store_behind_a_trait_object_works() {
+        let f = fixture().await;
+        let codes: std::sync::Arc<dyn ConsumableStore<CodeGrant>> =
+            std::sync::Arc::new(Store::new());
+        let refresh: std::sync::Arc<dyn ConsumableStore<CodeGrant>> =
+            std::sync::Arc::new(Store::new());
+        let now = Utc::now();
+        let grant = CodeGrant {
+            kind: GrantKind::Code,
+            client_id: "erp-admin".into(),
+            redirect_uri: "https://admin.example/cb".into(),
+            scope: "profile".into(),
+            sub: "user-1".into(),
+            auth_time: now,
+            amr: vec![],
+            acr: None,
+            nonce: None,
+            code_challenge: Some(challenge_for(&"v".repeat(43))),
+            authenticated_at: now,
+            expires_at: now + chrono::Duration::seconds(60),
+        };
+        let minted = code::mint_code(grant, now, None);
+        codes
+            .put(&minted.code, minted.grant, minted.expires_at, now)
+            .await
+            .unwrap();
+        let ctx = TokenContext {
+            registry: &f.registry,
+            codes: codes.as_ref(),
+            refresh: refresh.as_ref(),
+            id_token_signer: Some(&f.signer),
+            issuer: "https://auth.example".into(),
+            access_signer: &f.access,
+            now,
+        };
+        let resp = authorization_code_grant(&good_req(&minted.code), &ctx)
+            .await
+            .expect("a dyn store is a valid host shape");
+        assert!(resp.refresh_token.is_some());
     }
 
     #[tokio::test]
