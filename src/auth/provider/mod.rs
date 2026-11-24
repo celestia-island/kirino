@@ -129,6 +129,43 @@ impl From<anyhow::Error> for ProviderError {
     }
 }
 
+#[cfg(test)]
+mod from_anyhow_tests {
+    use super::*;
+    use crate::error::KirinoError;
+
+    /// The module's headline claim — an outage must never tell a user their
+    /// login is invalid — as a test. R6 found folding the non-`Validation`
+    /// arm into `InvalidGrant` (the doc's own named anti-pattern) survived
+    /// the whole suite.
+    #[test]
+    fn an_outage_is_never_reported_as_an_invalid_grant() {
+        // A contract violation is the caller's bug → Policy.
+        let contract = anyhow::Error::from(KirinoError::Validation("dup".into()));
+        assert!(matches!(ProviderError::from(contract), ProviderError::Policy(m) if m == "dup"));
+        // Anything else is an outage → Storage.
+        for message in [
+            "error returned from database: connection refused",
+            "connection pool timed out",
+            "attempt store is down",
+        ] {
+            let outage = anyhow::Error::msg(message);
+            let mapped = ProviderError::from(outage);
+            assert!(
+                matches!(mapped, ProviderError::Storage(ref m) if m.contains(message)),
+                "an outage must be Storage, not {mapped:?}: {message}"
+            );
+            assert_ne!(mapped, ProviderError::InvalidGrant);
+            // MUT:outage-is-invalid — folding the outage arm into
+            // `InvalidGrant` reddens this loop.
+        }
+        // A Validation nested under `.context()` still downcasts.
+        let wrapped =
+            anyhow::Error::from(KirinoError::Validation("dup".into())).context("while claiming");
+        assert!(matches!(ProviderError::from(wrapped), ProviderError::Policy(m) if m == "dup"));
+    }
+}
+
 /// The OAuth 2.0 error codes this provider emits (RFC 6749 §5.2, §4.2.2.1).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 #[non_exhaustive]

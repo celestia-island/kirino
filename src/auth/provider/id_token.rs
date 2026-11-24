@@ -224,7 +224,7 @@ fn ed25519_spki_raw32(pem: &str) -> Option<[u8; 32]> {
 mod tests {
     use super::*;
     use crate::auth::passport::oauth::IdTokenVerifier;
-    use crate::auth::provider::code::{CodeGrant, GrantKind as CodeGrantKind};
+    use crate::auth::provider::code::{CodeGrant, GrantKind};
 
     /// A throwaway keypair for tests only (never a deployment key).
     const PRIVATE_PEM: &str = "-----BEGIN PRIVATE KEY-----
@@ -236,7 +236,7 @@ MCowBQYDK2VwAyEAPH53IpxGc7yhGj/Hb6390oc/ij0hPzepMo9gsUIKRXU=
 
     fn grant() -> CodeGrant {
         CodeGrant {
-            kind: CodeGrantKind::Code,
+            kind: GrantKind::Code,
             client_id: "erp-admin".into(),
             redirect_uri: "https://admin.example/cb".into(),
             scope: "openid profile".into(),

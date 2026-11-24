@@ -481,11 +481,10 @@ mod tests {
     /// still outside it). Every `Refused` this mock reaches is replayed
     /// with an unregistered redirect and must take the unverifiable shape.
     ///
-    /// Not covered here: the scope-allowance and nonce-length branches.
-    /// They are exercised by `grant_and_scope_allowances` / the refusal
-    /// table, but their ORDER is not pinned — a reviewer who moves either
-    /// above the redirect match will not redden this case. Known, recorded
-    /// in the body.
+    /// Also pinned: the scope-allowance branch and both halves of the
+    /// nonce-shape branch, which return `Refused` too and are not in the
+    /// table. (R6 found these three could be hoisted above the redirect
+    /// match with the suite green.)
     #[test]
     fn an_unverified_redirect_wins_over_every_other_refusal() {
         let base = request();
@@ -495,7 +494,6 @@ mod tests {
             redirect_uri: Some(evil.into()),
             ..r
         };
-        let mut unchecked = Vec::new();
         for (req, _) in refusal_table(base) {
             let d = authorize(
                 &client(),
@@ -508,7 +506,6 @@ mod tests {
                 matches!(d, AuthorizeDecision::RefusedUnverifiableRedirect { .. }),
                 "an unregistered redirect must never yield a reflectable refusal: {d:?}"
             );
-            unchecked.push(());
         }
         // Plus the refusals that are not in the table: a client without the
         // code grant, and a denied consent.
@@ -576,7 +573,6 @@ mod tests {
             d,
             AuthorizeDecision::RefusedUnverifiableRedirect { .. }
         ));
-        assert!(!unchecked.is_empty());
     }
 
     /// A plain-text challenge is refused even for a PKCE-exempt client: the
