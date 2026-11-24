@@ -26,7 +26,6 @@
 //! rejected).
 
 use std::collections::HashMap;
-
 use tokio::sync::RwLock;
 
 /// Durable "highest time step already accepted" per MFA factor.

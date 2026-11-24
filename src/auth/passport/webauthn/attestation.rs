@@ -13,9 +13,11 @@
 //!   [`super::auth_data::AuthenticatorData`],
 //! * hands back the credential id + COSE public key for storage.
 
-use super::auth_data::{AuthenticatorData, FLAG_AT};
 use anyhow::{anyhow, Result};
+
 use coset::{cbor::value::Value, CborSerializable, CoseKey};
+
+use super::auth_data::{AuthenticatorData, FLAG_AT};
 
 /// A verified registration's useful outputs.
 #[derive(Debug, Clone)]

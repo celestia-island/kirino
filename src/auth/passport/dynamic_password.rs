@@ -5,8 +5,7 @@ use hmac::{Hmac, KeyInit, Mac};
 use sha1::Sha1;
 use zeroize::Zeroizing;
 
-use crate::auth::passport::totp_replay::TotpReplayGuard;
-use crate::utils::constant_time_eq;
+use crate::{auth::passport::totp_replay::TotpReplayGuard, utils::constant_time_eq};
 
 type HmacSha1 = Hmac<Sha1>;
 

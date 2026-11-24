@@ -1,6 +1,7 @@
 use anyhow::{anyhow, Result};
-use hmac::{Hmac, KeyInit, Mac};
 use rand::RngExt;
+
+use hmac::{Hmac, KeyInit, Mac};
 use zeroize::Zeroizing;
 
 use crate::utils::constant_time_eq;

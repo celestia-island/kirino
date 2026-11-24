@@ -1,6 +1,8 @@
-use crate::rbac::traits::Permission as PermissionTrait;
-use kirino_macro::hierarchical_permission;
 use serde::{Deserialize, Serialize};
+
+use kirino_macro::hierarchical_permission;
+
+use crate::rbac::traits::Permission as PermissionTrait;
 
 hierarchical_permission!(
     #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]

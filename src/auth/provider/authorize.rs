@@ -25,8 +25,10 @@
 
 use chrono::{DateTime, Utc};
 
-use super::client::{ClientRecord, GrantType, RedirectMatch};
-use super::{validate_scope, ProtocolError, ProviderError};
+use super::{
+    client::{ClientRecord, GrantType, RedirectMatch},
+    validate_scope, ProtocolError, ProviderError,
+};
 
 /// A parsed authorization request (the query string of `GET /oauth/authorize`).
 #[derive(Debug, Clone, PartialEq, Eq)]

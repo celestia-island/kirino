@@ -16,14 +16,15 @@
 //! affecting real users. Clamp to [4, 32].
 
 use rand::RngExt;
-use sha2::{Digest, Sha256};
 use std::{
     collections::HashMap,
     sync::Arc,
     time::{Duration, Instant},
 };
-use thiserror::Error;
 use tokio::sync::RwLock;
+
+use sha2::{Digest, Sha256};
+use thiserror::Error;
 
 /// Default proof-of-work difficulty (leading zero bits). 12 ≈ ~4k expected
 /// hashes — a snappy default that still blunts blind scripting.

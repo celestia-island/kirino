@@ -43,22 +43,25 @@
 //!   derive the expiry from activity instead — the SPI contract absorbs
 //!   both.
 
-use std::collections::{HashMap, HashSet};
-use std::fmt;
-use std::sync::Arc;
-
 use anyhow::{anyhow, Result};
-use async_trait::async_trait;
 use chrono::{DateTime, Duration, Utc};
-use jsonwebtoken::errors::ErrorKind;
 use serde::{Deserialize, Serialize};
+use std::{
+    collections::{HashMap, HashSet},
+    fmt,
+    sync::Arc,
+};
 use tokio::sync::RwLock;
 use uuid::Uuid;
 
-use crate::auth::identity::anonymous::AnonymousIdentityProvider;
-use crate::auth::identity::temporary::TemporaryIdentityProvider;
-use crate::local::{ExpClaims, LocalJwt, LocalJwtError};
-use crate::models::identity::Identity;
+use async_trait::async_trait;
+use jsonwebtoken::errors::ErrorKind;
+
+use crate::{
+    auth::identity::{anonymous::AnonymousIdentityProvider, temporary::TemporaryIdentityProvider},
+    local::{ExpClaims, LocalJwt, LocalJwtError},
+    models::identity::Identity,
+};
 
 /// `sub` prefix binding a JWT subject to a visitor ticket id (§7.7 wire
 /// format: `sub = visitor:<uuid>`).

@@ -24,12 +24,12 @@
 //! across the trait boundary. It is covered by the repository-wide
 //! RUSTSEC-2026-0543 ignore and moves to `jiff` with that wave.
 
-use std::collections::HashMap;
-
 use anyhow::Result;
-use async_trait::async_trait;
 use chrono::{DateTime, Utc};
+use std::collections::HashMap;
 use tokio::sync::RwLock;
+
+use async_trait::async_trait;
 
 use super::consumable::{fingerprint, Claim, ConsumableStore};
 use crate::error::KirinoError;

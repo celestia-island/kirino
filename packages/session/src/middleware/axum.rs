@@ -1,9 +1,10 @@
+use std::sync::Arc;
+
 use axum::{
     extract::FromRequestParts,
     http::{request::Parts, StatusCode},
     response::{IntoResponse, Response},
 };
-use std::sync::Arc;
 
 use crate::{SessionError, TokenClaims, TokenManager};
 

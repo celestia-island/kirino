@@ -12,11 +12,15 @@
 //! signed data). The RP ID binding (§7.2 step 9) is enforced *inside* this
 //! module via [`AssertionExpectations::rp_id`] — callers cannot skip it.
 
-use super::auth_data::AuthenticatorData;
-use super::client_data::{ClientData, TYPE_GET};
 use anyhow::{anyhow, Result};
+
 use p256::ecdsa::signature::Verifier;
 use sha2::{Digest, Sha256};
+
+use super::{
+    auth_data::AuthenticatorData,
+    client_data::{ClientData, TYPE_GET},
+};
 
 /// Policy applied to an assertion before accepting it.
 #[derive(Debug, Clone)]

@@ -29,8 +29,9 @@
 //! every client the first time it hands out a JWKS.
 
 use chrono::{DateTime, Utc};
-use jsonwebtoken::{Algorithm, EncodingKey, Header};
 use serde::{Deserialize, Serialize};
+
+use jsonwebtoken::{Algorithm, EncodingKey, Header};
 use zeroize::Zeroizing;
 
 use super::ProviderError;

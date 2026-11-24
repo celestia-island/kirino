@@ -1,7 +1,6 @@
-use std::hash::{Hash, Hasher};
-
 use anyhow::Result;
 use chrono::Utc;
+use std::hash::{Hash, Hasher};
 
 use crate::{models::identity::Identity, rbac::traits::Subject};
 

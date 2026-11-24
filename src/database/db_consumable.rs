@@ -31,18 +31,19 @@
 //! across the trait boundary. It is covered by the repository-wide
 //! RUSTSEC-2026-0543 ignore and moves to `jiff` with that wave.
 
+use anyhow::{Context, Result};
+use chrono::{DateTime, Utc};
+use serde::{de::DeserializeOwned, Serialize};
 use std::marker::PhantomData;
 
-use anyhow::{Context, Result};
 use async_trait::async_trait;
-use chrono::{DateTime, Utc};
 use lacrymira::Value;
 use lacrymira_pg::PgExecutor;
-use serde::de::DeserializeOwned;
-use serde::Serialize;
 
-use crate::auth::store::consumable::{fingerprint, Claim, ConsumableStore};
-use crate::database::raw;
+use crate::{
+    auth::store::consumable::{fingerprint, Claim, ConsumableStore},
+    database::raw,
+};
 
 /// Default table name.
 pub const DEFAULT_TABLE: &str = "kirino_consumables";

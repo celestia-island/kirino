@@ -36,10 +36,9 @@
 //! from the RBAC engine) and must not let request data influence it.
 
 use anyhow::Result;
+use std::{collections::HashMap, fmt::Debug, hash::Hash};
+
 use async_trait::async_trait;
-use std::collections::HashMap;
-use std::fmt::Debug;
-use std::hash::Hash;
 
 /// Workspace-scoped role.
 ///

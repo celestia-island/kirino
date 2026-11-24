@@ -27,7 +27,6 @@
 //! map externally.
 
 use std::collections::HashMap;
-
 use tokio::sync::RwLock;
 
 /// Upper bound on retained revocation entries before already-expired ones

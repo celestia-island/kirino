@@ -9,8 +9,9 @@
 //! RUSTSEC-2026-0543 ignore and moves to `jiff` with that wave.
 
 use anyhow::Result;
-use async_trait::async_trait;
 use chrono::{DateTime, Utc};
+
+use async_trait::async_trait;
 use sha2::Digest;
 
 /// The outcome of [`ConsumableStore::claim`].
