@@ -33,6 +33,7 @@
 
 use anyhow::Result;
 use url::Url;
+
 use zeroize::Zeroizing;
 
 use crate::auth::mode::{AuthMode, LoginPolicy};
@@ -435,6 +436,10 @@ impl RelayConfig {
             userinfo_url: self.userinfo_url.clone(),
             token_body: TokenBody::Form,
             scopes: self.scopes.clone(),
+            // The relay source is an OIDC provider and answers at the top
+            // level; a provider that wraps its answer in an envelope is
+            // described by its own metadata.
+            token_response_envelope: None,
         })
     }
 
