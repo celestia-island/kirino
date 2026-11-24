@@ -177,25 +177,63 @@ mod tests {
         Utc::now() + Duration::seconds(secs)
     }
 
-    /// The contract's central claim, on a **multi-thread** runtime with
-    /// real parallelism.
+    /// A payload whose `clone` blocks for a fixed spin, so a read-then-delete
+    /// window is **held open** instead of hoped for.
     ///
-    /// A `current_thread` runtime makes this a weak test: tasks only
-    /// interleave at await points, and the correct `claim` has none between
-    /// lookup and removal — so a wrong implementation that also has no await
-    /// in that window (clone the payload, ignore the delete's result) passes
-    /// there while handing the credential to two racers in production. The
-    /// `naive_clone_then_delete_loses_the_guarantee` case below is that
-    /// exact shape and is the reason this runs with workers.
+    /// The R3/R4 reviews measured the alternative: with a plain payload the
+    /// "exactly one racer" pin caught the clone-then-delete mutation only
+    /// probabilistically (17/20 filtered, 15/16 in the full suite, 0/10 on one
+    /// CPU), and a negative control built on scheduling went red on the
+    /// *correct* implementation one run in twenty. A window that is merely
+    /// likely is not a test. Blocking inside the clone keeps the racer that
+    /// holds the read lock there for a measurable time, so every other racer
+    /// is guaranteed to arrive while the window is open — on any core count,
+    /// in any suite order. The correct `claim` never calls `clone` at all
+    /// (it moves the payload out under the write lock), so the spin costs
+    /// the real implementation nothing.
+    struct SlowPayload(u32);
+
+    /// How long a read-phase `clone` spins. Long enough that 31 other racers
+    /// have certainly entered `claim` on a loaded machine; short enough that
+    /// a mutated run finishes in well under a second.
+    const WINDOW_SPIN: std::time::Duration = std::time::Duration::from_millis(20);
+
+    impl Clone for SlowPayload {
+        fn clone(&self) -> Self {
+            spin_for(WINDOW_SPIN);
+            Self(self.0)
+        }
+    }
+
+    fn spin_for(d: std::time::Duration) {
+        let until = std::time::Instant::now() + d;
+        while std::time::Instant::now() < until {
+            std::hint::spin_loop();
+        }
+    }
+
+    /// The contract's central claim: exactly one of many racers wins, with
+    /// the window forced open by [`SlowPayload`].
+    ///
+    /// Under the correct `claim` the payload is moved, never cloned, so the
+    /// spin never runs and 32 racers resolve in microseconds. Under the
+    /// clone-then-delete mutation every racer that enters the read phase
+    /// before the first delete spends 20 ms inside `clone`, which is far
+    /// longer than the other 31 need to arrive — so several of them clone
+    /// the payload and several win. R4 measured this shape 80/80 red on
+    /// every core count including one.
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn claim_hands_the_payload_to_exactly_one_of_many_racers() {
-        // Several rounds: a scheduling-dependent defect can hide on a quiet
-        // run, and the negative control shows it needs more than one.
         for round in 0..8u32 {
-            let token = format!("tok-{round}");
-            let store: Arc<MemoryConsumableStore<u32>> = Arc::new(MemoryConsumableStore::new());
+            let store: Arc<MemoryConsumableStore<SlowPayload>> =
+                Arc::new(MemoryConsumableStore::new());
             store
-                .put(&token, round, later(60), Utc::now())
+                .put(
+                    &format!("tok-{round}"),
+                    SlowPayload(round),
+                    later(60),
+                    Utc::now(),
+                )
                 .await
                 .expect("park");
 
@@ -203,11 +241,9 @@ mod tests {
             let mut handles = Vec::new();
             for _ in 0..32 {
                 let store = Arc::clone(&store);
-                let token = token.clone();
+                let token = format!("tok-{round}");
                 let barrier = Arc::clone(&barrier);
                 handles.push(tokio::spawn(async move {
-                    // Release every racer at once so the window is contended
-                    // rather than serialised by spawn order.
                     barrier.wait().await;
                     store.claim(&token, Utc::now()).await
                 }));
@@ -216,7 +252,7 @@ mod tests {
             for handle in handles {
                 let claim = handle.await.expect("task").expect("claim");
                 if let Claim::Won(payload) = claim {
-                    assert_eq!(payload, round);
+                    assert_eq!(payload.0, round, "the winner gets the right payload");
                     winners += 1;
                 }
             }
@@ -225,55 +261,46 @@ mod tests {
         }
     }
 
-    /// The defect shape a single-thread runtime cannot see: the reader
-    /// clones the payload out under the read lock and then deletes without
-    /// consulting the result — **no await between the two**, so the
-    /// `yield_now`-based demonstration is not the thing being modelled.
+    /// The defect shape, as a hand-written store, with the **same** forced
+    /// window: the reader clones the payload under the read lock, then
+    /// deletes without consulting the result.
     ///
-    /// This is the R3 review's surviving mutation. It is a hand-written
-    /// wrong store, kept as the negative control for the multi-thread case
-    /// above: if that case were ever moved back to `current_thread`, this
-    /// one would stop showing the defect (two winners) — which is exactly
-    /// how the blind spot was found.
+    /// This is the witness for the pin above. It is deterministic where a
+    /// scheduling-based control was not: the spin holds the window open on
+    /// every core count, and on a `current_thread` runtime it goes red
+    /// (the tasks never overlap, so only one racer ever reads) — which is
+    /// exactly the property the pin relies on the multi-thread flavor for.
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn naive_clone_then_delete_loses_the_guarantee() {
         struct NaiveStore {
-            entries: RwLock<HashMap<String, u8>>,
+            entries: RwLock<HashMap<String, SlowPayload>>,
         }
         let store = Arc::new(NaiveStore {
-            entries: RwLock::new(HashMap::from([("tok".to_string(), 1u8)])),
+            entries: RwLock::new(HashMap::from([("tok".to_string(), SlowPayload(1))])),
         });
-        let mut ever_two = false;
-        for _ in 0..64 {
-            store.entries.write().await.insert("tok".to_string(), 1);
-            let barrier = Arc::new(tokio::sync::Barrier::new(8));
-            let mut handles = Vec::new();
-            for _ in 0..8 {
-                let store = Arc::clone(&store);
-                let barrier = Arc::clone(&barrier);
-                handles.push(tokio::spawn(async move {
-                    barrier.wait().await;
-                    // Read: clone the payload out, drop the read lock.
-                    let found = store.entries.read().await.get("tok").copied();
-                    // Delete: result ignored — the bug.
-                    let _ = store.entries.write().await.remove("tok");
-                    found.is_some()
-                }));
-            }
-            let mut winners = 0usize;
-            for handle in handles {
-                if handle.await.expect("task") {
-                    winners += 1;
-                }
-            }
-            if winners >= 2 {
-                ever_two = true;
-                break;
+        let barrier = Arc::new(tokio::sync::Barrier::new(8));
+        let mut handles = Vec::new();
+        for _ in 0..8 {
+            let store = Arc::clone(&store);
+            let barrier = Arc::clone(&barrier);
+            handles.push(tokio::spawn(async move {
+                barrier.wait().await;
+                // Read: clone the payload (spins 20 ms), drop the read lock.
+                let found = store.entries.read().await.get("tok").cloned();
+                // Delete: result ignored — the bug.
+                let _ = store.entries.write().await.remove("tok");
+                found.is_some()
+            }));
+        }
+        let mut winners = 0usize;
+        for handle in handles {
+            if handle.await.expect("task") {
+                winners += 1;
             }
         }
         assert!(
-            ever_two,
-            "clone-then-delete must hand the credential to two racers on a multi-thread runtime"
+            winners >= 2,
+            "clone-then-delete must hand the credential to several racers (got {winners})"
         );
     }
 
@@ -357,6 +384,51 @@ mod tests {
             store.claim("tok", Utc::now()).await.expect("claim"),
             Claim::Won(2)
         );
+    }
+
+    /// The `now` parameter drives every time decision — a backend that
+    /// substituted the wall clock would pass every other case (R4: swapping
+    /// all three `now`s for `Utc::now()` left 14/14 green). This case parks
+    /// and claims on a synthetic clock the wall clock cannot match.
+    #[tokio::test]
+    async fn the_callers_clock_decides_liveness_not_the_wall_clock() {
+        let store = MemoryConsumableStore::<u8>::new();
+        // Parked "in the past" and already "expired" per the caller's clock…
+        let park_at = Utc::now() - chrono::Duration::days(10);
+        store
+            .put("tok", 1, park_at + chrono::Duration::seconds(60), park_at)
+            .await
+            .expect("park");
+        // …but claimed at an instant the caller says is still inside the TTL.
+        let inside = park_at + chrono::Duration::seconds(30);
+        assert_eq!(
+            store.claim("tok", inside).await.expect("claim"),
+            Claim::Won(1),
+            "the caller's clock, not the wall clock, says this is live"
+        );
+        // And the mirror: a fresh wall-clock entry is dead per the caller.
+        let store = MemoryConsumableStore::<u8>::new();
+        let now = Utc::now();
+        store
+            .put("tok", 2, now + chrono::Duration::seconds(60), now)
+            .await
+            .expect("park");
+        let far_future = now + chrono::Duration::days(1);
+        assert_eq!(
+            store.claim("tok", far_future).await.expect("claim"),
+            Claim::Lost
+        );
+        // A duplicate put is judged on the same clock: at `far_future` the
+        // first entry is dead, so a second put under the same token succeeds.
+        store
+            .put(
+                "tok",
+                3,
+                far_future + chrono::Duration::seconds(60),
+                far_future,
+            )
+            .await
+            .expect("the first entry is dead at far_future, so the token is free");
     }
 
     #[tokio::test]

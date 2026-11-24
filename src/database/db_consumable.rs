@@ -445,6 +445,31 @@ mod tests {
         );
     }
 
+    /// The `now` parameter drives liveness on this backend too (R4: a DB
+    /// `put`/`claim` that substituted `Utc::now()` left every case green).
+    #[tokio::test]
+    #[ignore]
+    async fn db_consumable_the_callers_clock_decides_liveness() {
+        let store = store().await;
+        let token = unique_token();
+        let park_at = Utc::now() - chrono::Duration::days(10);
+        store
+            .put(
+                &token,
+                "x".to_string(),
+                park_at + chrono::Duration::seconds(60),
+                park_at,
+            )
+            .await
+            .expect("park");
+        let inside = park_at + chrono::Duration::seconds(30);
+        assert_eq!(
+            store.claim(&token, inside).await.expect("claim"),
+            Claim::Won("x".to_string()),
+            "the caller's clock says this is live even though the wall clock does not"
+        );
+    }
+
     /// A host-chosen table: the identifier guard accepts a plain name and the
     /// store works against it end to end.
     #[tokio::test]
