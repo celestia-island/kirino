@@ -38,8 +38,8 @@ hex = "^0.4"
 # party core, which lives in the root crate. Session is a layer above
 # kirino, never the reverse (the root does not depend on this crate).
 kirino = { path = "../..", version = "0.9", features = ["auth-oauth"], optional = true }
-rand = "^0.10"
-url = "^2"
+rand = { version = "^0.10", optional = true }
+url = { version = "^2", optional = true }
 # Raw-SQL data access goes through the family data layer (lacrymira);
 # the pg executor brings sqlx, so the feature stays optional.
 lacrymira = { version = "^0.2", optional = true }
@@ -54,7 +54,7 @@ futures-util = { version = "^0.3", optional = true }
 
 [features]
 # Browser-session sign-in over relay (BFF orchestration).
-relay = ["dep:kirino"]
+relay = ["dep:kirino", "dep:rand", "dep:url"]
 default = ["axum"]
 postgres = ["dep:lacrymira", "dep:lacrymira-pg"]
 axum = ["dep:axum", "dep:axum-core"]

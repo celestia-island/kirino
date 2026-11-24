@@ -126,9 +126,11 @@ pub enum RelaySessionError {
 ///
 /// # Errors
 ///
-/// [`RelaySessionError::AttemptStore`] when the attempt cannot be parked;
-/// [`RelaySessionError::NotConfigured`] when the metadata lacks the
-/// authorize endpoint.
+/// [`RelaySessionError::AttemptStore`] when the attempt cannot be parked.
+/// (`ProviderMetadata::authorize_url` is not an `Option`, so "the metadata
+/// lacks the authorize endpoint" is not representable and `NotConfigured`
+/// cannot arise from this call; the variant stays for hosts that build
+/// their own errors.)
 pub async fn begin(
     ctx: &RelaySessionContext<'_>,
     return_to: Option<&str>,
@@ -143,16 +145,17 @@ pub async fn begin(
     )
     .await
     .map_err(|e| RelaySessionError::AttemptStore(e.to_string()))?;
-    let mut url = oauth::authorize_url(
+    // `return_to` is NOT put on the authorize URL: the RP core's
+    // `authorize_url` does not read it, the provider's `AuthorizeRequest`
+    // has no such field, and `RelayConfig::return_param` only tells THIS
+    // host's UI which parameter name to use after the callback. The attempt
+    // carries the value; `complete` filters it before anyone redirects.
+    let url = oauth::authorize_url(
         &ctx.provider,
         &ctx.client,
         &ctx.config.redirect_url,
         &attempt,
     );
-    if let Some(target) = return_to {
-        url.query_pairs_mut()
-            .append_pair(&ctx.config.return_param, target);
-    }
     Ok(BeginRedirect {
         url: url.to_string(),
         binding,
@@ -266,16 +269,21 @@ pub fn stable_subject_key(identity: &kirino::auth::identity::external::ExternalI
     )
 }
 
-fn random_binding() -> String {
+/// 32 bytes of OS randomness, base64url. Used for BOTH the browser binding
+/// and the session id — same entropy requirement, one implementation (they
+/// were byte-identical copies, so a change to one silently missed the other).
+fn random_token_256() -> String {
     use rand::RngExt;
     let raw: [u8; 32] = rand::rng().random();
     kirino::utils::base64url::encode(&raw)
 }
 
+fn random_binding() -> String {
+    random_token_256()
+}
+
 fn random_session_id() -> String {
-    use rand::RngExt;
-    let raw: [u8; 32] = rand::rng().random();
-    kirino::utils::base64url::encode(&raw)
+    random_token_256()
 }
 
 /// The `Set-Cookie` that clears the binding after the callback (it has
@@ -406,7 +414,10 @@ mod tests {
             .starts_with("https://auth.example/oauth/authorize?"));
         assert!(begun.url.contains("state="));
         assert!(begun.url.contains("code_challenge="));
-        assert!(begun.url.contains("return_to=%2Finbox"));
+        // R4: the authorize URL does NOT carry `return_to` — the attempt
+        // does, and `complete` filters it. Asserting its absence keeps the
+        // unchecked external value out of the Location we hand a third party.
+        assert!(!begun.url.contains("return_to="), "{}", begun.url);
         assert_eq!(begun.binding.len(), 43);
 
         let state = query_param(&begun.url, "state").unwrap();
@@ -587,6 +598,14 @@ mod tests {
             );
         }
         assert_ne!(ids[0], ids[1]);
+        // The entropy the doc promises, as a number a shortening cannot keep.
+        for id in &ids {
+            assert_eq!(
+                id.len(),
+                43,
+                "256 bits base64url — the shape the doc promises"
+            );
+        }
     }
 
     /// The store-failure seam, pinned at what it is TODAY rather than what

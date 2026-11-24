@@ -374,6 +374,22 @@ impl CookiePolicy {
         Ok(())
     }
 
+    /// The `SameSite` this policy emits: the **strictest** value it allows,
+    /// so a host that narrows `allowed_same_site` gets cookies its own
+    /// `check` accepts (R4: emit was hard-coded `Lax`, so a `Strict`-only
+    /// policy produced values it immediately refused — a silent "signed in
+    /// but the next request is anonymous").
+    fn emitted_same_site(&self) -> &str {
+        // `Lax` unless the policy allows ONLY `Strict`: Lax is the default
+        // the migration wants, and a host that permits both has not asked
+        // for the tighter one.
+        if self.allowed_same_site.iter().all(|s| s == "Strict") {
+            "Strict"
+        } else {
+            "Lax"
+        }
+    }
+
     /// Build the `Set-Cookie` value for a session id under this policy.
     ///
     /// `__Host-` carries the three structural promises in the name; the
@@ -386,7 +402,10 @@ impl CookiePolicy {
         } else {
             format!("__Host-{cookie_name}")
         };
-        format!("{name}={id}; Path=/; Secure; HttpOnly; SameSite=Lax")
+        format!(
+            "{name}={id}; Path=/; Secure; HttpOnly; SameSite={}",
+            self.emitted_same_site()
+        )
     }
 
     /// The `Set-Cookie` that clears a session under this policy: same
@@ -399,7 +418,10 @@ impl CookiePolicy {
         } else {
             format!("__Host-{cookie_name}")
         };
-        format!("{name}=; Path=/; Secure; HttpOnly; SameSite=Lax; Max-Age=0")
+        format!(
+            "{name}=; Path=/; Secure; HttpOnly; SameSite={}; Max-Age=0",
+            self.emitted_same_site()
+        )
     }
 }
 
@@ -559,6 +581,67 @@ mod tests {
             p.check(&c),
             Err(CookieRefusal::BadSameSite { .. })
         ));
+    }
+
+    /// R4 S3: a missing or empty `Path` is refused. The `__Host-` prefix
+    /// forces `Path=/` in a conforming UA and a missing default-path only
+    /// narrows the cookie, so this is hygiene — but nothing pinned it.
+    #[test]
+    fn a_missing_or_empty_path_is_refused() {
+        let p = CookiePolicy::strict();
+        let mut c = good();
+        c.path = None;
+        assert!(matches!(p.check(&c), Err(CookieRefusal::BadPath(_))));
+        let mut c = good();
+        c.path = Some(String::new());
+        assert!(matches!(p.check(&c), Err(CookieRefusal::BadPath(_))));
+    }
+
+    /// R4 S3: the `__Host-` prefix is added exactly once, and both spellings
+    /// produce the same name (a doubled prefix is rejected by every UA).
+    #[test]
+    fn the_host_prefix_is_added_exactly_once() {
+        let p = CookiePolicy::strict();
+        assert_eq!(
+            p.set_cookie_value("abc", "sid"),
+            p.set_cookie_value("abc", "__Host-sid")
+        );
+        assert!(!p.set_cookie_value("abc", "sid").contains("__Host-__Host-"));
+        assert_eq!(
+            p.clear_cookie_value("sid"),
+            p.clear_cookie_value("__Host-sid")
+        );
+    }
+
+    /// R4 S2: what the policy emits passes its own `check`, **whatever the
+    /// host narrows it to** — otherwise "sign-in succeeded" and "the next
+    /// request is anonymous" are the same event.
+    #[test]
+    fn the_policy_accepts_what_it_emits() {
+        for policy in [
+            CookiePolicy::strict(),
+            CookiePolicy {
+                allowed_same_site: vec!["Strict".into()],
+                ..CookiePolicy::strict()
+            },
+        ] {
+            let value = policy.set_cookie_value("abc", "sid");
+            let same_site = value
+                .split(';')
+                .find_map(|a| a.trim().strip_prefix("SameSite=").map(str::to_owned));
+            let parsed = SessionCookie {
+                name: "__Host-sid".into(),
+                secure: value.contains("Secure"),
+                http_only: value.contains("HttpOnly"),
+                domain: None,
+                path: Some("/".into()),
+                same_site,
+                host_prefix: true,
+            };
+            policy
+                .check(&parsed)
+                .unwrap_or_else(|e| panic!("the policy refused its own emission {value:?}: {e}"));
+        }
     }
 
     #[test]
