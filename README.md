@@ -65,6 +65,7 @@ The name `kirino` comes from the character [Kirino](https://bluearchive.wiki/wik
 - 🧩 **Fully Generic**: Define your own `Permission` and `Subject` types via traits
 - ⚡ **Async/Tokio**: Built on async Rust with Tokio runtime
 - 🔌 **JWT Integration**: Built-in JWT issuance and verification
+- 🏛️ **OAuth/OIDC Provider**: the issuing side — client registry with exact-match redirects, the authorize decision, atomic codes, EdDSA ID tokens, scope-trimmed userinfo, discovery + JWKS — pure logic over host stores
 - 🎟️ **Single-Use Credentials**: One atomic claim contract for authorization codes, device codes, `state` and recovery codes — in-memory or multi-replica (`store-db`)
 
 ## Quick Start
@@ -371,6 +372,8 @@ Credentials that are handed out once — authorization codes, device codes, reco
 
 The protocol side lives in `kirino::auth::passport::oauth` behind the `auth-oauth` feature: authorization-code with **PKCE S256 always on**, a one-time server-side `state` (`LoginAttemptStore`), the token exchange, and ID-token verification on signature, expiry, issuer, audience and nonce. kirino opens no socket — every network call goes through the `HttpFetcher` trait, which the host or a platform adapter implements — and keeps no provider-specific quirks: endpoints and the token-body encoding are data (`ProviderMetadata`), not code paths. `finish` takes a `Callback` — the provider's query, the browser binding and the ID-token keys — and turns it into an `ExternalIdentity` keyed by the provider's stable subject, which the host then resolves to an account and signs in through `complete_login`. A one-time `state` binds the callback to an attempt, not to a browser: to close login CSRF the host starts the attempt with `begin_with_binding`, stores the binding in an httpOnly cookie and presents it in the `Callback`; an attempt bound to one browser, or started for another provider, is refused before any exchange.
 
+The issuing side lives in `kirino::auth::provider` behind the `auth-oidc-provider` feature: the client registry (redirects are **exact match**; a public client has no secret, so PKCE is mandatory by construction), the authorize decision (the redirect is verified **first**; a refusal is reflectable only when that check passed), the code grant (a `GrantKind` separates the code and refresh lanes so one cannot be redeemed as the other), EdDSA ID tokens with a `kid`, userinfo trimmed to scope, and the discovery/JWKS documents with a `validate` that refuses off-origin endpoints and private key material. Protocol-only — a host wires it to its own router and `ConsumableStore`, and never re-derives the rules.
+
 ### Dynamic Authorization
 
 On top of static RBAC, kirino provides a runtime risk-scoring layer inspired by NIST SP 800-207/162 and DO-178C:
@@ -430,6 +433,7 @@ auth-password = ["dep:argon2"]     # Argon2 password hashing
 auth-jwt = ["dep:jsonwebtoken"]    # JWT token issuance/verification
 auth-webauthn = ["dep:coset", "dep:p256"]  # WebAuthn assertion/attestation verification
 auth-oauth = ["dep:base64", "dep:subtle", "auth-jwt"]  # OAuth relying-party core (PKCE, state, token exchange)
+auth-oidc-provider = ["auth-oauth"]  # OAuth/OIDC provider core: clients, authorize, codes, ID tokens, userinfo, discovery
 store-db = ["dep:lacrymira", "dep:lacrymira-pg"]  # DB-backed single-use credential store (multi-replica)
 ts = ["dep:ts-rs"]                 # Generate TypeScript bindings for the wire-contract types
 ```

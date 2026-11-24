@@ -2,6 +2,8 @@ pub mod credential;
 pub mod identity;
 pub mod mode;
 pub mod passport;
+#[cfg(feature = "auth-oidc-provider")]
+pub mod provider;
 pub mod realname;
 pub mod relay;
 pub mod store;
