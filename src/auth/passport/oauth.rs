@@ -42,23 +42,21 @@
 //! finish()     → take(state) once → exchange code + verifier → identity
 //! ```
 
-use std::collections::HashMap;
-use std::sync::Arc;
-
 use anyhow::Result;
-use async_trait::async_trait;
 use base64::Engine as _;
 use chrono::{DateTime, Duration, Utc};
 use rand::RngExt as _;
 use serde::{Deserialize, Serialize};
-use sha2::Digest as _;
-use subtle::ConstantTimeEq as _;
+use std::{collections::HashMap, sync::Arc};
 use tokio::sync::RwLock;
 use url::Url;
+
+use async_trait::async_trait;
+use sha2::Digest as _;
+use subtle::ConstantTimeEq as _;
 use zeroize::Zeroizing;
 
-use crate::auth::identity::external::ExternalIdentity;
-use crate::error::KirinoError;
+use crate::{auth::identity::external::ExternalIdentity, error::KirinoError};
 
 fn b64url(bytes: &[u8]) -> String {
     base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(bytes)
@@ -280,6 +278,25 @@ pub struct ProviderMetadata {
     pub token_body: TokenBody,
     /// Scopes requested, space-joined.
     pub scopes: Vec<String>,
+    /// Key under which a provider wraps its token answer in an envelope;
+    /// `None` (the default) reads the token fields at the top level.
+    ///
+    /// An OAuth token answer is a flat object to RFC 6749, but some
+    /// providers answer in their own transport envelope instead, carrying
+    /// the token fields one level down next to a business result. Feishu's
+    /// `…/authen/v2/oauth/token` is the reference case: it answers
+    /// `{"code": 0, "msg": "ok", "data": {"access_token": …, "token_type":
+    /// "Bearer", "expires_in": …, "refresh_token": …}}`, so its metadata
+    /// sets `token_response_envelope: Some("data")`.
+    ///
+    /// The key is drilled into and the value inside is read as
+    /// [`TokenResponse`]; nothing else changes. A missing key, or an envelope
+    /// without `access_token` — which is how such a provider reports a
+    /// business failure, e.g. a non-zero `code` with no `data` — is refused
+    /// by the same missing-field path as a top-level answer without one.
+    /// The envelope's own status fields are not interpreted: this module
+    /// reads protocol shape only, never a vendor's business code.
+    pub token_response_envelope: Option<&'static str>,
 }
 
 /// How the client authenticates at the token endpoint.
@@ -676,6 +693,32 @@ pub async fn begin_with_binding(
     Ok(attempt)
 }
 
+/// Read the token fields out of the token endpoint's answer, honouring
+/// [`ProviderMetadata::token_response_envelope`].
+///
+/// A top-level answer parses as it is. An enveloped one is drilled into
+/// `payload[key]` first; an absent key is a deserialization error like any
+/// other missing field, so a provider that reports a business failure inside
+/// its envelope (no `data` at all) is refused rather than read as a token.
+fn token_answer_for(
+    meta: &ProviderMetadata,
+    answer: serde_json::Value,
+) -> Result<TokenResponse, serde_json::Error> {
+    let payload = match meta.token_response_envelope {
+        None => answer,
+        // MUT:token-envelope — an enveloped answer is read from inside the key, not the top level.
+        Some(key) => match answer.get(key) {
+            Some(payload) => payload.clone(),
+            // An absent key is reported as the token field being absent:
+            // serde's own wording for the only field a token must carry.
+            None => {
+                return Err(serde::de::Error::missing_field("access_token"));
+            }
+        },
+    };
+    serde_json::from_value(payload)
+}
+
 /// Turn the callback into a login: spend the `state`, exchange the code with
 /// the PKCE verifier, and read the identity.
 ///
@@ -766,7 +809,7 @@ pub async fn finish(
                 .map_err(|error| CallbackProblem::Transport(error.to_string()))?
         }
     };
-    let token: TokenResponse = serde_json::from_value(token_answer)
+    let token: TokenResponse = token_answer_for(meta, token_answer)
         .map_err(|error| CallbackProblem::TokenInvalid(format!("unreadable answer: {error}")))?;
     if token.access_token.trim().is_empty() {
         return Err(CallbackProblem::TokenInvalid("no access token".to_owned()));
@@ -838,6 +881,7 @@ mod tests {
             userinfo_url: Some(Url::parse("https://idp.example/oauth/userinfo").expect("url")),
             token_body: TokenBody::Form,
             scopes: vec!["openid".to_owned(), "profile".to_owned()],
+            token_response_envelope: None,
         }
     }
 
@@ -900,6 +944,201 @@ mod tests {
                 "email_verified": true, "iss": "https://idp.example"
             }))
         }
+    }
+
+    #[tokio::test]
+    async fn a_feishu_shaped_envelope_is_read_from_the_configured_key() {
+        // The token endpoint of Feishu's `…/authen/v2/oauth/token`, as those
+        // serving it answer on the wire: the token fields sit one level down
+        // inside `data`, next to the business result. A provider of that
+        // shape is metadata — `token_response_envelope: Some("data")`.
+        const ANSWER: &str = r#"{
+            "code": 0, "msg": "ok",
+            "data": {
+                "access_token": "at-env", "token_type": "Bearer",
+                "expires_in": 7200, "refresh_token": "rt-env"
+            }
+        }"#;
+
+        struct Enveloped {
+            bearer_calls: Mutex<Vec<String>>,
+        }
+        #[async_trait]
+        impl HttpFetcher for Enveloped {
+            async fn post_form(&self, _: &Url, _: &[(&str, &str)]) -> Result<serde_json::Value> {
+                Ok(serde_json::from_str(ANSWER).expect("fixture"))
+            }
+            async fn post_json(&self, _: &Url, _: &serde_json::Value) -> Result<serde_json::Value> {
+                unreachable!()
+            }
+            async fn get_bearer(&self, _: &Url, access_token: &str) -> Result<serde_json::Value> {
+                self.bearer_calls
+                    .lock()
+                    .expect("lock")
+                    .push(access_token.to_owned());
+                Ok(serde_json::json!({ "open_id": "ou-1", "name": "Ada" }))
+            }
+        }
+
+        let http = Enveloped {
+            bearer_calls: Mutex::new(Vec::new()),
+        };
+        let store = InMemoryLoginAttemptStore::new();
+        let client = ClientAuth::Public {
+            client_id: "cid".to_owned(),
+        };
+        let mut enveloped = meta();
+        enveloped.token_response_envelope = Some("data");
+        let attempt = begin(&store, "example-idp", None, Duration::minutes(5))
+            .await
+            .expect("begin");
+        let login = finish(
+            &http,
+            &store,
+            &enveloped,
+            &client,
+            &redirect(),
+            Callback::new(&query(&attempt.state), None, &[]),
+        )
+        .await
+        .expect("an enveloped answer is read from inside the key");
+        assert_eq!(login.identity.subject, "ou-1");
+        assert_eq!(login.profile.display_name.as_deref(), Some("Ada"));
+        // The token came out of the envelope, not off the top level.
+        assert_eq!(
+            http.bearer_calls.lock().expect("lock").as_slice(),
+            ["at-env"],
+            "UserInfo is called with the enveloped access token"
+        );
+
+        // Every field of the answer survives the drill, not just the token.
+        let token = token_answer_for(&enveloped, serde_json::from_str(ANSWER).expect("fixture"))
+            .expect("envelope parses");
+        assert_eq!(token.access_token, "at-env");
+        assert_eq!(token.token_type.as_deref(), Some("Bearer"));
+        assert_eq!(token.expires_in, Some(7200));
+        assert_eq!(token.refresh_token.as_deref(), Some("rt-env"));
+        assert_eq!(token.id_token, None);
+    }
+
+    #[tokio::test]
+    async fn without_an_envelope_the_answer_is_read_at_the_top_level() {
+        // The default is the RFC 6749 shape: no key configured, no drill.
+        let http = Scripted::new();
+        let store = InMemoryLoginAttemptStore::new();
+        let client = ClientAuth::Public {
+            client_id: "cid".to_owned(),
+        };
+        let plain = meta();
+        assert_eq!(
+            plain.token_response_envelope, None,
+            "the default is a top-level answer"
+        );
+        let answer = serde_json::json!({
+            "access_token": "at-top", "token_type": "Bearer",
+            "expires_in": 3600, "refresh_token": "rt-top", "id_token": "idt-top"
+        });
+        let token = token_answer_for(&plain, answer.clone()).expect("top-level parses");
+        assert_eq!(token.access_token, "at-top");
+        assert_eq!(token.expires_in, Some(3600));
+        assert_eq!(token.refresh_token.as_deref(), Some("rt-top"));
+        assert_eq!(token.id_token.as_deref(), Some("idt-top"));
+
+        // MUT:envelope-opt-in — with no envelope configured, a wrapped answer
+        // is NOT unwrapped; the top level is what is read.
+        let wrapped = serde_json::json!({ "data": { "access_token": "at-top" } });
+        assert!(
+            token_answer_for(&plain, wrapped).is_err(),
+            "no envelope means no drill"
+        );
+
+        // … and a plain provider still signs in end to end.
+        let attempt = begin(&store, "example-idp", None, Duration::minutes(5))
+            .await
+            .expect("begin");
+        finish(
+            &http,
+            &store,
+            &plain,
+            &client,
+            &redirect(),
+            Callback::new(&query(&attempt.state), None, &[]),
+        )
+        .await
+        .expect("finish");
+        assert_eq!(
+            http.bearer_calls.lock().expect("lock")[0].1,
+            "at-1",
+            "the top-level token is the one used"
+        );
+    }
+
+    #[tokio::test]
+    async fn an_envelope_without_the_key_or_without_a_token_is_refused() {
+        let store = InMemoryLoginAttemptStore::new();
+        let client = ClientAuth::Public {
+            client_id: "cid".to_owned(),
+        };
+        let mut enveloped = meta();
+        enveloped.token_response_envelope = Some("data");
+
+        // The envelope key is absent altogether.
+        let missing_key =
+            token_answer_for(&enveloped, serde_json::json!({ "access_token": "at-1" }))
+                .unwrap_err();
+        assert!(
+            missing_key
+                .to_string()
+                .contains("missing field `access_token`"),
+            "absent envelope key keeps the missing-field error: {missing_key}"
+        );
+
+        // A business failure inside the envelope: a non-zero `code` and no
+        // `data` at all. MUT:envelope-fail-closed — such an answer must not
+        // yield a usable token.
+        struct Refused {
+            calls: Mutex<usize>,
+        }
+        #[async_trait]
+        impl HttpFetcher for Refused {
+            async fn post_form(&self, _: &Url, _: &[(&str, &str)]) -> Result<serde_json::Value> {
+                *self.calls.lock().expect("lock") += 1;
+                Ok(serde_json::json!({
+                    "code": 20026, "msg": "invalid code",
+                    "data": {},
+                    "error": "invalid_grant"
+                }))
+            }
+            async fn post_json(&self, _: &Url, _: &serde_json::Value) -> Result<serde_json::Value> {
+                unreachable!()
+            }
+            async fn get_bearer(&self, _: &Url, _: &str) -> Result<serde_json::Value> {
+                unreachable!("a refused token never reaches UserInfo")
+            }
+        }
+        let http = Refused {
+            calls: Mutex::new(0),
+        };
+        let attempt = begin(&store, "example-idp", None, Duration::minutes(5))
+            .await
+            .expect("begin");
+        let err = finish(
+            &http,
+            &store,
+            &enveloped,
+            &client,
+            &redirect(),
+            Callback::new(&query(&attempt.state), None, &[]),
+        )
+        .await
+        .unwrap_err();
+        let message = err.to_string();
+        assert!(
+            message.starts_with("token endpoint answer rejected: unreadable answer:")
+                && message.contains("missing field `access_token`"),
+            "an envelope-level failure is refused as a missing field: {message}"
+        );
+        assert_eq!(*http.calls.lock().expect("lock"), 1, "one token call");
     }
 
     #[test]
