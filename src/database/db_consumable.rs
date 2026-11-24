@@ -25,10 +25,15 @@
 //! Storing `expires_at` as `BIGINT` rather than a timestamp keeps the
 //! comparison exactly the caller's clock (the trait takes `now`), so a
 //! database in another time zone cannot shift an expiry.
+//!
+//! `chrono` is used here because the rest of this crate's time-bearing
+//! public API does (`LoginAttempt`, `kirino-session`); the type has to agree
+//! across the trait boundary. It is covered by the repository-wide
+//! RUSTSEC-2026-0543 ignore and moves to `jiff` with that wave.
 
 use std::marker::PhantomData;
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result};
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use lacrymira::Value;
@@ -147,9 +152,15 @@ impl<P> ConsumableStore<P> for DbConsumableStore<P>
 where
     P: Serialize + DeserializeOwned + Send + Sync + 'static,
 {
-    async fn put(&self, token: &str, payload: P, expires_at: DateTime<Utc>) -> Result<()> {
+    async fn put(
+        &self,
+        token: &str,
+        payload: P,
+        expires_at: DateTime<Utc>,
+        now: DateTime<Utc>,
+    ) -> Result<()> {
         let key = fingerprint(token);
-        let now = Utc::now().timestamp();
+        let now = now.timestamp();
         let body = serde_json::to_string(&payload).context("payload is not JSON-serialisable")?;
         // Insert, or replace ONLY when the existing entry has already
         // expired. The `WHERE` on the update is what refuses a live
@@ -173,7 +184,14 @@ where
             ))
             .await?;
         if raw::affected(&reply) == 0 {
-            bail!("token is already parked and still live; tokens must be unique per credential");
+            // Typed so a host branches on the downcast instead of matching
+            // prose: this is the caller's contract violation, not a storage
+            // failure.
+            return Err(crate::error::KirinoError::Validation(
+                "token is already parked and still live; tokens must be unique per credential"
+                    .to_string(),
+            )
+            .into());
         }
         Ok(())
     }
@@ -195,6 +213,17 @@ where
             ))
             .await?;
         let Some((columns, row)) = raw::first_row(&reply) else {
+            // Zero rows is the ordinary miss. But a driver that reports this
+            // `DELETE … RETURNING` as an affected-row count has already
+            // deleted the credential — reporting `Lost` there would silently
+            // destroy a live session, so surface it instead.
+            let affected = raw::affected(&reply);
+            if affected > 0 {
+                return Err(anyhow::anyhow!(
+                    "claim deleted {affected} row(s) but the driver returned no rows; \
+                     refusing to report a loss over a consumed credential"
+                ));
+            }
             return Ok(Claim::Lost);
         };
         let expires_at = raw::as_i64(raw::cell(columns, row, "expires_at")?)?;
@@ -234,8 +263,8 @@ mod tests {
     //! cargo test --lib --features store-db -- --ignored db_consumable
     //! ```
     //!
-    //! Every case uses the shared default table with a per-test token, so
-    //! suites can run against the same database without truncation.
+    //! Every case uses a per-test token, so suites can share one database
+    //! without truncation.
 
     use std::env;
     use std::sync::Arc;
@@ -244,15 +273,19 @@ mod tests {
     use lacrymira_pg::PgExecutor;
 
     use super::*;
+    use crate::error::KirinoError;
 
     const DEFAULT_DATABASE_URL: &str = "postgres://kirino:kirino@localhost:5432/kirino_test";
 
-    async fn store() -> DbConsumableStore<String> {
+    async fn conn() -> PgExecutor {
         let url = env::var("DATABASE_URL").unwrap_or_else(|_| DEFAULT_DATABASE_URL.to_string());
-        let conn = PgExecutor::connect(&url)
+        PgExecutor::connect(&url)
             .await
-            .unwrap_or_else(|e| panic!("failed to connect to PostgreSQL at {url}: {e}"));
-        let store = DbConsumableStore::<String>::new(conn);
+            .unwrap_or_else(|e| panic!("failed to connect to PostgreSQL at {url}: {e}"))
+    }
+
+    async fn store() -> DbConsumableStore<String> {
+        let store = DbConsumableStore::<String>::new(conn().await);
         store.ensure_schema().await.expect("ensure schema");
         store
     }
@@ -271,6 +304,7 @@ mod tests {
                 &token,
                 "grant".to_string(),
                 Utc::now() + Duration::seconds(60),
+                Utc::now(),
             )
             .await
             .expect("park");
@@ -290,7 +324,8 @@ mod tests {
                 winners += 1;
             }
         }
-        // MUT:db-naive-claim — a select-then-delete backend yields >1 here.
+        // MUT:db-naive-claim — a select-then-delete backend yields many
+        // winners here (the R2 review measured 8 out of 16 racers).
         assert_eq!(winners, 1, "one DELETE … RETURNING, one winner");
     }
 
@@ -304,6 +339,7 @@ mod tests {
                 &token,
                 "grant".to_string(),
                 Utc::now() - Duration::seconds(5),
+                Utc::now(),
             )
             .await
             .expect("park expired");
@@ -324,11 +360,13 @@ mod tests {
     async fn db_consumable_refuses_a_live_duplicate_but_replaces_a_dead_one() {
         let store = store().await;
         let token = unique_token();
+        let now = Utc::now();
         store
             .put(
                 &token,
                 "first".to_string(),
-                Utc::now() + Duration::seconds(60),
+                now + Duration::seconds(60),
+                now,
             )
             .await
             .expect("park");
@@ -336,11 +374,19 @@ mod tests {
             .put(
                 &token,
                 "second".to_string(),
-                Utc::now() + Duration::seconds(60),
+                now + Duration::seconds(60),
+                now,
             )
             .await
             .expect_err("a live duplicate must be refused");
-        assert!(err.to_string().contains("already parked"), "{err}");
+        // Typed contract violation, not an opaque string.
+        assert!(
+            matches!(
+                err.downcast_ref::<KirinoError>(),
+                Some(KirinoError::Validation(message)) if message.contains("already parked")
+            ),
+            "the refusal is KirinoError::Validation: {err}"
+        );
         // The refused put did not clobber the parked payload.
         assert_eq!(
             store.claim(&token, Utc::now()).await.expect("claim"),
@@ -349,11 +395,21 @@ mod tests {
 
         let dead = unique_token();
         store
-            .put(&dead, "old".to_string(), Utc::now() - Duration::seconds(1))
+            .put(
+                &dead,
+                "old".to_string(),
+                Utc::now() - Duration::seconds(1),
+                Utc::now(),
+            )
             .await
             .expect("park expired");
         store
-            .put(&dead, "new".to_string(), Utc::now() + Duration::seconds(60))
+            .put(
+                &dead,
+                "new".to_string(),
+                Utc::now() + Duration::seconds(60),
+                Utc::now(),
+            )
             .await
             .expect("a dead entry does not block a fresh one");
         assert_eq!(
@@ -368,12 +424,13 @@ mod tests {
         let store = store().await;
         let dead = unique_token();
         let live = unique_token();
+        let now = Utc::now();
         store
-            .put(&dead, "x".to_string(), Utc::now() - Duration::seconds(10))
+            .put(&dead, "x".to_string(), now - Duration::seconds(10), now)
             .await
             .expect("park");
         store
-            .put(&live, "y".to_string(), Utc::now() + Duration::seconds(60))
+            .put(&live, "y".to_string(), now + Duration::seconds(60), now)
             .await
             .expect("park");
         let removed = store.sweep(Utc::now()).await.expect("sweep");
@@ -386,5 +443,66 @@ mod tests {
             Claim::Won("y".to_string()),
             "a live row survives the sweep"
         );
+    }
+
+    /// A host-chosen table: the identifier guard accepts a plain name and the
+    /// store works against it end to end.
+    #[tokio::test]
+    #[ignore]
+    async fn db_consumable_honours_a_host_chosen_table() {
+        let table = format!("kirino_consumables_t{}", uuid::Uuid::now_v7().simple());
+        let store = DbConsumableStore::<u32>::with_table(conn().await, &table)
+            .expect("a plain identifier is accepted");
+        store.ensure_schema().await.expect("ensure schema");
+        let token = unique_token();
+        store
+            .put(&token, 7u32, Utc::now() + Duration::seconds(60), Utc::now())
+            .await
+            .expect("park");
+        assert_eq!(
+            store.claim(&token, Utc::now()).await.expect("claim"),
+            Claim::Won(7)
+        );
+        // Best-effort cleanup: the table exists only for this case.
+        let _ = store
+            .conn
+            .execute(&raw::sql(
+                format!("DROP TABLE IF EXISTS {table}"),
+                Vec::new(),
+            ))
+            .await;
+    }
+
+    /// `ensure_schema` is safe to run twice concurrently — the deployment it
+    /// exists for is several replicas booting at once, where
+    /// `CREATE TABLE IF NOT EXISTS` alone can fail the loser with a
+    /// `pg_type` unique violation.
+    #[tokio::test]
+    #[ignore]
+    async fn db_consumable_ensure_schema_survives_concurrent_boot() {
+        let table = format!("kirino_consumables_c{}", uuid::Uuid::now_v7().simple());
+        let mut handles = Vec::new();
+        for _ in 0..8 {
+            let table = table.clone();
+            handles.push(tokio::spawn(async move {
+                let store =
+                    DbConsumableStore::<u32>::with_table(conn().await, &table).expect("identifier");
+                store.ensure_schema().await
+            }));
+        }
+        for handle in handles {
+            handle
+                .await
+                .expect("task")
+                .expect("concurrent ensure_schema must not fail");
+        }
+        let store = DbConsumableStore::<u32>::with_table(conn().await, &table).expect("identifier");
+        let _ = store
+            .conn
+            .execute(&raw::sql(
+                format!("DROP TABLE IF EXISTS {table}"),
+                Vec::new(),
+            ))
+            .await;
     }
 }

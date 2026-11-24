@@ -122,6 +122,7 @@ pub(crate) mod raw {
     /// accepted — ASCII letters, digits and `_`, not starting with a digit,
     /// at most [`MAX_IDENT_LEN`] bytes — and anything else is rejected rather
     /// than quoted into the SQL.
+    #[cfg(feature = "store-db")]
     pub(crate) fn ident(what: &str, raw_value: &str) -> Result<String> {
         /// Longest identifier PostgreSQL accepts.
         const MAX_IDENT_LEN: usize = 63;
@@ -139,5 +140,63 @@ pub(crate) mod raw {
             .into());
         }
         Ok(trimmed.to_string())
+    }
+}
+
+#[cfg(all(test, feature = "store-db"))]
+mod ident_tests {
+    //! The identifier guard is the only defence on the one input that is
+    //! interpolated into SQL, so it gets both directions: what it accepts and
+    //! what it refuses. The sibling `db_totp_replay` module carries the same
+    //! class of test for its own copy of the predicate.
+
+    use super::raw;
+
+    #[test]
+    fn plain_identifiers_are_accepted() {
+        for good in [
+            "kirino_consumables",
+            "_private",
+            "a1_b2",
+            "T",
+            "x".repeat(63).as_str(),
+        ] {
+            assert_eq!(raw::ident("table", good).expect("accepted"), good.trim());
+        }
+        // Surrounding whitespace is trimmed rather than rejected: a config
+        // value with a trailing newline is a YAML habit, not an attack.
+        assert_eq!(raw::ident("table", "  t  ").expect("trimmed"), "t");
+    }
+
+    #[test]
+    fn everything_that_could_break_out_of_the_identifier_is_refused() {
+        for bad in [
+            "",               // empty
+            "1table",         // leading digit
+            "a b",            // embedded space
+            "t;DROP TABLE x", // statement break
+            "t\"",            // quote
+            "-t",             // punctuation
+            "t-1",            // dash is not an identifier char here
+            "sch.tbl",        // qualification is the caller's job
+            "$1",             // placeholder syntax
+            "t\n--",          // comment start
+            "таблица",        // non-ASCII
+            "\0",             // NUL
+        ] {
+            // MUT:ident-guard — dropping any clause of the predicate lets one
+            // of these through and the statement is no longer a plain name.
+            let err = raw::ident("table", bad)
+                .err()
+                .unwrap_or_else(|| panic!("{bad:?} must be refused"));
+            assert!(
+                err.to_string()
+                    .contains("not a plain PostgreSQL identifier"),
+                "{bad:?}: {err}"
+            );
+        }
+        // The 63-byte ceiling stops PostgreSQL's silent truncation, which
+        // would otherwise let two distinct names collide at runtime.
+        assert!(raw::ident("table", "x".repeat(64).as_str()).is_err());
     }
 }

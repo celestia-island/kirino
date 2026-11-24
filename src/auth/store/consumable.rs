@@ -2,6 +2,11 @@
 //!
 //! See the [module docs](self) for why the claim reports a winner instead
 //! of returning the result of a delete.
+//!
+//! `chrono` is used here because the rest of this crate's time-bearing
+//! public API does (`LoginAttempt`, `kirino-session`); the type has to agree
+//! across the trait boundary. It is covered by the repository-wide
+//! RUSTSEC-2026-0543 ignore and moves to `jiff` with that wave.
 
 use anyhow::Result;
 use async_trait::async_trait;
@@ -15,7 +20,12 @@ use sha2::Digest;
 /// those apart hands an attacker a probing oracle (`this code existed but
 /// expired` vs `this code never existed`). The one distinction a caller may
 /// rely on is won/lost.
+///
+/// `non_exhaustive`: a later slice may add a third state (a soft
+/// "still-processing" reply for the device flow's `authorization_pending`),
+/// and callers must not be broken by it. Match with a `_ =>` arm.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum Claim<P> {
     /// This caller consumed the credential; the payload is theirs alone.
     Won(P),
@@ -63,10 +73,30 @@ impl<P> Claim<P> {
 /// 4. **Fingerprints only.** Implementations store [`fingerprint`], never
 ///    the raw token, so a heap dump or a database leak exposes no usable
 ///    credential.
+/// 5. **Never destroy a live credential.** A store at capacity must refuse
+///    the *new* `put`, not evict a credential that some user is still
+///    holding — dropping it turns "exactly one winner" into "no winner"
+///    for a login that was already under way.
 ///
-/// `now` is a parameter rather than an internal `Utc::now()` so expiry is
-/// testable without sleeping and so a caller can pass one timestamp through
-/// a whole flow.
+/// # Errors
+///
+/// Two failure classes, and they must stay distinguishable:
+///
+/// - **Contract violations** (a duplicate token, a full store) are the
+///   caller's bug or a capacity condition, and they are recoverable — the
+///   caller generates a fresh token or sheds load. Implementations report
+///   them as [`crate::error::KirinoError::Validation`] so a host can
+///   `downcast_ref` instead of matching on prose.
+/// - **Storage failures** (the backend is unreachable, the statement
+///   errored) are NOT recoverable and are reported as whatever the backend
+///   produced. They must never be collapsed into [`Claim::Lost`] — "I could
+///   not reach the store" reported as "this credential is dead" silently
+///   destroys live sessions.
+///
+/// `now` is a parameter on all three methods rather than an internal
+/// `Utc::now()`, so expiry is testable without sleeping and so a caller can
+/// pass one timestamp through a whole flow (park and claim agree on the
+/// same clock).
 #[async_trait]
 pub trait ConsumableStore<P>: Send + Sync
 where
@@ -74,12 +104,22 @@ where
 {
     /// Park `payload` under `token` until `expires_at`.
     ///
+    /// `now` decides whether an already-parked entry under the same
+    /// fingerprint is still alive: a live one is refused, a dead one may be
+    /// replaced.
+    ///
     /// # Errors
     ///
-    /// Implementation-specific storage failures, plus the contract
-    /// violation of a token whose fingerprint is still parked (the host
-    /// must generate a fresh token per credential).
-    async fn put(&self, token: &str, payload: P, expires_at: DateTime<Utc>) -> Result<()>;
+    /// [`crate::error::KirinoError::Validation`] when the token is still
+    /// parked (the host must generate a fresh token per credential) or the
+    /// store is at capacity; the backend's own error for storage failures.
+    async fn put(
+        &self,
+        token: &str,
+        payload: P,
+        expires_at: DateTime<Utc>,
+        now: DateTime<Utc>,
+    ) -> Result<()>;
 
     /// Claim `token`: exactly one racing caller wins.
     ///
@@ -94,9 +134,10 @@ where
     /// Drop every entry that has expired at `now`, returning how many were
     /// removed.
     ///
-    /// Optional: callers only invoke it from a maintenance task. The
-    /// default does nothing, which is correct for stores that sweep on
-    /// claim.
+    /// **Not** done automatically: neither shipped backend sweeps on claim
+    /// (a claim only removes its own key/row), so a host that never calls
+    /// this accumulates expired rows until the store's own bounds engage.
+    /// Call it from a maintenance task.
     ///
     /// # Errors
     ///

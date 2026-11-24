@@ -12,22 +12,34 @@
 //! is simply unknown to replica B, which reads as
 //! [`Claim::Lost`](super::Claim::Lost) — fail-closed, but a login that
 //! mysteriously fails one time in *n*.
+//!
+//! **Capacity**: at [`DEFAULT_CAP`] the store refuses *new* credentials. It
+//! never evicts a live one — see the [trait contract](super::ConsumableStore)
+//! rule 5. A refusal means the caller's `put` errors, which is a visible,
+//! recoverable failure; silently discarding somebody's in-flight credential
+//! is not.
+//!
+//! `chrono` is used here because the rest of this crate's time-bearing
+//! public API does (`LoginAttempt`, `kirino-session`); the type has to agree
+//! across the trait boundary. It is covered by the repository-wide
+//! RUSTSEC-2026-0543 ignore and moves to `jiff` with that wave.
 
 use std::collections::HashMap;
 
-use anyhow::{bail, Result};
+use anyhow::Result;
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use tokio::sync::RwLock;
 
 use super::consumable::{fingerprint, Claim, ConsumableStore};
+use crate::error::KirinoError;
 
 /// Default ceiling on parked credentials.
 ///
-/// Reaching it is a capacity signal, not a security event: the entry with
-/// the earliest expiry is evicted (with a `warn!`) so new logins keep
-/// working. Credentials are short-lived by nature, so the evicted one was
-/// the first to die anyway.
+/// Reaching it is a capacity condition, not a security event: the store
+/// refuses new `put`s (loudly) rather than evicting live ones. Size it to
+/// the deployment's real concurrency, or use the DB backend, which has no
+/// such ceiling.
 pub const DEFAULT_CAP: usize = 10_000;
 
 struct Entry<P> {
@@ -75,38 +87,43 @@ impl<P> MemoryConsumableStore<P> {
     }
 }
 
-/// Remove the entry closest to its expiry, so an at-capacity store sheds
-/// the credential that had the least life left.
-fn evict_soonest<P>(entries: &mut HashMap<String, Entry<P>>) {
-    let victim = entries
-        .iter()
-        .min_by_key(|(_, entry)| entry.expires_at)
-        .map(|(key, _)| key.clone());
-    if let Some(key) = victim {
-        entries.remove(&key);
-        tracing::warn!("consumable store at capacity: evicted the soonest-expiring credential");
-    }
-}
-
 #[async_trait]
 impl<P: Send + Sync + 'static> ConsumableStore<P> for MemoryConsumableStore<P> {
-    async fn put(&self, token: &str, payload: P, expires_at: DateTime<Utc>) -> Result<()> {
+    async fn put(
+        &self,
+        token: &str,
+        payload: P,
+        expires_at: DateTime<Utc>,
+        now: DateTime<Utc>,
+    ) -> Result<()> {
         let key = fingerprint(token);
-        let now = Utc::now();
         let mut entries = self.entries.write().await;
         // A live entry under the same fingerprint means the host reused a
         // token. Refuse: silently replacing it would let a second flow
         // steal the first flow's claim.
         if let Some(existing) = entries.get(&key) {
             if existing.expires_at > now {
-                bail!(
+                return Err(KirinoError::Validation(
                     "token is already parked and still live; tokens must be unique per credential"
-                );
+                        .to_string(),
+                )
+                .into());
             }
+            // A dead entry does not block a fresh one.
             entries.remove(&key);
         }
+        // Capacity: shed what is already dead, then refuse if still full.
+        // Evicting a LIVE credential would turn "exactly one winner" into
+        // "no winner" for a login already under way (contract rule 5).
         if entries.len() >= self.cap {
-            evict_soonest(&mut entries);
+            entries.retain(|_, entry| entry.expires_at > now);
+            if entries.len() >= self.cap {
+                return Err(KirinoError::Validation(format!(
+                    "consumable store is full ({} parked); refusing to evict a live credential",
+                    entries.len()
+                ))
+                .into());
+            }
         }
         entries.insert(
             key,
@@ -122,8 +139,10 @@ impl<P: Send + Sync + 'static> ConsumableStore<P> for MemoryConsumableStore<P> {
         let key = fingerprint(token);
         // One write lock spans lookup, expiry check and removal — the
         // atomicity the trait contract requires. `MUT:naive-claim`: splitting
-        // this into a `read` followed by a `write` gives two winners, and
-        // `naive_read_then_delete_loses_the_guarantee` below demonstrates it.
+        // this into a `read` followed by a `write` gives many winners; the
+        // concurrency case below turns red when it is done that way (proved
+        // by the R2 review, which rewrote this method as read→yield→delete
+        // and saw 32 winners out of 32 racers).
         let mut entries = self.entries.write().await;
         let Some(entry) = entries.remove(&key) else {
             return Ok(Claim::Lost);
@@ -162,10 +181,14 @@ mod tests {
     async fn claim_hands_the_payload_to_exactly_one_of_many_racers() {
         let store: Arc<MemoryConsumableStore<&'static str>> =
             Arc::new(MemoryConsumableStore::new());
-        store.put("tok", "grant", later(60)).await.expect("park");
+        store
+            .put("tok", "grant", later(60), Utc::now())
+            .await
+            .expect("park");
 
-        // 32 concurrent claimers. The contract is one winner, not "at most
-        // one" and certainly not "however many got there first".
+        // 32 concurrent claimers. The contract is one winner — not "at most
+        // one" (a store that answers `Lost` to everybody would strand the
+        // login) and certainly not "however many got there first".
         let mut handles = Vec::new();
         for _ in 0..32 {
             let store = Arc::clone(&store);
@@ -188,7 +211,10 @@ mod tests {
     #[tokio::test]
     async fn a_second_sequential_claim_loses() {
         let store = MemoryConsumableStore::<u8>::new();
-        store.put("tok", 1, later(60)).await.expect("park");
+        store
+            .put("tok", 1, later(60), Utc::now())
+            .await
+            .expect("park");
         assert_eq!(
             store.claim("tok", Utc::now()).await.expect("claim"),
             Claim::Won(1)
@@ -203,7 +229,10 @@ mod tests {
     async fn an_expired_claim_loses_and_drops_the_entry() {
         let store = MemoryConsumableStore::<u8>::new();
         // Parked already expired: expiry is a parameter, so no sleeping.
-        store.put("tok", 1, later(-1)).await.expect("park");
+        store
+            .put("tok", 1, later(-1), Utc::now())
+            .await
+            .expect("park");
         assert_eq!(
             store.claim("tok", Utc::now()).await.expect("claim"),
             Claim::Lost,
@@ -218,14 +247,23 @@ mod tests {
     #[tokio::test]
     async fn putting_a_live_duplicate_is_refused() {
         let store = MemoryConsumableStore::<u8>::new();
-        store.put("tok", 1, later(60)).await.expect("first park");
+        let now = Utc::now();
+        store
+            .put("tok", 1, later(60), now)
+            .await
+            .expect("first park");
         let err = store
-            .put("tok", 2, later(60))
+            .put("tok", 2, later(60), now)
             .await
             .expect_err("a live duplicate must be refused");
+        // The refusal is a typed contract violation, not an opaque string —
+        // hosts branch on the downcast instead of matching prose.
         assert!(
-            err.to_string().contains("already parked"),
-            "the refusal names the reason: {err}"
+            matches!(
+                err.downcast_ref::<KirinoError>(),
+                Some(KirinoError::Validation(message)) if message.contains("already parked")
+            ),
+            "the refusal is KirinoError::Validation: {err}"
         );
         // The original payload still wins — the refused put did not clobber it.
         assert_eq!(
@@ -237,9 +275,13 @@ mod tests {
     #[tokio::test]
     async fn an_expired_duplicate_can_be_replaced() {
         let store = MemoryConsumableStore::<u8>::new();
-        store.put("tok", 1, later(-1)).await.expect("park expired");
+        let now = Utc::now();
         store
-            .put("tok", 2, later(60))
+            .put("tok", 1, later(-1), now)
+            .await
+            .expect("park expired");
+        store
+            .put("tok", 2, later(60), now)
             .await
             .expect("a dead entry does not block a fresh one");
         assert_eq!(
@@ -251,8 +293,9 @@ mod tests {
     #[tokio::test]
     async fn sweep_removes_only_expired_entries() {
         let store = MemoryConsumableStore::<u8>::new();
-        store.put("dead", 1, later(-5)).await.expect("park");
-        store.put("live", 2, later(60)).await.expect("park");
+        let now = Utc::now();
+        store.put("dead", 1, later(-5), now).await.expect("park");
+        store.put("live", 2, later(60), now).await.expect("park");
         assert_eq!(store.sweep(Utc::now()).await.expect("sweep"), 1);
         assert_eq!(store.len().await, 1);
         assert_eq!(
@@ -265,7 +308,7 @@ mod tests {
     async fn the_store_keys_on_the_fingerprint_not_the_token() {
         let store = MemoryConsumableStore::<u8>::new();
         store
-            .put("super-secret-token", 1, later(60))
+            .put("super-secret-token", 1, later(60), Utc::now())
             .await
             .expect("park");
         let entries = store.entries.read().await;
@@ -277,18 +320,35 @@ mod tests {
         assert!(entries.contains_key(&fingerprint("super-secret-token")));
     }
 
+    /// At capacity the store refuses the **new** credential and keeps every
+    /// live one. Evicting would be a targeted login DoS: whoever can reach
+    /// `put` could flood the store (long TTLs win, short TTLs are shed) and
+    /// knock out other people's in-flight logins.
     #[tokio::test]
-    async fn at_capacity_the_soonest_expiring_entry_is_evicted() {
+    async fn a_full_store_refuses_new_credentials_and_keeps_live_ones() {
         let store = MemoryConsumableStore::<u8>::with_capacity(2);
-        store.put("a", 1, later(10)).await.expect("park");
-        store.put("b", 2, later(120)).await.expect("park");
-        // Over capacity: the entry with the least life left goes.
-        store.put("c", 3, later(300)).await.expect("park");
+        let now = Utc::now();
+        store.put("a", 1, later(10), now).await.expect("park");
+        store.put("b", 2, later(120), now).await.expect("park");
+
+        let err = store
+            .put("c", 3, later(300), now)
+            .await
+            .expect_err("a full store must refuse rather than evict");
+        assert!(
+            matches!(
+                err.downcast_ref::<KirinoError>(),
+                Some(KirinoError::Validation(message)) if message.contains("full")
+            ),
+            "the refusal names the capacity condition: {err}"
+        );
+        // Both live credentials survive, and each still resolves to exactly
+        // one winner.
         assert_eq!(store.len().await, 2);
         assert_eq!(
             store.claim("a", Utc::now()).await.expect("claim"),
-            Claim::Lost,
-            "the soonest-expiring credential was shed"
+            Claim::Won(1),
+            "the earliest-expiring credential was NOT sacrificed"
         );
         assert_eq!(
             store.claim("b", Utc::now()).await.expect("claim"),
@@ -296,13 +356,41 @@ mod tests {
         );
     }
 
-    /// The negative control for [`MemoryConsumableStore::claim`]'s
-    /// `MUT:naive-claim` note: this is the shape the trait exists to forbid —
-    /// read the entry, yield, then remove it. It produces **many** winners,
-    /// which is exactly the bug a downstream service shipped for
-    /// authorization codes. If the real implementation were ever rewritten
-    /// this way, `claim_hands_the_payload_to_exactly_one_of_many_racers`
-    /// would fail; this case proves that test is not vacuous.
+    /// A full store still accepts a `put` once dead entries are shed: the
+    /// capacity check prunes expired keys before refusing.
+    #[tokio::test]
+    async fn a_full_store_makes_room_by_dropping_dead_entries() {
+        let store = MemoryConsumableStore::<u8>::with_capacity(1);
+        let now = Utc::now();
+        store.put("dead", 1, later(-1), now).await.expect("park");
+        store
+            .put("fresh", 2, later(60), now)
+            .await
+            .expect("a dead entry does not consume capacity");
+        assert_eq!(store.len().await, 1);
+        assert_eq!(
+            store.claim("fresh", Utc::now()).await.expect("claim"),
+            Claim::Won(2)
+        );
+    }
+
+    #[tokio::test]
+    async fn with_capacity_zero_is_clamped_to_one() {
+        let store = MemoryConsumableStore::<u8>::with_capacity(0);
+        store
+            .put("tok", 1, later(60), Utc::now())
+            .await
+            .expect("a clamp to 1 keeps the store usable");
+    }
+
+    /// Documents the defect class the trait exists to forbid: read the entry,
+    /// yield, then delete it. It is a *demonstration against a hand-written
+    /// naive store*, not a guard on [`MemoryConsumableStore`] — the guard on
+    /// the real implementation is
+    /// `claim_hands_the_payload_to_exactly_one_of_many_racers` (the R2 review
+    /// rewrote the real `claim` this way and saw 32 winners out of 32
+    /// racers). Kept because the shape is easier to see here than in a
+    /// one-line lock argument.
     #[tokio::test]
     async fn naive_read_then_delete_loses_the_guarantee() {
         struct NaiveStore {
