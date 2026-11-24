@@ -44,7 +44,10 @@ mod manager;
 pub mod middleware;
 mod one_shot;
 pub mod presence;
+#[cfg(feature = "relay")]
+pub mod relay_session;
 mod revocation;
+pub mod server_session;
 #[cfg(feature = "postgres")]
 pub mod store;
 mod token;
@@ -54,5 +57,15 @@ pub use error::{SessionError, SessionResult};
 pub use manager::TokenManager;
 pub use one_shot::OneShotStore;
 pub use presence::{PresenceLease, PresenceRecord, PresenceRegistry, DEFAULT_IDLE_TIMEOUT};
+#[cfg(feature = "relay")]
+pub use relay_session::{
+    begin, clear_binding_cookie, complete, BeginRedirect, RelaySessionContext, RelaySessionError,
+    SignedIn, BINDING_COOKIE, DEFAULT_ATTEMPT_TTL_SECS,
+};
 pub use revocation::RefreshRevocationStore;
+pub use server_session::{
+    CookiePolicy, CookieRefusal, InMemoryServerSessionStore, ServerSession, ServerSessionStore,
+    SessionCheck, SessionCookie, SessionRefusal, SessionTokens, DEFAULT_ABSOLUTE_SECS,
+    DEFAULT_IDLE_SECS,
+};
 pub use token::{TokenClaims, TokenPair, TokenType};
