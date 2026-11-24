@@ -447,10 +447,17 @@ mod tests {
 
     /// The `now` parameter drives liveness on this backend too (R4: a DB
     /// `put`/`claim` that substituted `Utc::now()` left every case green).
+    ///
+    /// On its **own table**: the row is parked "ten days ago" by the wall
+    /// clock, and a sibling case's `sweep(Utc::now())` over the shared table
+    /// would delete it mid-test (R5 measured a 6% flake from exactly that).
     #[tokio::test]
     #[ignore]
     async fn db_consumable_the_callers_clock_decides_liveness() {
-        let store = store().await;
+        let table = format!("kirino_consumables_clk{}", uuid::Uuid::now_v7().simple());
+        let store =
+            DbConsumableStore::<String>::with_table(conn().await, &table).expect("identifier");
+        store.ensure_schema().await.expect("ensure schema");
         let token = unique_token();
         let park_at = Utc::now() - chrono::Duration::days(10);
         store
@@ -468,6 +475,91 @@ mod tests {
             Claim::Won("x".to_string()),
             "the caller's clock says this is live even though the wall clock does not"
         );
+
+        // `put` judges a duplicate on the caller's clock too. The decisive
+        // direction is the REFUSAL: at `inside` (park_at+30) the first park
+        // is still live per the caller, so a second put under the same
+        // token must be refused — while the wall clock says the row died
+        // ten days ago and a wall-clock `put` would happily replace it.
+        // (R5: the first version asserted the *acceptance* leg, where both
+        // clocks agree, so it pinned nothing.)
+        let second = unique_token();
+        store
+            .put(
+                &second,
+                "a".to_string(),
+                park_at + chrono::Duration::seconds(60),
+                park_at,
+            )
+            .await
+            .expect("park");
+        let refused = store
+            .put(
+                &second,
+                "b".to_string(),
+                park_at + chrono::Duration::seconds(120),
+                inside,
+            )
+            .await
+            .expect_err("still live at `inside` per the caller's clock");
+        assert!(
+            matches!(
+                refused.downcast_ref::<KirinoError>(),
+                Some(KirinoError::Validation(m)) if m.contains("already parked")
+            ),
+            "{refused}"
+        );
+        // …and once the caller's clock passes the expiry, the token is free.
+        let past = park_at + chrono::Duration::seconds(61);
+        store
+            .put(
+                &second,
+                "b".to_string(),
+                past + chrono::Duration::seconds(60),
+                past,
+            )
+            .await
+            .expect("dead at `past` per the caller, so the token is free");
+        assert_eq!(
+            store
+                .claim(&second, past + chrono::Duration::seconds(1))
+                .await
+                .expect("claim"),
+            Claim::Won("b".to_string())
+        );
+
+        // `sweep` on the caller's clock: a row whose expiry the wall clock
+        // passed long ago is NOT swept at an instant the caller says is
+        // before it. (R5: `sweep`'s clock had no pin.)
+        let third = unique_token();
+        store
+            .put(
+                &third,
+                "c".to_string(),
+                park_at + chrono::Duration::seconds(120),
+                park_at,
+            )
+            .await
+            .expect("park");
+        let before = park_at + chrono::Duration::seconds(30);
+        let removed = store.sweep(before).await.expect("sweep");
+        assert_eq!(removed, 0, "nothing is expired at the caller's `before`");
+        assert_eq!(
+            store
+                .claim(&third, before + chrono::Duration::seconds(1))
+                .await
+                .expect("claim"),
+            Claim::Won("c".to_string()),
+            "the row survived the caller-clock sweep"
+        );
+
+        let _ = store
+            .conn
+            .execute(&raw::sql(
+                format!("DROP TABLE IF EXISTS {table}"),
+                Vec::new(),
+            ))
+            .await;
     }
 
     /// A host-chosen table: the identifier guard accepts a plain name and the

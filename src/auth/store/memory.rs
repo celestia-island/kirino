@@ -386,49 +386,79 @@ mod tests {
         );
     }
 
-    /// The `now` parameter drives every time decision — a backend that
-    /// substituted the wall clock would pass every other case (R4: swapping
-    /// all three `now`s for `Utc::now()` left 14/14 green). This case parks
-    /// and claims on a synthetic clock the wall clock cannot match.
+    /// The `now` parameter drives every time decision — `claim`, `put` and
+    /// `sweep` each — on a clock the wall clock cannot match. R4 showed all
+    /// three could be swapped for `Utc::now()` with every case green; R5
+    /// showed the first version of this case only pinned `claim` (its
+    /// duplicate-put leg never reached the duplicate branch).
     #[tokio::test]
     async fn the_callers_clock_decides_liveness_not_the_wall_clock() {
-        let store = MemoryConsumableStore::<u8>::new();
-        // Parked "in the past" and already "expired" per the caller's clock…
         let park_at = Utc::now() - chrono::Duration::days(10);
+
+        // claim: parked "ten days ago" per the wall clock, live per the
+        // caller's.
+        let store = MemoryConsumableStore::<u8>::new();
         store
             .put("tok", 1, park_at + chrono::Duration::seconds(60), park_at)
             .await
             .expect("park");
-        // …but claimed at an instant the caller says is still inside the TTL.
         let inside = park_at + chrono::Duration::seconds(30);
         assert_eq!(
             store.claim("tok", inside).await.expect("claim"),
             Claim::Won(1),
             "the caller's clock, not the wall clock, says this is live"
         );
-        // And the mirror: a fresh wall-clock entry is dead per the caller.
+
+        // put: the same token is refused as a live duplicate at `inside`,
+        // and accepted as a replacement at an instant the caller says is
+        // past its expiry — the branch a wall-clock `put` would take the
+        // other way round.
         let store = MemoryConsumableStore::<u8>::new();
-        let now = Utc::now();
         store
-            .put("tok", 2, now + chrono::Duration::seconds(60), now)
+            .put("dup", 1, park_at + chrono::Duration::seconds(60), park_at)
             .await
             .expect("park");
-        let far_future = now + chrono::Duration::days(1);
-        assert_eq!(
-            store.claim("tok", far_future).await.expect("claim"),
-            Claim::Lost
-        );
-        // A duplicate put is judged on the same clock: at `far_future` the
-        // first entry is dead, so a second put under the same token succeeds.
-        store
-            .put(
-                "tok",
-                3,
-                far_future + chrono::Duration::seconds(60),
-                far_future,
-            )
+        let refused = store
+            .put("dup", 2, park_at + chrono::Duration::seconds(120), inside)
             .await
-            .expect("the first entry is dead at far_future, so the token is free");
+            .expect_err("still live at `inside` per the caller");
+        assert!(
+            matches!(
+                refused.downcast_ref::<KirinoError>(),
+                Some(KirinoError::Validation(m)) if m.contains("already parked")
+            ),
+            "{refused}"
+        );
+        let past = park_at + chrono::Duration::seconds(61);
+        store
+            .put("dup", 2, past + chrono::Duration::seconds(60), past)
+            .await
+            .expect("dead at `past` per the caller, so the token is free");
+        assert_eq!(
+            store
+                .claim("dup", past + chrono::Duration::seconds(1))
+                .await
+                .expect("claim"),
+            Claim::Won(2)
+        );
+
+        // sweep: a row the wall clock expired ten days ago is NOT swept at
+        // an instant the caller says is before its expiry.
+        store
+            .put("keep", 3, park_at + chrono::Duration::seconds(120), park_at)
+            .await
+            .expect("park");
+        let removed = store.sweep(inside).await.expect("sweep");
+        assert_eq!(removed, 0, "nothing is expired at the caller's `inside`");
+        assert_eq!(store.len().await, 1);
+        // …and IS swept once the caller's clock passes it.
+        assert_eq!(
+            store
+                .sweep(park_at + chrono::Duration::seconds(121))
+                .await
+                .expect("sweep"),
+            1
+        );
     }
 
     #[tokio::test]
