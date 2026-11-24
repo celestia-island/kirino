@@ -136,13 +136,13 @@ impl<P: Send + Sync + 'static> ConsumableStore<P> for MemoryConsumableStore<P> {
     }
 
     async fn claim(&self, token: &str, now: DateTime<Utc>) -> Result<Claim<P>> {
-        let key = fingerprint(token);
         // One write lock spans lookup, expiry check and removal — the
         // atomicity the trait contract requires. `MUT:naive-claim`: splitting
-        // this into a `read` followed by a `write` gives many winners; the
-        // concurrency case below turns red when it is done that way (proved
-        // by the R2 review, which rewrote this method as read→yield→delete
-        // and saw 32 winners out of 32 racers).
+        // this into a `read` followed by a `write` hands the credential to
+        // several racers; the multi-thread concurrency case below catches the
+        // shape even with no await in the window (the R3 review proved the
+        // single-thread variant could not).
+        let key = fingerprint(token);
         let mut entries = self.entries.write().await;
         let Some(entry) = entries.remove(&key) else {
             return Ok(Claim::Lost);
@@ -177,35 +177,104 @@ mod tests {
         Utc::now() + Duration::seconds(secs)
     }
 
-    #[tokio::test]
+    /// The contract's central claim, on a **multi-thread** runtime with
+    /// real parallelism.
+    ///
+    /// A `current_thread` runtime makes this a weak test: tasks only
+    /// interleave at await points, and the correct `claim` has none between
+    /// lookup and removal — so a wrong implementation that also has no await
+    /// in that window (clone the payload, ignore the delete's result) passes
+    /// there while handing the credential to two racers in production. The
+    /// `naive_clone_then_delete_loses_the_guarantee` case below is that
+    /// exact shape and is the reason this runs with workers.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn claim_hands_the_payload_to_exactly_one_of_many_racers() {
-        let store: Arc<MemoryConsumableStore<&'static str>> =
-            Arc::new(MemoryConsumableStore::new());
-        store
-            .put("tok", "grant", later(60), Utc::now())
-            .await
-            .expect("park");
+        // Several rounds: a scheduling-dependent defect can hide on a quiet
+        // run, and the negative control shows it needs more than one.
+        for round in 0..8u32 {
+            let token = format!("tok-{round}");
+            let store: Arc<MemoryConsumableStore<u32>> = Arc::new(MemoryConsumableStore::new());
+            store
+                .put(&token, round, later(60), Utc::now())
+                .await
+                .expect("park");
 
-        // 32 concurrent claimers. The contract is one winner — not "at most
-        // one" (a store that answers `Lost` to everybody would strand the
-        // login) and certainly not "however many got there first".
-        let mut handles = Vec::new();
-        for _ in 0..32 {
-            let store = Arc::clone(&store);
-            handles.push(tokio::spawn(
-                async move { store.claim("tok", Utc::now()).await },
-            ));
+            let barrier = Arc::new(tokio::sync::Barrier::new(32));
+            let mut handles = Vec::new();
+            for _ in 0..32 {
+                let store = Arc::clone(&store);
+                let token = token.clone();
+                let barrier = Arc::clone(&barrier);
+                handles.push(tokio::spawn(async move {
+                    // Release every racer at once so the window is contended
+                    // rather than serialised by spawn order.
+                    barrier.wait().await;
+                    store.claim(&token, Utc::now()).await
+                }));
+            }
+            let mut winners = 0usize;
+            for handle in handles {
+                let claim = handle.await.expect("task").expect("claim");
+                if let Claim::Won(payload) = claim {
+                    assert_eq!(payload, round);
+                    winners += 1;
+                }
+            }
+            assert_eq!(winners, 1, "round {round}: exactly one racer may win");
+            assert_eq!(store.len().await, 0, "the entry is gone after the winner");
         }
-        let mut winners = 0usize;
-        for handle in handles {
-            let claim = handle.await.expect("task").expect("claim");
-            if let Claim::Won(payload) = claim {
-                assert_eq!(payload, "grant");
-                winners += 1;
+    }
+
+    /// The defect shape a single-thread runtime cannot see: the reader
+    /// clones the payload out under the read lock and then deletes without
+    /// consulting the result — **no await between the two**, so the
+    /// `yield_now`-based demonstration is not the thing being modelled.
+    ///
+    /// This is the R3 review's surviving mutation. It is a hand-written
+    /// wrong store, kept as the negative control for the multi-thread case
+    /// above: if that case were ever moved back to `current_thread`, this
+    /// one would stop showing the defect (two winners) — which is exactly
+    /// how the blind spot was found.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn naive_clone_then_delete_loses_the_guarantee() {
+        struct NaiveStore {
+            entries: RwLock<HashMap<String, u8>>,
+        }
+        let store = Arc::new(NaiveStore {
+            entries: RwLock::new(HashMap::from([("tok".to_string(), 1u8)])),
+        });
+        let mut ever_two = false;
+        for _ in 0..64 {
+            store.entries.write().await.insert("tok".to_string(), 1);
+            let barrier = Arc::new(tokio::sync::Barrier::new(8));
+            let mut handles = Vec::new();
+            for _ in 0..8 {
+                let store = Arc::clone(&store);
+                let barrier = Arc::clone(&barrier);
+                handles.push(tokio::spawn(async move {
+                    barrier.wait().await;
+                    // Read: clone the payload out, drop the read lock.
+                    let found = store.entries.read().await.get("tok").copied();
+                    // Delete: result ignored — the bug.
+                    let _ = store.entries.write().await.remove("tok");
+                    found.is_some()
+                }));
+            }
+            let mut winners = 0usize;
+            for handle in handles {
+                if handle.await.expect("task") {
+                    winners += 1;
+                }
+            }
+            if winners >= 2 {
+                ever_two = true;
+                break;
             }
         }
-        assert_eq!(winners, 1, "exactly one racer may consume the credential");
-        assert_eq!(store.len().await, 0, "the entry is gone after the winner");
+        assert!(
+            ever_two,
+            "clone-then-delete must hand the credential to two racers on a multi-thread runtime"
+        );
     }
 
     #[tokio::test]
