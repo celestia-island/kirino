@@ -50,9 +50,9 @@
 //! error).
 
 use std::collections::HashSet;
+use uuid::Uuid;
 
 use async_trait::async_trait;
-use uuid::Uuid;
 
 use crate::rbac::traits::{
     GrantResolver, Permission, PermissionContext, PermissionDecision, RoleRegistry,

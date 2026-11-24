@@ -1,13 +1,16 @@
-use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
-
 use chrono::{Duration, Utc};
+use std::{
+    collections::HashMap,
+    sync::{Arc, Mutex},
+};
 use uuid::Uuid;
 
-use super::token::generate_token;
-use super::types::{
-    AcceptInvitationParams, CreateInvitationParams, Invitation, InvitationMode, InvitationStatus,
-    OpenInvitationResult,
+use super::{
+    token::generate_token,
+    types::{
+        AcceptInvitationParams, CreateInvitationParams, Invitation, InvitationMode,
+        InvitationStatus, OpenInvitationResult,
+    },
 };
 
 /// Storage and lifecycle for invitations.

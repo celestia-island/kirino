@@ -10,9 +10,9 @@
 //! 不属于本模块的：非对称密钥、会话/撤销、权限模型——需要那些就用
 //! `kirino_session::TokenManager`（session 包，独立版本线）。
 
+use serde::{de::DeserializeOwned, Serialize};
+
 use jsonwebtoken::{Algorithm, DecodingKey, EncodingKey, Header, Validation};
-use serde::de::DeserializeOwned;
-use serde::Serialize;
 
 /// 签发/验证共用的 claims 约束：必须携带可读的过期时间。
 pub trait ExpClaims {

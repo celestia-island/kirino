@@ -1,11 +1,12 @@
 #[cfg(feature = "auth-jwt")]
 pub mod basic;
-#[cfg(feature = "auth-jwt")]
-pub use basic::RevocationBackend;
 pub mod one_time;
 pub mod service;
 
 use anyhow::Result;
+
+#[cfg(feature = "auth-jwt")]
+pub use basic::RevocationBackend;
 
 pub trait Credential {
     /// Verifies the given token against the stored credential.

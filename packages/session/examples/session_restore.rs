@@ -8,11 +8,10 @@
 //!     disables expiry validation entirely, not just the leeway).
 //!  4. After identity is confirmed, issue a fresh token pair.
 
-use std::sync::Arc;
-use std::time::Duration;
+use std::{sync::Arc, time::Duration};
+use uuid::Uuid;
 
 use kirino_session::{SessionConfig, TokenClaims, TokenManager, TokenType};
-use uuid::Uuid;
 
 #[tokio::main]
 async fn main() {

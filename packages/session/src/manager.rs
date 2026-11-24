@@ -1,12 +1,14 @@
-use base64::engine::general_purpose::URL_SAFE_NO_PAD as B64U;
-use base64::Engine as _;
-use jsonwebtoken::{decode, encode, Algorithm, DecodingKey, EncodingKey, Header, Validation};
+use base64::{engine::general_purpose::URL_SAFE_NO_PAD as B64U, Engine as _};
 use uuid::Uuid;
 
-use crate::config::{Ed25519Keys, MlDsa65Keys, SessionConfig};
-use crate::error::{SessionError, SessionResult};
-use crate::revocation::RefreshRevocationStore;
-use crate::token::{TokenClaims, TokenPair, TokenType};
+use jsonwebtoken::{decode, encode, Algorithm, DecodingKey, EncodingKey, Header, Validation};
+
+use crate::{
+    config::{Ed25519Keys, MlDsa65Keys, SessionConfig},
+    error::{SessionError, SessionResult},
+    revocation::RefreshRevocationStore,
+    token::{TokenClaims, TokenPair, TokenType},
+};
 
 /// Expiry leeway in seconds for the hand-rolled ML-DSA-65 verify path,
 /// mirroring the `jsonwebtoken` default so both profiles age tokens out

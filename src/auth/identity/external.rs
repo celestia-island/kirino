@@ -24,15 +24,14 @@
 //! [`InMemoryExternalIdentityStore`] is the reference implementation and the
 //! test double; a host backs the same trait with its own tables.
 
-use std::collections::HashMap;
-use std::sync::Arc;
-
 use anyhow::Result;
-use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use std::{collections::HashMap, sync::Arc};
 use tokio::sync::RwLock;
 use uuid::Uuid;
+
+use async_trait::async_trait;
 
 use crate::error::KirinoError;
 

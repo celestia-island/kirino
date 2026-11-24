@@ -25,12 +25,12 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
-use super::client::{
-    authenticate_client, ClientAuthMethod, ClientRecord, ClientRegistry, GrantType,
+use super::{
+    client::{authenticate_client, ClientAuthMethod, ClientRecord, ClientRegistry, GrantType},
+    code::{self, CodeGrant, GrantKind},
+    id_token::{IdTokenClaims, IdTokenSigner},
+    ProviderError,
 };
-use super::code::{self, CodeGrant, GrantKind};
-use super::id_token::{IdTokenClaims, IdTokenSigner};
-use super::ProviderError;
 use crate::auth::store::{Claim, ConsumableStore};
 
 /// A parsed token-endpoint request (the body of `POST /api/oauth/token`).

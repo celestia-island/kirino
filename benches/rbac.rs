@@ -12,8 +12,7 @@
 //!   cargo bench --all-features --no-run        # compile every group
 //!   cargo bench --all-features                 # run them
 
-use std::collections::HashSet;
-use std::hint::black_box;
+use std::{collections::HashSet, hint::black_box};
 
 use criterion::Criterion;
 

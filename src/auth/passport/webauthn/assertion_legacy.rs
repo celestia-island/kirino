@@ -12,6 +12,7 @@
 //! the module root.
 
 use anyhow::{anyhow, Result};
+
 use coset::{CborSerializable, KeyType};
 use p256::ecdsa::{signature::Verifier, Signature, VerifyingKey};
 use sha2::{Digest, Sha256};

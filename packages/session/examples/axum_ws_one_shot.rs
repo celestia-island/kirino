@@ -13,7 +13,9 @@
 //!   WS=$(curl -s -X POST localhost:3000/ws-token -H "Authorization: Bearer $TOK" | jq -r .ws_token)
 //!   websocat "ws://localhost:3000/ws?token=$WS"
 
+use serde::{Deserialize, Serialize};
 use std::sync::Arc;
+use uuid::Uuid;
 
 use axum::{
     extract::{
@@ -25,9 +27,6 @@ use axum::{
     routing::{get, post},
     Router,
 };
-use serde::{Deserialize, Serialize};
-use uuid::Uuid;
-
 use kirino_session::{OneShotStore, SessionConfig, TokenClaims, TokenManager, TokenType};
 
 // ── App state ────────────────────────────────────────────────────

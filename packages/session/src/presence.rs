@@ -46,11 +46,12 @@
 //! assert_eq!(registry.user_count(), 0);
 //! ```
 
-use std::collections::{HashMap, HashSet};
-use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
-
 use chrono::{DateTime, Utc};
+use std::{
+    collections::{HashMap, HashSet},
+    sync::{Arc, Mutex},
+    time::{Duration, Instant},
+};
 use uuid::Uuid;
 
 /// Default idle timeout: a connection whose last activity is older than this

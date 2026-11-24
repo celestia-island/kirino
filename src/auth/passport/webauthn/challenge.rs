@@ -10,13 +10,14 @@
 //!   finishing call can be tied to the session that started it.
 
 use rand::RngExt;
-use sha2::{Digest, Sha256};
 use std::{
     collections::HashMap,
     sync::Arc,
     time::{Duration, Instant},
 };
 use tokio::sync::RwLock;
+
+use sha2::{Digest, Sha256};
 
 /// Ceremony purpose bound at issue time.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
