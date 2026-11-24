@@ -38,6 +38,11 @@ rbac-full = ["rbac-inmemory", "rbac-hierarchy", "rbac-constraints", "rbac-dynami
 auth-password = ["dep:argon2"]
 auth-jwt = ["dep:jsonwebtoken"]
 auth-webauthn = ["dep:coset", "dep:p256"]
+# DB-backed single-use credential store: the atomic claim is one SQL
+# statement, so a credential parked on one replica is claimable from any
+# other. Off by default; a single-replica deployment uses the in-memory
+# store in `auth::store::memory`.
+store-db = ["dep:lacrymira", "dep:lacrymira-pg"]
 # TypeScript bindings for the wire contract types (generated; never hand-written).
 ts = ["dep:ts-rs"]
 # Relay (designated external login source): the relying-party protocol core
@@ -85,7 +90,7 @@ lacrymira-pg = { version = "^0.2", optional = true }
 criterion = "^0.8"
 # Test-only: mints ID tokens signed with a freshly generated Ed25519 key.
 ed25519-dalek = "^2"
-tokio = { version = "^1", features = ["rt", "macros", "time", "sync"] }
+tokio = { version = "^1", features = ["rt", "rt-multi-thread", "macros", "time", "sync"] }
 
 [[bench]]
 name = "rbac"

@@ -65,6 +65,7 @@ The name `kirino` comes from the character [Kirino](https://bluearchive.wiki/wik
 - 🧩 **Fully Generic**: Define your own `Permission` and `Subject` types via traits
 - ⚡ **Async/Tokio**: Built on async Rust with Tokio runtime
 - 🔌 **JWT Integration**: Built-in JWT issuance and verification
+- 🎟️ **Single-Use Credentials**: One atomic claim contract for authorization codes, device codes, `state` and recovery codes — in-memory or multi-replica (`store-db`)
 
 ## Quick Start
 
@@ -366,6 +367,8 @@ relay.login_policy().validate().unwrap();
 assert_eq!(mode_from_env_with(env).unwrap(), AuthMode::Relay);
 ```
 
+Credentials that are handed out once — authorization codes, device codes, recovery codes, refresh rotations — have one shared contract in `kirino::auth::store` (no in-tree consumer yet; the provider core in flight is the first). The relying-party `state` keeps its own `LoginAttemptStore`. One rule makes them safe, and it is the same rule everywhere: the claim must be atomic *and the claimer must be told whether it won*, because a `DELETE` matching zero rows is a success and "read, validate, then delete" therefore lets two racing callers both proceed. `ConsumableStore::claim` answers `Claim::Won` / `Claim::Lost` so that shape cannot be written silently. Two backends ship: `MemoryConsumableStore` (one write lock spans lookup, expiry check and removal) and, behind `store-db`, `DbConsumableStore` (the claim is one `DELETE … RETURNING`, so every replica sees the winner on its next statement).
+
 The protocol side lives in `kirino::auth::passport::oauth` behind the `auth-oauth` feature: authorization-code with **PKCE S256 always on**, a one-time server-side `state` (`LoginAttemptStore`), the token exchange, and ID-token verification on signature, expiry, issuer, audience and nonce. kirino opens no socket — every network call goes through the `HttpFetcher` trait, which the host or a platform adapter implements — and keeps no provider-specific quirks: endpoints and the token-body encoding are data (`ProviderMetadata`), not code paths. `finish` takes a `Callback` — the provider's query, the browser binding and the ID-token keys — and turns it into an `ExternalIdentity` keyed by the provider's stable subject, which the host then resolves to an account and signs in through `complete_login`. A one-time `state` binds the callback to an attempt, not to a browser: to close login CSRF the host starts the attempt with `begin_with_binding`, stores the binding in an httpOnly cookie and presents it in the `Callback`; an attempt bound to one browser, or started for another provider, is refused before any exchange.
 
 ### Dynamic Authorization
@@ -427,6 +430,7 @@ auth-password = ["dep:argon2"]     # Argon2 password hashing
 auth-jwt = ["dep:jsonwebtoken"]    # JWT token issuance/verification
 auth-webauthn = ["dep:coset", "dep:p256"]  # WebAuthn assertion/attestation verification
 auth-oauth = ["dep:base64", "dep:subtle", "auth-jwt"]  # OAuth relying-party core (PKCE, state, token exchange)
+store-db = ["dep:lacrymira", "dep:lacrymira-pg"]  # DB-backed single-use credential store (multi-replica)
 ts = ["dep:ts-rs"]                 # Generate TypeScript bindings for the wire-contract types
 ```
 
