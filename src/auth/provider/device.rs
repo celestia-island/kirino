@@ -60,7 +60,7 @@ pub const SLOW_DOWN_STEP_SECS: i64 = 5;
 /// vowels beyond those — nothing that reads as another character and
 /// nothing that spells a word.
 const USER_CODE_ALPHABET: &[u8] = b"BCDFGHJKMNPQRSTVWXZ";
-/// Eight symbols from a 22-symbol alphabet is ~35.7 bits: with a ten-minute
+/// Eight symbols from a 19-symbol alphabet is ~34 bits: with a ten-minute
 /// TTL, an authenticated approval and the store's own single-use claim, that
 /// is not a guessing surface.
 const USER_CODE_LEN: usize = 8;
@@ -374,21 +374,33 @@ where
     if !client.allows_grant(GrantType::DeviceCode) {
         return Err(DeviceError::UnauthorizedClient(client.client_id.clone()));
     }
+    // The device grant carries no `nonce`: the device is not the browser that
+    // authenticates, so there is nothing to bind an ID token to, and
+    // `IdTokenClaims::from_grant` refuses an `openid` grant without one.
+    // A host that wants an ID token here must carry a nonce through the
+    // approval (not modelled yet). So an `openid` request is refused at
+    // REQUEST time — accepting it produced a pairing whose mint failed only
+    // after the human approved and after the pairing was consumed (R2 S1).
+    //
+    // This checks what the CALLER ASKED FOR, not the normalised default:
+    // `validate_scope("")` yields the provider's default `openid profile`,
+    // and RFC 8628 §3.1 makes `scope` OPTIONAL — refusing the default would
+    // have made every scope-less device request fail (R3 S1).
+    if scope.split_whitespace().any(|s| s == "openid") {
+        return Err(DeviceError::OpenIdWithoutNonce);
+    }
     let scope =
         super::validate_scope(scope).map_err(|e| DeviceError::InvalidScope(e.to_string()))?;
     if !client.allows_scope(&scope) {
         return Err(DeviceError::InvalidScope(scope));
     }
-    // The device grant has no `nonce`: the device is not the browser that
-    // authenticates, so there is nothing to bind an ID token to. RFC 8628
-    // still lets a device ASK for `openid`; a host that wants an ID token
-    // here must carry a nonce through the approval (not modelled yet).
-    // Until then, refuse at REQUEST time: accepting it produced a pairing
-    // whose mint always failed AFTER the human approved and AFTER the pairing
-    // was consumed, so the device could never retry (R2 S1).
-    if super::scope_granted(&scope, "openid") {
-        return Err(DeviceError::OpenIdWithoutNonce);
-    }
+    // The default still contains `openid`; drop it, since this grant can
+    // never honour it, and keep the rest.
+    let scope = scope
+        .split_whitespace()
+        .filter(|s| *s != "openid")
+        .collect::<Vec<_>>()
+        .join(" ");
     let device_code = device_token();
     let user_code = random_user_code();
     let expires_at = now + Duration::seconds(DEFAULT_DEVICE_TTL_SECS);
@@ -411,7 +423,17 @@ where
         .await
         .map_err(|e| DeviceError::Store(e.to_string()))?;
     Ok(DeviceAuthorization {
-        verification_uri_complete: format!("{verification_uri}?user_code={user_code}"),
+        verification_uri_complete: {
+            // The verification URI belongs to the host and may already carry
+            // a query (`?tenant=a`): join with `&` in that case, so the code
+            // is a parameter rather than a second `?`.
+            let sep = if verification_uri.contains('?') {
+                '&'
+            } else {
+                '?'
+            };
+            format!("{verification_uri}{sep}user_code={user_code}")
+        },
         verification_uri: verification_uri.to_owned(),
         device_code,
         user_code,
@@ -741,6 +763,18 @@ MC4CAQAwBQYDK2VwBCIEID3zTmAP9MdPuN/YdS5wbUXgOWWRd4LYu6lNdo/eBgZn
             access: AccessTokenSigner::from_ed25519_pem(PRIVATE_PEM, "https://resource.example")
                 .unwrap(),
         }
+    }
+
+    /// The single `user_code` the store currently points at (tests only).
+    async fn lookup_probe_user_code(store: &MemoryDeviceStore) -> String {
+        store
+            .pointers
+            .read()
+            .await
+            .keys()
+            .next()
+            .cloned()
+            .expect("one pointer was parked")
     }
 
     fn ctx<'a>(
@@ -1248,6 +1282,110 @@ MC4CAQAwBQYDK2VwBCIEID3zTmAP9MdPuN/YdS5wbUXgOWWRd4LYu6lNdo/eBgZn
         assert!(store.is_empty().await, "nothing was parked");
     }
 
+    /// R3 S2: the store's compare-and-set is the real guard, so test it
+    /// DIRECTLY. Two `decide` calls are serialised by the outer `Pending`
+    /// check often enough that a deleted store guard still passes ~96% of
+    /// runs (R3 measured 1 red in 25) — the case has to go to the store.
+    #[tokio::test]
+    async fn the_store_refuses_a_second_decision_on_its_own() {
+        let store = MemoryDeviceStore::new();
+        let now = Utc::now();
+        let auth = request(
+            &client(),
+            "profile",
+            &store,
+            "https://auth.example/device",
+            now,
+        )
+        .await
+        .unwrap();
+        let approved = Decision::Approved { auth_time: now };
+        // First decides; second is refused BY THE STORE.
+        assert!(store
+            .decide_if_pending(&auth.device_code, Decision::Denied, "owner", now)
+            .await
+            .unwrap());
+        assert!(
+            !store
+                .decide_if_pending(&auth.device_code, approved, "attacker", now)
+                .await
+                .unwrap(),
+            "the store itself must refuse the second decision"
+        );
+        // And the stored record is the first one, with the first subject.
+        let (_, pending) = lookup(&auth.user_code, &store, now).await.unwrap();
+        assert_eq!(pending.decision, Decision::Denied);
+        assert_eq!(pending.sub, "owner");
+        // MUT:store-cas-guard — dropping the `Pending` check inside
+        // `decide_if_pending` turns the `!` above into `true` and the
+        // subject into "attacker".
+    }
+
+    /// R3 S1: RFC 8628 §3.1 makes `scope` OPTIONAL. A scope-less request
+    /// must succeed — the first fix refused it, because the provider's
+    /// default scope is `openid profile` and the openid check ran on the
+    /// normalised value instead of on what the caller asked for.
+    #[tokio::test]
+    async fn a_scope_less_request_succeeds() {
+        let store = MemoryDeviceStore::new();
+        let now = Utc::now();
+        for scope in ["", "   "] {
+            let auth = request(&client(), scope, &store, "https://auth.example/device", now)
+                .await
+                .unwrap_or_else(|e| panic!("a scope-less device request must work: {e:?}"));
+            assert!(!auth.user_code.is_empty());
+            // The pairing it parked carries no `openid` — this grant can
+            // never honour one.
+            let (_, pending) = lookup(&auth.user_code, &store, now).await.unwrap();
+            assert!(
+                !pending.scope.split_whitespace().any(|s| s == "openid"),
+                "{}",
+                pending.scope
+            );
+        }
+        // MUT:refuse-normalised-default — checking the normalised scope
+        // instead of the request reddens the first leg.
+    }
+
+    /// A verification URI that already carries a query gets `&`, not a
+    /// second `?`. (R3: the field was built with a bare `?` and had no test.)
+    #[tokio::test]
+    async fn the_complete_uri_respects_an_existing_query() {
+        let store = MemoryDeviceStore::new();
+        let now = Utc::now();
+        let plain = request(
+            &client(),
+            "profile",
+            &store,
+            "https://auth.example/device",
+            now,
+        )
+        .await
+        .unwrap();
+        assert!(
+            plain.verification_uri_complete.contains("?user_code="),
+            "{}",
+            plain.verification_uri_complete
+        );
+        let with_query = request(
+            &client(),
+            "profile",
+            &store,
+            "https://auth.example/device?tenant=a",
+            now,
+        )
+        .await
+        .unwrap();
+        let complete = &with_query.verification_uri_complete;
+        assert_eq!(
+            complete.matches('?').count(),
+            1,
+            "one query separator: {complete}"
+        );
+        assert!(complete.contains("&user_code="), "{complete}");
+        assert!(complete.ends_with(&with_query.user_code), "{complete}");
+    }
+
     /// R2 S2: an abandoned pairing is swept. `poll` answers `expired_token`
     /// and returns, so nothing else would ever delete the row.
     #[tokio::test]
@@ -1270,9 +1408,20 @@ MC4CAQAwBQYDK2VwBCIEID3zTmAP9MdPuN/YdS5wbUXgOWWRd4LYu6lNdo/eBgZn
             "before the TTL it stays"
         );
         let later = now + Duration::seconds(DEFAULT_DEVICE_TTL_SECS + 1);
+        // The POINTER is what a human types against; capture it while live so
+        // the post-sweep check is about this pairing, not about a code that
+        // was never parked (R3: the first version asserted on "BCDFGHJK").
+        let live_user_code = lookup_probe_user_code(&store).await;
         assert_eq!(store.sweep(later).await.unwrap(), 1);
         assert_eq!(store.len().await, 0);
-        assert!(store.pointer("BCDFGHJK", later).await.unwrap().is_none());
+        assert!(
+            store
+                .pointer(&live_user_code, later)
+                .await
+                .unwrap()
+                .is_none(),
+            "the pointer is swept too"
+        );
         // MUT:no-sweep — a no-op `sweep` leaves the count at 1.
     }
 
@@ -1316,7 +1465,7 @@ MC4CAQAwBQYDK2VwBCIEID3zTmAP9MdPuN/YdS5wbUXgOWWRd4LYu6lNdo/eBgZn
         assert!(matches!(
             request(
                 &client(),
-                "openid admin",
+                "profile admin",
                 &store,
                 "https://auth.example/device",
                 now
