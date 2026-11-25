@@ -24,9 +24,9 @@
 //! the bytes through [`CookiePolicy`].
 
 use chrono::{DateTime, Utc};
+use serde::{Deserialize, Serialize};
 
 use crate::error::SessionError;
-use serde::{Deserialize, Serialize};
 
 /// Default idle timeout: a session unused for this long dies.
 pub const DEFAULT_IDLE_SECS: i64 = 30 * 60;
@@ -57,6 +57,20 @@ pub struct ServerSession {
     /// The OP's tokens for this session, if the host keeps them here.
     /// `Debug` is redacted.
     pub tokens: Option<SessionTokens>,
+}
+
+impl ServerSession {
+    /// Whether the session is past either TTL at `now` — the storage-side
+    /// mirror of [`ServerSession::check`], for stores that evict.
+    #[must_use]
+    pub fn is_dead(&self, now: DateTime<Utc>, idle_secs: i64, absolute_secs: i64) -> bool {
+        // The SAME verdict `check` gives, minus the generation (a store
+        // evicts on time alone; the generation is the host's business).
+        matches!(
+            self.check(now, idle_secs, absolute_secs, self.generation),
+            SessionCheck::Refused(SessionRefusal::Idle | SessionRefusal::Absolute)
+        )
+    }
 }
 
 impl std::fmt::Debug for ServerSession {
@@ -169,6 +183,26 @@ pub trait ServerSessionStore: Send + Sync {
     /// Storage failures. An unreachable store must be an `Err`, never
     /// `Ok(None)`: an outage must not read as "signed out".
     async fn get(&self, id: &str) -> Result<Option<ServerSession>, SessionError>;
+    /// Drop every session that has expired under the two TTLs. Returns how
+    /// many were removed.
+    ///
+    /// The default does nothing: a store with its own expiry (TTL rows, a
+    /// cache) needs no sweep. The in-memory reference implements it, because
+    /// without it an abandoned session stays in the map forever (R5: 1000
+    /// expired sessions, `len()` still 1000, and no API to shrink it).
+    ///
+    /// # Errors
+    ///
+    /// Storage failures.
+    async fn sweep(
+        &self,
+        now: DateTime<Utc>,
+        idle_secs: i64,
+        absolute_secs: i64,
+    ) -> Result<u64, SessionError> {
+        let _ = (now, idle_secs, absolute_secs);
+        Ok(0)
+    }
     /// Remove one session.
     ///
     /// # Errors
@@ -230,11 +264,29 @@ fn key(id: &str) -> String {
 #[async_trait::async_trait]
 impl ServerSessionStore for InMemoryServerSessionStore {
     async fn put(&self, session: &ServerSession) -> Result<(), SessionError> {
-        self.sessions
-            .write()
-            .await
-            .insert(key(&session.id), session.clone());
+        let mut sessions = self.sessions.write().await;
+        // Lazy hygiene on the wall clock: a dead row never displaces a live
+        // one, and a record already past both TTLs is not stored. This is
+        // the STORE's bookkeeping, not the host's verdict — the verdict is
+        // `check` with the host's own clock.
+        let now = Utc::now();
+        sessions.retain(|_, s| !s.is_dead(now, DEFAULT_IDLE_SECS, DEFAULT_ABSOLUTE_SECS));
+        if !session.is_dead(now, DEFAULT_IDLE_SECS, DEFAULT_ABSOLUTE_SECS) {
+            sessions.insert(key(&session.id), session.clone());
+        }
         Ok(())
+    }
+
+    async fn sweep(
+        &self,
+        now: DateTime<Utc>,
+        idle_secs: i64,
+        absolute_secs: i64,
+    ) -> Result<u64, SessionError> {
+        let mut sessions = self.sessions.write().await;
+        let before = sessions.len();
+        sessions.retain(|_, s| !s.is_dead(now, idle_secs, absolute_secs));
+        Ok((before - sessions.len()) as u64)
     }
 
     async fn get(&self, id: &str) -> Result<Option<ServerSession>, SessionError> {
@@ -374,11 +426,12 @@ impl CookiePolicy {
         Ok(())
     }
 
-    /// The `SameSite` this policy emits: the **strictest** value it allows,
-    /// so a host that narrows `allowed_same_site` gets cookies its own
-    /// `check` accepts (R4: emit was hard-coded `Lax`, so a `Strict`-only
-    /// policy produced values it immediately refused — a silent "signed in
-    /// but the next request is anonymous").
+    /// The `SameSite` this policy emits: `Lax` unless the policy allows
+    /// ONLY `Strict`, in which case `Strict`. Either way it is a value the
+    /// policy's own `check` accepts (R4: emit was hard-coded `Lax`, so a
+    /// `Strict`-only policy produced values it immediately refused — a
+    /// silent "signed in but the next request is anonymous"). A policy that
+    /// permits both gets `Lax`: it has not asked for the tighter one.
     fn emitted_same_site(&self) -> &str {
         // `Lax` unless the policy allows ONLY `Strict`: Lax is the default
         // the migration wants, and a host that permits both has not asked
@@ -642,6 +695,57 @@ mod tests {
                 .check(&parsed)
                 .unwrap_or_else(|e| panic!("the policy refused its own emission {value:?}: {e}"));
         }
+    }
+
+    /// R5 S2: the in-memory store evicts. Without a sweep, 1000 abandoned
+    /// sessions stayed in the map forever with no API to shrink it.
+    #[tokio::test]
+    async fn the_memory_store_evicts_expired_sessions() {
+        let store = InMemoryServerSessionStore::new();
+        let t0 = Utc::now();
+        for i in 0..100 {
+            store
+                .put(&ServerSession {
+                    id: format!("s-{i}"),
+                    subject: "sub".into(),
+                    created_at: t0,
+                    last_seen: t0,
+                    generation: 0,
+                    tokens: None,
+                })
+                .await
+                .unwrap();
+        }
+        assert_eq!(store.len().await, 100);
+        // Long after both TTLs: sweep removes every one.
+        let later = t0 + chrono::Duration::seconds(DEFAULT_ABSOLUTE_SECS + 60);
+        assert_eq!(
+            store
+                .sweep(later, DEFAULT_IDLE_SECS, DEFAULT_ABSOLUTE_SECS)
+                .await
+                .unwrap(),
+            100
+        );
+        assert_eq!(store.len().await, 0);
+        // And a put after the window lazily drops the dead and refuses the
+        // already-expired arrival.
+        // A record whose creation is already past the absolute TTL (a
+        // replayed restore, a clock that went backwards) is not stored.
+        let long_ago = Utc::now() - chrono::Duration::seconds(DEFAULT_ABSOLUTE_SECS + 60);
+        for i in 0..5 {
+            let dead = ServerSession {
+                id: format!("d-{i}"),
+                subject: "sub".into(),
+                created_at: long_ago,
+                last_seen: long_ago,
+                generation: 0,
+                tokens: None,
+            };
+            store.put(&dead).await.unwrap();
+        }
+        assert_eq!(store.len().await, 0, "an expired session is not stored");
+        // MUT:no-evict — making `sweep` a no-op and `put` skip the retain
+        // leaves the counts above at 100 / 5.
     }
 
     #[test]

@@ -29,12 +29,14 @@
 //! an attempt the victim never started.
 
 use chrono::{DateTime, Utc};
-use kirino::auth::passport::oauth::{
-    self, Callback, CallbackQuery, HttpFetcher, LoginAttemptStore, ProviderMetadata,
-};
-use kirino::auth::relay::RelayConfig;
 
 use crate::server_session::{CookiePolicy, ServerSession, ServerSessionStore};
+use kirino::auth::{
+    passport::oauth::{
+        self, Callback, CallbackQuery, HttpFetcher, LoginAttemptStore, ProviderMetadata,
+    },
+    relay::RelayConfig,
+};
 
 /// The cookie name carrying the browser binding.
 pub const BINDING_COOKIE: &str = "__Host-kirino_login";
@@ -175,8 +177,11 @@ pub async fn begin(
 ///
 /// # Errors
 ///
-/// Every [`RelaySessionError`]; the protocol refusals arrive as
-/// [`Refused`](RelaySessionError::Refused) with the RP core's reason.
+/// [`RelaySessionError::Refused`] when the RP core refuses the callback
+/// (bad state, a lost binding, a provider error — and, until the RP core
+/// splits its error type, a store failure too: see the case named for it);
+/// [`RelaySessionError::SessionStore`] when the session cannot be stored.
+/// `AttemptStore` and `NotConfigured` are `begin`'s, not this call's.
 pub async fn complete(
     ctx: &RelaySessionContext<'_>,
     query: &CallbackQuery,
@@ -363,6 +368,7 @@ mod tests {
             authorize_url: url::Url::parse("https://auth.example/oauth/authorize").unwrap(),
             token_url: url::Url::parse("https://auth.example/api/oauth/token").unwrap(),
             userinfo_url: Some(url::Url::parse("https://auth.example/api/oauth/userinfo").unwrap()),
+            token_response_envelope: None,
             token_body: TokenBody::Form,
             scopes: vec!["openid".into(), "profile".into(), "email".into()],
         }
