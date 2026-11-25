@@ -41,6 +41,10 @@ pub enum ClientAuthMethod {
 pub enum GrantType {
     AuthorizationCode,
     RefreshToken,
+    /// RFC 8628: the device authorization grant.
+    DeviceCode,
+    /// `client_credentials` (RFC 6749 §4.4).
+    ClientCredentials,
 }
 
 /// Result of matching a requested redirect against the registration.
