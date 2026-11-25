@@ -48,6 +48,7 @@
 
 pub mod authorize;
 pub mod client;
+pub mod client_auth;
 pub mod code;
 pub mod device;
 pub mod discovery;
@@ -57,6 +58,11 @@ pub mod userinfo;
 
 pub use authorize::{authorize, AuthorizeDecision, AuthorizeRequest};
 pub use client::{ClientAuthMethod, ClientRecord, ClientRegistry, GrantType, RedirectMatch};
+pub use client_auth::{
+    authenticate_private_key_jwt, is_client_token, mint_client_access_token, ClientAssertion,
+    ClientAuthError, ClientCredentials, SpentJti, DEFAULT_CLIENT_TOKEN_TTL_SECS,
+    MAX_ASSERTION_LIFETIME_SECS, MAX_CLOCK_SKEW_SECS,
+};
 pub use code::{mint_code, CodeGrant, GrantKind};
 pub use device::{
     Decision, DeviceAuthorization, DeviceError, DevicePoll, PendingDevice, DEVICE_CODE_GRANT,
