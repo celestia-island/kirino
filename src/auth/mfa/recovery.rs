@@ -24,9 +24,12 @@
 //! - the code a user sees is grouped for typing and carries no information
 //!   beyond its entropy.
 
-use argon2::password_hash::{PasswordHasher, SaltString};
-use argon2::Argon2;
 use chrono::{DateTime, Utc};
+
+use argon2::{
+    password_hash::{PasswordHasher, SaltString},
+    Argon2,
+};
 use thiserror::Error;
 
 use crate::auth::store::{Claim, ConsumableStore};
