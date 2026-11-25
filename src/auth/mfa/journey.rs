@@ -185,12 +185,6 @@ impl Journey {
                 }
                 self.recovery_used = true;
                 self.order.push("recovery".to_owned());
-                // Under an ANY policy, an accepted recovery code IS the one
-                // factor the policy asked for. Before this, the code was
-                // burned and the journey still said `NeedMore` (R2 S1).
-                if self.policy.is_any() {
-                    self.presented.insert(Factor::Otp);
-                }
             }
             other => {
                 let f = other.factor().cloned();
@@ -459,36 +453,59 @@ mod tests {
         }
     }
 
-    /// R3 S1 (regression): a recovery session is NOT an otp session. Its
-    /// `acr` is computed from what the subject proved, and `recovery` is not
-    /// in any class's method set — so it reaches `1fa`, never `2fa`.
+    /// R3/R4 S1: a recovery session is NOT an otp session. Its `acr` is
+    /// computed from what the subject PROVED, and `recovery` is in no
+    /// class's method set. The scale here has a pure-otp class and a
+    /// pure-fido class — the exact shape where inserting `Otp` into
+    /// `presented` on recovery would award `urn:c:otp`. (R4: the first
+    /// version of this case used a scale whose 2fa needed a password, so
+    /// it passed with the bug in place.)
     #[test]
     fn a_recovery_session_never_earns_an_otp_class_acr() {
         // MUT:recovery-as-otp — inserting Otp into `presented` on recovery
-        // makes this `Some("urn:celestia:2fa")`.
+        // makes the ANY legs below report Some("urn:c:otp").
+        let scale = AcrScale::declared([
+            ("urn:c:1fa", vec![Factor::Password]),
+            ("urn:c:otp", vec![Factor::Otp]),
+            ("urn:c:fido", vec![Factor::Fido]),
+        ])
+        .unwrap();
         for policy in [
             Policy::any([Factor::Otp, Factor::Fido]).unwrap(),
+            Policy::any([Factor::Fido]).unwrap(),
             Policy::all([Factor::Password, Factor::Otp]).unwrap(),
         ] {
             let mut j = Journey::start(policy.with_recovery(), at());
-            if j.verify(Presented::Recovery, &scale()).is_err() {
+            if j.verify(Presented::Recovery, &scale).is_err() {
                 // password-first policies need the password
-                j.verify(Presented::Password, &scale()).unwrap();
-                j.verify(Presented::Recovery, &scale()).unwrap();
+                j.verify(Presented::Password, &scale).unwrap();
+                j.verify(Presented::Recovery, &scale).unwrap();
             }
-            let FactorOutcome::Done { acr, amr } = j.outcome(&scale()) else {
+            let FactorOutcome::Done { acr, amr } = j.outcome(&scale) else {
                 panic!("done")
             };
             assert!(
                 !amr.iter().any(|a| a == "otp"),
-                "recovery is not recorded as otp"
+                "recovery is not recorded as otp: {amr:?}"
             );
             assert_ne!(
                 acr.as_deref(),
-                Some("urn:celestia:2fa"),
-                "a recovery session is not 2fa: {acr:?}"
+                Some("urn:c:otp"),
+                "a recovery session is not an otp session"
             );
         }
+        // And the password+recovery case earns exactly 1fa, never otp.
+        let mut j = Journey::start(
+            Policy::all([Factor::Password, Factor::Otp])
+                .unwrap()
+                .with_recovery(),
+            at(),
+        );
+        j.verify(Presented::Password, &scale).unwrap();
+        let FactorOutcome::Done { acr, .. } = j.verify(Presented::Recovery, &scale).unwrap() else {
+            panic!("done")
+        };
+        assert_eq!(acr.as_deref(), Some("urn:c:1fa"));
     }
 
     /// And an ANY policy that lists the password still needs it first.

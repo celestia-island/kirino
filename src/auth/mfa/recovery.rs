@@ -32,10 +32,22 @@ use thiserror::Error;
 use crate::auth::store::{Claim, ConsumableStore};
 
 /// What a user is shown: the code in typing groups, and nothing else.
-#[derive(Debug, Clone, PartialEq, Eq)]
+///
+/// `Debug` redacts the code — it is a live credential until it is consumed
+/// or expires, and the crate's other one-time credentials (`MintedCode`,
+/// `OneTimeCredential`) never reach a log.
+#[derive(Clone, PartialEq, Eq)]
 pub struct RecoveryCode {
     /// The code as typed, groups joined by `-`.
     pub display: String,
+}
+
+impl std::fmt::Debug for RecoveryCode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("RecoveryCode")
+            .field("display", &"<redacted>")
+            .finish()
+    }
 }
 
 /// Why a recovery step failed.
@@ -72,8 +84,15 @@ pub enum RecoveryError {
 ///
 /// `pepper` is the host's secret for this issuer. It selects the argon2
 /// salt, which is what makes the stored key slow to enumerate; it is never
-/// stored and never logged. A host that rotates the pepper invalidates
-/// every outstanding code — the right thing for a leaked pepper.
+/// stored and never logged. **It must be high-entropy** (32 random bytes,
+/// not a passphrase): with the table, anyone holding one genuine code can
+/// test a pepper guess offline, so a low-entropy pepper is cracked. The
+/// salt is fixed per issuer, so a leaked pepper AND a leaked table let one
+/// sweep cover every outstanding code at once — the per-code salt was
+/// traded for a key a claim can look up. **Rate-limit the recovery
+/// endpoint**: every claim runs one argon2 (~30 ms), and an unthrottled
+/// endpoint is both a guessing surface and a CPU sink. Rotating the pepper
+/// invalidates every outstanding code — the right thing for a leak.
 pub struct RecoveryIssuer<'a, P, S>
 where
     P: Clone + Send + Sync + 'static,
@@ -103,6 +122,11 @@ where
     pub fn new(store: &'a S, ttl_secs: i64, pepper: &[u8]) -> Result<Self, RecoveryError> {
         if pepper.is_empty() {
             return Err(RecoveryError::Store("pepper must not be empty".into()));
+        }
+        if !(0 < ttl_secs && ttl_secs <= 366 * 86_400) {
+            return Err(RecoveryError::Store(
+                "ttl must be between 1 s and 366 days".into(),
+            ));
         }
         // The salt is DERIVED, not random: the key must be reproducible at
         // claim time. SHA-256(pepper) as base64 is a valid salt string and
@@ -217,11 +241,17 @@ const CODE_CHARS: usize = CODE_DIGITS;
 
 fn random_code() -> String {
     use rand::RngExt;
-    // 12 digits from 5 bytes (40 bits > 10^12), rejection-free by folding.
-    let raw: [u8; 5] = rand::rng().random();
-    let n =
-        u64::from_be_bytes([0, 0, 0, raw[0], raw[1], raw[2], raw[3], raw[4]]) % 1_000_000_000_000;
-    format!("{n:012}")
+    // 12 digits by rejection sampling over 2^40: a plain `% 10^12` would
+    // double-weight the lowest ~9.5% of the space (2^40 mod 10^12), which
+    // R2/R3 measured at ~39.0 bits min-entropy; rejected draws are rare
+    // (under one in twenty), so the loop is cheap and the result uniform.
+    loop {
+        let raw: [u8; 5] = rand::rng().random();
+        let n = u64::from_be_bytes([0, 0, 0, raw[0], raw[1], raw[2], raw[3], raw[4]]);
+        if n < 1_000_000_000_000 {
+            return format!("{n:012}");
+        }
+    }
 }
 
 fn grouped(raw: &str) -> String {
@@ -243,6 +273,18 @@ mod tests {
 
     fn issuer<'a, S: ConsumableStore<String>>(store: &'a S) -> RecoveryIssuer<'a, String, S> {
         RecoveryIssuer::new(store, 3600, PEPPER).unwrap()
+    }
+
+    /// R4 S2: the code a user is shown is a live credential; `Debug` must
+    /// not carry it into a log.
+    #[test]
+    fn a_recovery_code_never_prints_itself() {
+        let code = RecoveryCode {
+            display: "1234-5678-9012".into(),
+        };
+        let rendered = format!("{code:?}");
+        assert!(!rendered.contains("1234"), "{rendered}");
+        assert!(rendered.contains("<redacted>"));
     }
 
     #[test]
