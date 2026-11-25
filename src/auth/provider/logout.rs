@@ -154,7 +154,22 @@ impl RpInitiatedLogout<'_> {
     /// The `client_id` is the CALLER's claim about itself. The `aud` check
     /// proves the hint was minted for that client, which is the spec's
     /// trust model — an RP that holds a user's ID token is asserting it
-    /// knows that user — not that the caller proved its own identity. `registered_redirects` is the
+    /// knows that user — not that the caller proved its own identity.
+    ///
+    /// # What the host must still do
+    ///
+    /// The OP's ID tokens carry no `sid`, so this check cannot tell whether
+    /// the hint belongs to the **current browser session**. The spec is
+    /// explicit (RP-Initiated Logout §2): when it does not, the OP **MUST
+    /// ask the End-User** before logging them out. This module cannot see
+    /// the browser; a host that skips the prompt turns every leaked ID
+    /// token into a remote "log out everywhere" button for its subject,
+    /// valid for the grace window. Compare the hint's `sub` against the
+    /// session the request arrived on, and prompt on a mismatch.
+    ///
+    /// The hint's `sub` is also the OP's; under pairwise identifiers each
+    /// RP knows the subject under its own `sub`, so `NotifyRp` must be given
+    /// the per-RP translation, not this one. `registered_redirects` is the
     /// client's registered post-logout URIs — exact strings, the same way
     /// authorization redirects are registered.
     ///
@@ -276,6 +291,18 @@ impl BackchannelLogout {
         }
     }
 
+    /// The issuer every token names.
+    #[must_use]
+    pub fn issuer(&self) -> &str {
+        &self.issuer
+    }
+
+    /// The TTL stamped into every token, in seconds.
+    #[must_use]
+    pub fn ttl_secs(&self) -> i64 {
+        self.ttl_secs
+    }
+
     /// The claims for one RP's logout token.
     ///
     /// One token per RP: `aud` is the RP, so a token delivered to RP 2 fails
@@ -354,8 +381,18 @@ impl BackchannelLogout {
 /// This is a list of intents rather than a side-effecting function on
 /// purpose — the stores live in the host (K0's `ConsumableStore` for
 /// grants, K2's `ServerSessionStore` for sessions), and a cascade that
-/// reaches into them directly could not be tested without them. The host
-/// walks the steps; each is a call it already has.
+/// reaches into them directly could not be tested without them.
+///
+/// **One step the host does NOT have a call for.** `ConsumableStore` is
+/// keyed by token fingerprint and has no "every grant for subject X"; a
+/// host that wants `RevokeGrants` to mean something must keep its own
+/// `sub → tokens` index until the store grows one. The other two map onto
+/// `revoke_all_for_subject` and `sign_logout_token` directly.
+///
+/// `rps_with_sessions` must be COMPLETE: the OP is supposed to track which
+/// RPs hold a session for the subject (spec §2.3), and an RP missing from
+/// this list is a silently missed notification — exactly the failure this
+/// module exists to prevent.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum CascadeStep {
@@ -404,8 +441,8 @@ pub fn cascade(
             sub: revocation.sub.clone(),
             // 256 bits. A logout token is single-use at the RP and the jti
             // is what makes a replay detectable. (The jtis in K5 and K6 are
-            // CLIENT-supplied — this is the only place the crate mints one
-            // for a token it signs, so it sets its own floor.)
+            // CLIENT-supplied; the access-token jti in `token.rs` is a
+            // UUIDv7. This one is random because it is never parsed.)
             jti: {
                 use rand::RngExt;
                 let raw: [u8; 32] = rand::rng().random();
@@ -790,6 +827,58 @@ mod tests {
             assert_eq!(sub, "user-1", "the token's sub is the user, not {audience}");
             assert_ne!(audience, sub);
         }
+    }
+
+    /// R3: the logout token's `iat` is the clock it was minted at, and its
+    /// `exp` is that plus the TTL. (An `iat` off by an hour went unnoticed.)
+    #[test]
+    fn a_logout_token_is_stamped_with_the_clock_it_was_minted_at() {
+        let b = BackchannelLogout::new("https://auth.example");
+        let now = Utc::now();
+        let c = b.claims_for("erp", "user-1", "j-1", now);
+        assert_eq!(
+            c.iat,
+            now.timestamp(),
+            "MUT:iat-skewed — the RP cannot judge freshness"
+        );
+        assert_eq!(
+            c.exp - c.iat,
+            LOGOUT_TOKEN_TTL_SECS,
+            "MUT:ttl-drift — the spec caps this at two minutes"
+        );
+        assert_eq!(
+            LOGOUT_TOKEN_TTL_SECS, 120,
+            "spec §2.6: the token MUST NOT be valid for more than two minutes"
+        );
+    }
+
+    /// R3: the grace window is a day, no more. (A week went unnoticed; each
+    /// extra day is another day a leaked hint is a remote logout button.)
+    #[test]
+    fn the_grace_window_is_one_day() {
+        assert_eq!(
+            HINT_GRACE_SECS,
+            24 * 3600,
+            "MUT:grace-widened — a leaked hint stays a remote logout for longer"
+        );
+    }
+
+    /// R3: the RP side's own `exp` boundary — accepted one second before,
+    /// refused at the second.
+    #[test]
+    fn a_logout_token_expires_at_its_bound() {
+        let b = BackchannelLogout::new("https://auth.example");
+        let now = Utc::now();
+        let c = b.claims_for("erp", "user-1", "j-1", now);
+        let before = now + Duration::seconds(LOGOUT_TOKEN_TTL_SECS - 1);
+        BackchannelLogout::verify(&c, "https://auth.example", "erp", before)
+            .expect("one second before exp is still valid");
+        let at = now + Duration::seconds(LOGOUT_TOKEN_TTL_SECS);
+        // MUT:exp-boundary — `>` instead of `>=` accepts it here.
+        assert_eq!(
+            BackchannelLogout::verify(&c, "https://auth.example", "erp", at).unwrap_err(),
+            LogoutError::InvalidLogoutToken
+        );
     }
 
     // ── the cascade ─────────────────────────────────────────────────────
