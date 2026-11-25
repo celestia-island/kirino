@@ -34,6 +34,10 @@ pub enum ClientAuthMethod {
     ClientSecret,
     /// No secret. PKCE is the only proof, so it is mandatory.
     None,
+    /// `private_key_jwt` (OIDC Core §9): the client signs a short-lived
+    /// assertion with a key the provider knows. Nothing shared travels, so
+    /// a leaked token store yields no way to authenticate as the client.
+    PrivateKeyJwt,
 }
 
 /// A grant the client is allowed to use.
@@ -79,6 +83,12 @@ pub struct ClientRecord {
     pub(crate) require_pkce: bool,
     /// Scopes this client may be granted; empty = the known set.
     pub allowed_scopes: Vec<String>,
+    /// For [`ClientAuthMethod::PrivateKeyJwt`]: the `kid` the client signs
+    /// with, so a rotation is a registration change rather than a guess.
+    pub jwt_kid: Option<String>,
+    /// For [`ClientAuthMethod::PrivateKeyJwt`]: the public key (PEM or JWK)
+    /// the assertion signature is verified against. Never a secret.
+    pub jwt_public_key_pem: Option<String>,
 }
 
 impl ClientRecord {
@@ -97,11 +107,29 @@ impl ClientRecord {
             allowed_grants: vec![GrantType::AuthorizationCode, GrantType::RefreshToken],
             require_pkce: true,
             allowed_scopes: Vec::new(),
+            jwt_kid: None,
+            jwt_public_key_pem: None,
         }
     }
 
     /// A public client: no secret, PKCE mandatory by construction.
     #[must_use]
+    /// A client that authenticates with a signed assertion.
+    ///
+    /// `public_key_pem` is what the provider verifies against; `kid` names
+    /// it so a client can rotate keys without the provider guessing.
+    pub fn private_key_jwt(
+        client_id: impl Into<String>,
+        kid: impl Into<String>,
+        public_key_pem: impl Into<String>,
+    ) -> Self {
+        let mut record = Self::public(client_id, Vec::new());
+        record.auth_method = ClientAuthMethod::PrivateKeyJwt;
+        record.jwt_kid = Some(kid.into());
+        record.jwt_public_key_pem = Some(public_key_pem.into());
+        record
+    }
+
     pub fn public(client_id: impl Into<String>, redirect_uris: Vec<String>) -> Self {
         Self {
             client_id: client_id.into(),
@@ -111,6 +139,8 @@ impl ClientRecord {
             allowed_grants: vec![GrantType::AuthorizationCode, GrantType::RefreshToken],
             require_pkce: true,
             allowed_scopes: Vec::new(),
+            jwt_kid: None,
+            jwt_public_key_pem: None,
         }
     }
 
@@ -271,6 +301,11 @@ pub async fn authenticate_client(
         .await?
         .ok_or(ProviderError::InvalidClient)?;
     match (record.auth_method, presented_secret) {
+        // `private_key_jwt` does not present a secret: the assertion goes
+        // through `authenticate_private_key_jwt`, which needs the jti store
+        // and the token endpoint URL — neither of which this function has.
+        // Reaching here with the assertion as a "secret" is refused.
+        (ClientAuthMethod::PrivateKeyJwt, _) => Err(ProviderError::InvalidClient),
         (ClientAuthMethod::None, None) => Ok(record),
         (ClientAuthMethod::None, Some(_)) => {
             // A public client has no secret to present; one showing up means
