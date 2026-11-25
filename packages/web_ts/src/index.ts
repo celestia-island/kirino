@@ -40,3 +40,4 @@ export type { AuthMethod } from "./generated/AuthMethod";
 export type { LoginMethodDescriptor } from "./generated/LoginMethodDescriptor";
 export type { RelayDirective } from "./generated/RelayDirective";
 export type { LoginPolicy } from "./generated/LoginPolicy";
+export type { IdpCapabilities } from "./generated/IdpCapabilities";
