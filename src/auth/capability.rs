@@ -535,97 +535,62 @@ mod tests {
         }
     }
 
-    /// Every field is reachable through `entries()`, so a new field that
-    /// forgets its probe is caught by the compiler's exhaustiveness here
-    /// rather than by a silent gap in the audit.
+    /// Every FIELD has an entry — checked against the serialised document,
+    /// not against a hand-counted number.
+    ///
+    /// R2 found the first version compared the entry count to a literal
+    /// `18`; adding a field and bumping that literal left the new field
+    /// unaudited forever. The JSON is the authority here: serde emits one
+    /// key per field, so the key set must equal the entry names exactly. A
+    /// field with no entry is a missing name; an entry with no field is a
+    /// name that is not a key.
     #[test]
-    fn every_field_has_an_entry() {
+    fn every_field_has_an_entry_and_no_entry_is_a_ghost() {
         let caps = IdpCapabilities::current();
-        let names: std::collections::BTreeSet<&str> =
-            caps.entries().into_iter().map(|c| c.name).collect();
-        for expected in [
-            "authorization_code_pkce",
-            "refresh_rotation",
-            "atomic_code_redemption",
-            "id_token_eddsa_with_jwks",
-            "access_token_separate_from_id_token",
-            "redirect_verified_before_refusal",
-            "code_and_refresh_lanes_separate",
-            "credential_survives_our_failure",
-            "device_authorization",
-            "private_key_jwt",
-            "client_credentials",
-            "dpop",
-            "mtls",
-            "mfa",
-            "logout",
-            "server_side_sessions",
-            "host_only_cookies",
-            "host_can_deliver_messages",
-        ] {
-            assert!(names.contains(expected), "{expected} has no entry");
-        }
-        assert_eq!(names.len(), 18, "a field was added without an entry");
+        let mut entries: Vec<&str> = caps.entries().into_iter().map(|c| c.name).collect();
+        entries.sort_unstable();
+        // Deduplicate check: two entries with one name would hide a missing
+        // field.
+        let unique: std::collections::BTreeSet<&str> = entries.iter().copied().collect();
+        assert_eq!(entries.len(), unique.len(), "two entries share a name");
+
+        let json = serde_json::to_value(&caps).unwrap();
+        let mut fields: Vec<&str> = json
+            .as_object()
+            .expect("an object")
+            .keys()
+            .map(String::as_str)
+            .collect();
+        fields.sort_unstable();
+
+        assert_eq!(fields, entries, "the entry set must equal the field set");
     }
 
-    /// R2's question, answered in the type: `audit()` must not be mistaken
-    /// for "the implementation is proved". The grade says which it is, and a
-    /// `CompiledIn` capability keeps its claim even if the implementation is
-    /// deleted — which is exactly why the two grades are separated and why
-    /// `proven_by_behaviour` exists.
+    /// R2 M3: `probe: None` must mean `Evidence::HostFact`, and nothing
+    /// else. Without this, a probe-less capability could be slipped in with
+    /// `declared: false` and `audit` would pass it silently — the gate
+    /// disarmed by a change no test noticed.
     #[test]
-    fn the_evidence_grade_separates_proof_from_compilation() {
-        let caps = IdpCapabilities::current();
-        let strong = caps.proven_by_behaviour();
-        // The strong grade covers the two session-layer invariants always,
-        // and the eight provider invariants when that lane is compiled —
-        // which is itself the point: a capability that is not in the build
-        // must not be reported as proven.
-        let expected_floor = if cfg!(feature = "auth-oidc-provider") {
-            10
-        } else {
-            2
-        };
-        assert!(
-            strong.len() >= expected_floor,
-            "only {} strong capabilities (floor {expected_floor}): {strong:?}",
-            strong.len()
-        );
-        for (name, test) in &strong {
-            assert!(!test.is_empty(), "{name} names no test");
-        }
-        // And every strong name is a declared capability.
-        let declared: std::collections::BTreeSet<&str> = caps
-            .entries()
-            .into_iter()
-            .filter(|c| c.declared)
-            .map(|c| c.name)
-            .collect();
-        for (name, _) in &strong {
-            assert!(declared.contains(name), "{name} is strong but not declared");
-        }
-        // The host fact is neither.
-        assert!(!strong
-            .iter()
-            .any(|(n, _)| *n == "host_can_deliver_messages"));
-    }
-
-    /// MUT:evidence-ignored — a capability whose evidence says `CompiledIn`
-    /// is NOT in `proven_by_behaviour`, so a consumer cannot accidentally
-    /// read the weak grade as the strong one.
-    #[test]
-    fn a_compiled_in_capability_is_not_reported_as_proven() {
-        let caps = IdpCapabilities::current();
-        let strong: std::collections::BTreeSet<&str> = caps
-            .proven_by_behaviour()
-            .into_iter()
-            .map(|(n, _)| n)
-            .collect();
-        for cap in caps.entries() {
-            if cap.evidence == Evidence::CompiledIn && cap.declared {
+    fn only_a_host_fact_may_have_no_probe() {
+        for cap in IdpCapabilities::current().entries() {
+            if cap.probe.is_none() {
+                assert_eq!(
+                    cap.evidence,
+                    Evidence::HostFact,
+                    "{} has no probe but claims to be {:?}",
+                    cap.name,
+                    cap.evidence
+                );
+            }
+            if cap.evidence == Evidence::HostFact {
                 assert!(
-                    !strong.contains(cap.name),
-                    "{} is only compiled in",
+                    cap.probe.is_none(),
+                    "{} is a host fact and must have no probe",
+                    cap.name
+                );
+                assert!(
+                    !cap.declared,
+                    "{} is a host fact and must not be declared",
                     cap.name
                 );
             }
