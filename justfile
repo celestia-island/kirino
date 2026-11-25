@@ -9,7 +9,8 @@
 #   just clippy          - Run Clippy lints
 #   just fmt             - Format code
 #   just fmt-check       - Check formatting
-#   just enforce-groups  - Enforce use statement group layout
+#   just enforce-groups  - Enforce use group layout (rewrites files)
+#   just enforce-groups-check - Check that grouping without modifying files
 #   just test            - Run unit tests
 #   just ci              - Run all CI checks
 
@@ -68,10 +69,15 @@ fmt-check:
     @echo "Checking code formatting..."
     cargo fmt --all -- --check
 
-# Enforce use statement group layout (imports grouping)
+# Enforce use statement grouping (which statement holds which members) — rewrites files
 enforce-groups:
-    @echo "Enforcing use statement group layout..."
+    @echo "Enforcing use statement grouping..."
     {{python}} scripts/enforce_use_groups.py
+
+# Check use statement grouping without modifying files
+enforce-groups-check:
+    @echo "Checking use statement grouping..."
+    {{python}} scripts/enforce_use_groups.py --check
 
 # ============================================================================
 # Test tasks
@@ -86,8 +92,8 @@ test:
 # CI
 # ============================================================================
 
-# Run all CI checks (check + clippy + fmt-check + enforce-groups + test)
-ci: check clippy fmt-check enforce-groups test
+# Run all CI checks (check + clippy + fmt-check + enforce-groups-check + test)
+ci: check clippy fmt-check enforce-groups-check test
     @echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
     @echo "All CI checks passed!"
     @echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"

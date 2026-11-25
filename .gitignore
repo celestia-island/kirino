@@ -8,6 +8,10 @@ node_modules/
 # extensionless form keeps the linked dirs out of `git add .` too.
 node_modules
 
+# Python bytecode (scripts/*.py, incl. `enforce_use_groups.py --test`)
+__pycache__/
+*.py[cod]
+
 # Editor / OS cruft
 *.swp
 *.swo
