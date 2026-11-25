@@ -129,6 +129,12 @@ impl Policy {
         !self.any_of
     }
 
+    /// Whether ANY ONE (rather than ALL) of the named factors suffices.
+    #[must_use]
+    pub fn is_any(&self) -> bool {
+        self.any_of
+    }
+
     /// Whether a recovery code may stand in for a second factor.
     #[must_use]
     pub fn allows_recovery(&self) -> bool {

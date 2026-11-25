@@ -112,7 +112,8 @@ pub enum StepUpVerdict {
     Required {
         /// The `acr` the resource demanded.
         required_acr: String,
-        /// The `acr` the session has, if the scale knows it.
+        /// The `acr` the session carried, as carried — known to the scale
+        /// or not.
         current_acr: Option<String>,
         /// The specific methods still missing from `amr`.
         missing_methods: Vec<Factor>,
@@ -121,11 +122,6 @@ pub enum StepUpVerdict {
 
 impl StepUp {
     /// A requirement expressed as an `acr` floor.
-    ///
-    /// # Errors
-    ///
-    /// Never today; the signature is kept so a resource can declare a floor
-    /// the scale must know without a panic path later.
     pub fn new(acr: impl Into<String>) -> Self {
         Self {
             acr: acr.into(),
@@ -270,6 +266,33 @@ mod tests {
         // A floor the scale does not know: cannot be reasoned about → not enough.
         let v = StepUp::new("urn:unknown").judge(&["pwd".into()], Some("urn:c:max"), &s);
         assert!(matches!(v, StepUpVerdict::Required { .. }));
+    }
+
+    /// Rule 2 on its own: every method the floor needs is present, and the
+    /// session's `acr` still ranks BELOW the floor. Every other `Required`
+    /// case also lacked a method, so a judge that ignored the rank survived
+    /// (R2 M11) — and so did the first version of this case, which picked a
+    /// floor (`max`) whose method set was also short.
+    #[test]
+    fn enough_methods_but_a_lower_rank_is_still_required() {
+        // MUT:rank-ignored — making the rank comparison always true turns
+        // this into Sufficient.
+        let s = scale();
+        let v =
+            StepUp::new("urn:c:2fa").judge(&["pwd".into(), "otp".into()], Some("urn:c:1fa"), &s);
+        let StepUpVerdict::Required {
+            current_acr,
+            missing_methods,
+            ..
+        } = v
+        else {
+            panic!("the methods are all there and the rank alone must refuse");
+        };
+        assert_eq!(current_acr.as_deref(), Some("urn:c:1fa"));
+        assert!(
+            missing_methods.is_empty(),
+            "nothing is missing by method: {missing_methods:?}"
+        );
     }
 
     #[test]

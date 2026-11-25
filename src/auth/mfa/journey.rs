@@ -173,6 +173,12 @@ impl Journey {
                 }
                 self.recovery_used = true;
                 self.order.push("recovery".to_owned());
+                // Under an ANY policy, an accepted recovery code IS the one
+                // factor the policy asked for. Before this, the code was
+                // burned and the journey still said `NeedMore` (R2 S1).
+                if self.policy.is_any() {
+                    self.presented.insert(Factor::Otp);
+                }
             }
             other => {
                 let f = other.factor().cloned();
@@ -181,6 +187,17 @@ impl Journey {
                     // known factor; a policy that names it as Other would
                     // have matched below, which is why Other is a Factor too.
                     if let Presented::Other(name) = other {
+                        // A reserved name may not arrive as `Other`: the
+                        // journey would refuse to count it as that factor
+                        // while writing the canonical name into `amr`, and
+                        // `StepUp::judge` would read it back as the real
+                        // thing (R2 S1: `Other("otp")` satisfied a 2fa floor
+                        // without the subject ever proving otp).
+                        if matches!(name.as_str(), "pwd" | "otp" | "fido" | "recovery")
+                            || name.trim().is_empty()
+                        {
+                            return Err(JourneyError::NotInPolicy(name.clone()));
+                        }
                         if self.order.iter().any(|a| a == name) {
                             return Err(JourneyError::NotInPolicy(name.clone()));
                         }
@@ -364,6 +381,65 @@ mod tests {
         assert!(matches!(
             v,
             crate::auth::mfa::StepUpVerdict::Required { .. }
+        ));
+    }
+
+    /// R2 S1: a reserved name may not arrive as `Other`. The journey would
+    /// refuse to count it as that factor while writing the canonical name
+    /// into `amr` — and `StepUp::judge` reads `amr` back as the real thing,
+    /// so `Other("otp")` satisfied a 2fa floor without otp ever being proven.
+    #[test]
+    fn a_reserved_name_cannot_arrive_as_an_other_factor() {
+        let mut j = Journey::start(Policy::all([Factor::Password, Factor::Otp]).unwrap(), at());
+        j.verify(Presented::Password, &scale()).unwrap();
+        for reserved in ["otp", "fido", "pwd", "recovery", "  "] {
+            assert_eq!(
+                j.verify(Presented::Other(reserved.into()), &scale())
+                    .unwrap_err(),
+                JourneyError::NotInPolicy(reserved.to_owned()),
+                "{reserved} is a reserved name"
+            );
+        }
+        // MUT:other-reserved — letting `Other("otp")` through writes "otp"
+        // into amr and `judge(2fa)` then passes on a journey that never
+        // proved otp.
+        let v = crate::auth::mfa::StepUp::new("urn:celestia:2fa").judge(j.amr(), None, &scale());
+        assert!(matches!(
+            v,
+            crate::auth::mfa::StepUpVerdict::Required { .. }
+        ));
+    }
+
+    /// R2 S1: under an ANY policy an accepted recovery code IS the factor.
+    /// Before, the code was burned and the journey still said `NeedMore`.
+    #[test]
+    fn a_recovery_code_completes_an_any_policy() {
+        let mut j = Journey::start(
+            Policy::any([Factor::Otp, Factor::Fido])
+                .unwrap()
+                .with_recovery(),
+            at(),
+        );
+        let out = j.verify(Presented::Recovery, &scale()).unwrap();
+        assert!(
+            matches!(out, FactorOutcome::Done { .. }),
+            "accepted recovery satisfies an any-of policy"
+        );
+        assert!(j.is_complete());
+    }
+
+    /// And an ANY policy that lists the password still needs it first.
+    #[test]
+    fn an_any_policy_listing_the_password_needs_it_before_recovery() {
+        let mut j = Journey::start(
+            Policy::any([Factor::Password, Factor::Otp])
+                .unwrap()
+                .with_recovery(),
+            at(),
+        );
+        assert!(matches!(
+            j.verify(Presented::Recovery, &scale()),
+            Err(JourneyError::NotInPolicy(_))
         ));
     }
 
