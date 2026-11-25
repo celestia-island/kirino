@@ -49,6 +49,7 @@
 pub mod authorize;
 pub mod client;
 pub mod code;
+pub mod device;
 pub mod discovery;
 pub mod id_token;
 pub mod token;
@@ -57,6 +58,9 @@ pub mod userinfo;
 pub use authorize::{authorize, AuthorizeDecision, AuthorizeRequest};
 pub use client::{ClientAuthMethod, ClientRecord, ClientRegistry, GrantType, RedirectMatch};
 pub use code::{mint_code, CodeGrant, GrantKind};
+pub use device::{
+    Decision, DeviceAuthorization, DeviceError, DevicePoll, PendingDevice, DEVICE_CODE_GRANT,
+};
 pub use discovery::{DiscoveryDocument, JwksDocument};
 pub use id_token::{IdTokenClaims, IdTokenSigner};
 pub use token::{

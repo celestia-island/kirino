@@ -324,7 +324,11 @@ pub async fn authorization_code_grant(
 }
 
 /// Mint the token set for a redeemed grant and park the refresh grant.
-async fn mint_tokens(
+///
+/// `pub(crate)` so the device grant and the client-credentials grant (K5)
+/// mint through the same path as the authorization-code grant instead of
+/// growing a second, subtly different one.
+pub(crate) async fn mint_tokens(
     grant: &CodeGrant,
     client: &ClientRecord,
     ctx: &TokenContext<'_, impl ConsumableStore<CodeGrant> + ?Sized>,
