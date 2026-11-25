@@ -203,8 +203,13 @@ pub struct LogoutTokenClaims {
     pub iat: i64,
     /// Unique, so a replay is detectable.
     pub jti: String,
-    /// The events: always the back-channel logout event.
-    pub events: Vec<String>,
+    /// The events, as a JSON **object** keyed by event URI (spec §2.4):
+    /// `{"http://schemas.openid.net/event/backchannel-logout": {}}`. Always
+    /// that one key and an empty object. It is a map rather than an array
+    /// because the spec says so, and a conforming RP refuses an array — the
+    /// value per key is reserved for event-specific claims this crate never
+    /// emits.
+    pub events: std::collections::BTreeMap<String, serde_json::Value>,
     /// The subject whose sessions the RP must drop. The OP's stable id.
     pub sub: String,
     /// **Never set.** An ID token must not be usable as a logout token, and
@@ -279,7 +284,10 @@ impl BackchannelLogout {
             exp: now.timestamp() + self.ttl_secs,
             iat: now.timestamp(),
             jti: jti.to_owned(),
-            events: vec![BACKCHANNEL_LOGOUT_EVENT.to_owned()],
+            events: std::collections::BTreeMap::from([(
+                BACKCHANNEL_LOGOUT_EVENT.to_owned(),
+                serde_json::Value::Object(Default::default()),
+            )]),
             sub: sub.to_owned(),
             nonce: None,
         }
@@ -307,7 +315,13 @@ impl BackchannelLogout {
         if claims.aud != this_rp {
             return Err(LogoutError::InvalidLogoutToken);
         }
-        if !claims.events.iter().any(|e| e == BACKCHANNEL_LOGOUT_EVENT) {
+        // The event MUST be present as a key. An RP MUST also reject a token
+        // whose `events` it does not understand — so every key has to be one
+        // this RP knows, and this RP knows exactly one.
+        if claims.events.is_empty() || !claims.events.contains_key(BACKCHANNEL_LOGOUT_EVENT) {
+            return Err(LogoutError::InvalidLogoutToken);
+        }
+        if claims.events.keys().any(|k| k != BACKCHANNEL_LOGOUT_EVENT) {
             return Err(LogoutError::InvalidLogoutToken);
         }
         if claims.nonce.is_some() {
@@ -374,11 +388,10 @@ pub fn cascade(
         steps.push(CascadeStep::NotifyRp {
             audience: audience.clone(),
             sub: revocation.sub.clone(),
-            // 256 bits, the same as every other jti this crate mints (K5's
-            // client assertions, K6's DPoP proofs). A logout token is
-            // single-use at the RP, and the jti is what makes a replay
-            // detectable; 128 would be enough today and is not the family's
-            // number.
+            // 256 bits. A logout token is single-use at the RP and the jti
+            // is what makes a replay detectable. (The jtis in K5 and K6 are
+            // CLIENT-supplied — this is the only place the crate mints one
+            // for a token it signs, so it sets its own floor.)
             jti: {
                 use rand::RngExt;
                 let raw: [u8; 32] = rand::rng().random();
@@ -527,7 +540,37 @@ mod tests {
         let b = BackchannelLogout::new("https://auth.example");
         let now = Utc::now();
         let mut c = b.claims_for("erp", "user-1", "j-1", now);
-        c.events = vec!["http://example.com/other".into()];
+        c.events = std::collections::BTreeMap::from([(
+            "http://example.com/other".into(),
+            serde_json::Value::Object(Default::default()),
+        )]);
+        assert_eq!(
+            BackchannelLogout::verify(&c, "https://auth.example", "erp", now).unwrap_err(),
+            LogoutError::InvalidLogoutToken
+        );
+    }
+
+    /// An RP MUST reject a token whose `events` it does not understand —
+    /// so a token carrying the logout event AND something else is refused
+    /// too, not "honoured for the part I know".
+    #[test]
+    fn a_logout_token_with_a_mixed_events_map_is_refused() {
+        let b = BackchannelLogout::new("https://auth.example");
+        let now = Utc::now();
+        let mut c = b.claims_for("erp", "user-1", "j-1", now);
+        c.events.insert(
+            "http://example.com/other".into(),
+            serde_json::Value::Object(Default::default()),
+        );
+        // MUT:events-partial — accepting a token because it CONTAINS the
+        // known event honours a token whose other events this RP ignored.
+        assert_eq!(
+            BackchannelLogout::verify(&c, "https://auth.example", "erp", now).unwrap_err(),
+            LogoutError::InvalidLogoutToken
+        );
+        // And an empty map.
+        let mut c = b.claims_for("erp", "user-1", "j-2", now);
+        c.events.clear();
         assert_eq!(
             BackchannelLogout::verify(&c, "https://auth.example", "erp", now).unwrap_err(),
             LogoutError::InvalidLogoutToken
@@ -551,7 +594,22 @@ mod tests {
         let b = BackchannelLogout::new("https://auth.example");
         let c = b.claims_for("erp", "user-1", "j-1", Utc::now());
         assert!(c.nonce.is_none());
-        assert_eq!(c.events, vec![BACKCHANNEL_LOGOUT_EVENT]);
+        assert_eq!(
+            c.events.keys().collect::<Vec<_>>(),
+            vec![&BACKCHANNEL_LOGOUT_EVENT.to_owned()]
+        );
+        // And on the wire it is an OBJECT, not an array (spec §2.4). An RP
+        // that conforms refuses an array; serde would have emitted one from
+        // a Vec. MUT:events-as-array — a `Vec<String>` reddens this.
+        let json = serde_json::to_string(&c).unwrap();
+        assert!(
+            json.contains(&format!("\"{BACKCHANNEL_LOGOUT_EVENT}\":{{}}")),
+            "{json}"
+        );
+        assert!(
+            !json.contains(&format!("\"{BACKCHANNEL_LOGOUT_EVENT}\"]")),
+            "an array, not an object: {json}"
+        );
         // And the WIRE form has no nonce member at all — not `null`. R2's
         // question: `"nonce": null` is what serde would emit by default, and
         // an RP reading it as "a nonce is present" would refuse the token.
