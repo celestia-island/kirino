@@ -55,6 +55,7 @@ pub mod discovery;
 #[cfg(feature = "auth-dpop")]
 pub mod dpop;
 pub mod id_token;
+pub mod logout;
 #[cfg(feature = "auth-mtls")]
 pub mod mtls;
 pub mod token;
@@ -79,6 +80,11 @@ pub use dpop::{
     MAX_PROOF_AGE_SECS, MAX_PROOF_SKEW_SECS,
 };
 pub use id_token::{IdTokenClaims, IdTokenSigner};
+pub use logout::{
+    cascade, BackchannelLogout, CascadeStep, HintClaims, LogoutError, LogoutTokenClaims,
+    Revocation, RevocationReason, RpInitiatedLogout, RpLogoutVerdict, BACKCHANNEL_LOGOUT_EVENT,
+    HINT_GRACE_SECS, LOGOUT_TOKEN_TTL_SECS,
+};
 #[cfg(feature = "auth-mtls")]
 pub use mtls::{
     CertificateBinding, CertificateConfirmation, MtlsError, PresentedCertificate, X5T_S256,
