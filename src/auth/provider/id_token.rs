@@ -157,6 +157,29 @@ impl IdTokenSigner {
             .map_err(|e| ProviderError::SigningUnavailable(format!("sign failed: {e}")))
     }
 
+    /// Sign a back-channel **logout token** (OIDC Back-Channel Logout §2.4)
+    /// with the same key and `kid`.
+    ///
+    /// `typ` is `logout+jwt` (the spec RECOMMENDS it; an RP may refuse a
+    /// token without it) — a header this signer would otherwise never set,
+    /// which is why this is a separate method and not `sign` with a flag:
+    /// an ID token and a logout token are different things and must not be
+    /// interchangeable in either direction.
+    ///
+    /// # Errors
+    ///
+    /// [`ProviderError::SigningUnavailable`] when the key cannot sign.
+    pub fn sign_logout_token(
+        &self,
+        claims: &super::logout::LogoutTokenClaims,
+    ) -> Result<String, ProviderError> {
+        let mut header = Header::new(Algorithm::EdDSA);
+        header.kid = Some(self.kid.clone());
+        header.typ = Some("logout+jwt".to_owned());
+        jsonwebtoken::encode(&header, claims, &self.encoding)
+            .map_err(|e| ProviderError::SigningUnavailable(format!("logout sign failed: {e}")))
+    }
+
     /// The `kid` this signer stamps — what the JWKS must advertise.
     #[must_use]
     pub fn kid(&self) -> &str {
@@ -287,6 +310,39 @@ MCowBQYDK2VwAyEAPH53IpxGc7yhGj/Hb6390oc/ij0hPzepMo9gsUIKRXU=
 
     /// The round trip with the relying-party verifier: what this module
     /// signs, the RP core accepts, with the exact issuer/audience/nonce.
+    /// R3 S2: the logout-token method had no test. Two headers are the
+    /// whole point — `typ: logout+jwt` distinguishes it from an ID token,
+    /// and `kid` lets the RP pick the key — and neither was pinned.
+    #[test]
+    fn a_logout_token_round_trips_with_its_own_typ_and_kid() {
+        use crate::auth::provider::logout::{BackchannelLogout, LogoutTokenClaims};
+        let signer = IdTokenSigner::from_ed25519_pem(PRIVATE_PEM, "k1").unwrap();
+        let b = BackchannelLogout::new("https://auth.example");
+        let claims = b.claims_for("erp", "user-1", "j-1", chrono::Utc::now());
+        let jwt = signer.sign_logout_token(&claims).unwrap();
+        // Decode the header without verifying, to read `typ` and `kid`.
+        let header = jsonwebtoken::decode_header(&jwt).unwrap();
+        assert_eq!(
+            header.typ.as_deref(),
+            Some("logout+jwt"),
+            "MUT:typ-unset — the default is JWT, indistinguishable from an ID token"
+        );
+        assert_eq!(
+            header.kid.as_deref(),
+            Some("k1"),
+            "MUT:kid-unset — the RP cannot pick the key"
+        );
+        assert_eq!(header.alg, jsonwebtoken::Algorithm::EdDSA);
+        // And the signature verifies against the public key with the
+        // claims intact, under the same validation an RP would run.
+        let key = jsonwebtoken::DecodingKey::from_ed_pem(PUBLIC_PEM.as_bytes()).unwrap();
+        let mut validation = jsonwebtoken::Validation::new(jsonwebtoken::Algorithm::EdDSA);
+        validation.set_issuer(&[b.issuer()]);
+        validation.set_audience(&["erp"]);
+        let back = jsonwebtoken::decode::<LogoutTokenClaims>(&jwt, &key, &validation).unwrap();
+        assert_eq!(back.claims, claims);
+    }
+
     #[test]
     fn the_rp_core_accepts_what_this_signs() {
         let signer = IdTokenSigner::from_ed25519_pem(PRIVATE_PEM, "k1").unwrap();
