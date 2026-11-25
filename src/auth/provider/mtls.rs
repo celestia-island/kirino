@@ -261,6 +261,22 @@ mod tests {
         }
     }
 
+    /// R2 M2: the base64url alphabet includes `_` and `-`. A shape check
+    /// that allows only `-` rejects real thumbprints, and the failure looks
+    /// like "mTLS is broken".
+    #[test]
+    fn both_base64url_special_characters_are_accepted() {
+        // Real-shaped thumbprints containing each special character.
+        for value in [
+            "w1IzFq8l6unwjSvWDgHv1tBb9xJUjNAYm-5VqOfE2po",
+            "x-XrRzj8ta_4ybqQFnNxFxZ67MWzcesH9lyvmB2b4KE",
+        ] {
+            assert_eq!(value.len(), 43);
+            assert!(is_thumbprint_shaped(value), "{value} is valid base64url");
+        }
+        // MUT:alphabet-dash-only — dropping `_` reddens the second value.
+    }
+
     #[test]
     fn the_happy_path_binds_certificate_to_token() {
         let binding = CertificateBinding::bind(&cert(7), true).unwrap();

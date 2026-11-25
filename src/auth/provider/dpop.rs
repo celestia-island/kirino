@@ -19,15 +19,18 @@
 //!
 //! # What a proof must satisfy
 //!
-//! Every one of these is a hole if it is skipped, which is why they are all
-//! here rather than left to the host:
+//! The first three are the host's: verifying `typ`/`alg`/`jwk` means parsing
+//! the JWT, and that is the same work as verifying the signature, so it stays
+//! with `verify_signature` and is documented as its obligation. The rest are
+//! checked here, because they are about THIS REQUEST and THIS TOKEN — facts
+//! the host's verifier does not have.
 //!
-//! | Claim | Checked because |
+//! | Claim | Checked where |
 //! | --- | --- |
-//! | `typ` | `dpop+jwt` — anything else is some other JWT replayed as a proof |
-//! | `alg` | asymmetric only: `none`, `HS256` and friends let the prover choose the key |
-//! | `jwk` | present, public, and matching the key that signed it |
-//! | `htm` | the method, so a proof for `GET` cannot authorise a `POST` |
+//! | `typ` | **host** — this module never parses a JWT header, so it cannot see it |
+//! | `alg` | **host** — same; the host must refuse `none` and any symmetric algorithm |
+//! | `jwk` | **host** — present, public, and matching the key that signed it |
+//! | `htm` | here, so a proof for `GET` cannot authorise a `POST` |
 //! | `htu` | the URL **without** query/fragment, so a proof for one endpoint cannot be replayed at another |
 //! | `iat` | inside a short window, so an old proof cannot be kept and reused |
 //! | `jti` | single-use through the store, so a captured proof dies after one use |
@@ -146,9 +149,12 @@ pub struct SpentProof {
 
 /// Verify a proof against the request it accompanies.
 ///
-/// `verify_signature` is the host's: it parses the compact JWT, refuses a
-/// bad `typ`/`alg`/`jwk`, verifies the signature, and answers the claims plus
-/// the signing key's thumbprint. This module does the POLICY — the parts a
+/// `verify_signature` is the host's, and its obligations are not optional:
+/// it parses the compact JWT, refuses `typ != "dpop+jwt"`, refuses `none` and
+/// any symmetric `alg`, refuses a private or malformed `jwk`, refuses a `jwk`
+/// that is not the key that signed, verifies the signature, and answers the
+/// claims plus the signing key's thumbprint. Answering `Some` for anything
+/// less is a hole this module cannot see. This module does the POLICY — the parts a
 /// caller forgets — and consumes the `jti`.
 ///
 /// `htu` is compared **after** stripping query and fragment (RFC 9449 §4.3:
@@ -206,7 +212,15 @@ where
     // not invalidate each other (K5's client assertion key does the same with
     // the client id). A shared key space here is a cross-client DoS: whichever
     // polls second is told "replayed".
-    let expires_at = now + Duration::seconds(MAX_PROOF_AGE_SECS);
+    // The record must outlive the window in which the proof is still
+    // acceptable — and that window is measured from the proof's OWN `iat`,
+    // not from `now`. With `expires_at = now + MAX_PROOF_AGE_SECS`, a proof
+    // whose `iat` ran up to MAX_PROOF_SKEW_SECS ahead of us stayed fresh for
+    // that much longer than its record lived, so a captured proof could be
+    // replayed once after the record was swept (RFC 9449 §11.1: store the jti
+    // "for the time window in which the proof would be accepted").
+    let expires_at = DateTime::from_timestamp(claims.iat, 0).unwrap_or(now)
+        + Duration::seconds(MAX_PROOF_AGE_SECS + MAX_PROOF_SKEW_SECS);
     let jti_key = format!("{}|{}", verified.jkt, claims.jti);
     match store
         .put(
@@ -459,6 +473,85 @@ mod tests {
                 .unwrap_err(),
             DpopError::MissingJti
         );
+    }
+
+    /// R2 S1: the jti record must outlive the window in which the proof is
+    /// still acceptable — and that window runs from the proof's `iat`, which
+    /// may be up to `MAX_PROOF_SKEW_SECS` ahead of us. With the record
+    /// expiring at `now + MAX_PROOF_AGE_SECS`, a proof whose `iat` ran ahead
+    /// stayed replayable for the difference.
+    #[tokio::test]
+    async fn a_proof_cannot_be_replayed_after_its_record_would_have_expired() {
+        let store = ProofStore::new();
+        let t0 = Utc::now();
+        // A proof whose `iat` is the maximum allowed ahead of our clock.
+        let mut c = claims(t0);
+        c.iat = t0.timestamp() + MAX_PROOF_SKEW_SECS;
+        verify_proof(
+            "p",
+            "POST",
+            "https://auth.example/token",
+            move |_| Some((c.clone(), VerifiedProof { jkt: "k".into() })),
+            &store,
+            t0,
+        )
+        .await
+        .expect("a proof inside the skew window is accepted");
+        // R2's probe point: past `t0 + MAX_PROOF_AGE_SECS` (where the old
+        // record died) but still inside the iat window — the proof is STILL
+        // fresh by the iat check, so the record must still refuse it.
+        let later = t0 + Duration::seconds(MAX_PROOF_AGE_SECS + 1);
+        let ahead = t0.timestamp() + MAX_PROOF_SKEW_SECS;
+        let mut again = claims(t0);
+        again.iat = ahead;
+        let out = verify_proof(
+            "p",
+            "POST",
+            "https://auth.example/token",
+            move |_| Some((again.clone(), VerifiedProof { jkt: "k".into() })),
+            &store,
+            later,
+        )
+        .await;
+        assert_eq!(
+            out.unwrap_err(),
+            DpopError::Replayed,
+            "the record outlives the acceptable window"
+        );
+        // MUT:jti-expiry-from-now — `expires_at = now + 300` makes this Ok.
+    }
+
+    /// R2 D1: `htu` is an exact match, not a prefix match. The existing
+    /// "replay at another endpoint" case passes a prefix comparison too,
+    /// because `/userinfo` is not a prefix of `/token`.
+    #[tokio::test]
+    async fn the_target_is_matched_exactly_not_by_prefix() {
+        let store = ProofStore::new();
+        let now = Utc::now();
+        let mut c = claims(now);
+        c.htu = "https://auth.example/token".into();
+        // The request is a path that STARTS WITH the proof's target.
+        // MUT:htu-prefix — `request.starts_with(proof)` accepts this.
+        assert_eq!(
+            check(c, "POST", "https://auth.example/token/evil", &store, now)
+                .await
+                .unwrap_err(),
+            DpopError::WrongTarget
+        );
+    }
+
+    /// R2 D2: the fragment is stripped along with the query. A proof minted
+    /// for `#frag` must not be distinguishable from the plain target, and —
+    /// more importantly — a strip that only handles `?` would compare the
+    /// fragment as part of the path.
+    #[test]
+    fn stripping_handles_both_separators() {
+        assert_eq!(strip_query_and_fragment("https://a/b?x=1#f"), "https://a/b");
+        assert_eq!(strip_query_and_fragment("https://a/b#f"), "https://a/b");
+        assert_eq!(strip_query_and_fragment("https://a/b#f?x=1"), "https://a/b");
+        assert_eq!(strip_query_and_fragment("?x=1"), "");
+        assert_eq!(strip_query_and_fragment(""), "");
+        // MUT:strip-only-? — the `#f` and `#f?x=1` cases redden.
     }
 
     /// Two clients that pick the same `jti` must not invalidate each other:
