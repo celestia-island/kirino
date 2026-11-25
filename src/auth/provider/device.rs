@@ -99,6 +99,11 @@ pub enum DeviceError {
     /// The `user_code` does not resolve to a pending pairing.
     #[error("the user code is not valid")]
     UnknownUserCode,
+    /// The client asked for `openid` on a grant that carries no `nonce`, so
+    /// an ID token could never be minted. Refused at request time rather
+    /// than after the human approved.
+    #[error("the device grant cannot issue an ID token (no nonce); drop `openid`")]
+    OpenIdWithoutNonce,
     /// The pairing already carries a decision.
     #[error("this pairing has already been decided")]
     AlreadyDecided,
@@ -174,8 +179,28 @@ pub trait DeviceStore: Send + Sync {
         device_code: &str,
         now: DateTime<Utc>,
     ) -> anyhow::Result<Option<PendingDevice>>;
-    /// Remove one pairing (a denial, or a successful token mint).
-    async fn remove(&self, device_code: &str) -> anyhow::Result<()>;
+    /// **Claim** the pairing: remove it and return what was removed, or
+    /// `None` if there was nothing to remove.
+    ///
+    /// This is the single-use edge of the device grant. A bare `remove`
+    /// returning `()` cannot tell two concurrent polls which of them
+    /// actually claimed the pairing — R2 measured both minting a token pair.
+    /// One atomic "give me the record and delete it" is the only shape that
+    /// cannot be raced.
+    async fn take(&self, device_code: &str) -> anyhow::Result<Option<PendingDevice>>;
+    /// Record a decision, but only if the pairing is still undecided.
+    ///
+    /// Returns `false` when it was already decided (or is gone): two
+    /// concurrent decides must not both succeed, and the second must not
+    /// overwrite the first one's subject. A plain `put` here let a denial be
+    /// replaced by an approval (R2 measured it).
+    async fn decide_if_pending(
+        &self,
+        device_code: &str,
+        decision: Decision,
+        sub: &str,
+        now: DateTime<Utc>,
+    ) -> anyhow::Result<bool>;
     /// The `user_code` → `device_code` map, which is also mutable (a
     /// re-typed code must still resolve).
     async fn put_pointer(
@@ -187,6 +212,20 @@ pub trait DeviceStore: Send + Sync {
     ) -> anyhow::Result<()>;
     /// Resolve a typed user code.
     async fn pointer(&self, user_code: &str, now: DateTime<Utc>) -> anyhow::Result<Option<String>>;
+    /// Drop every pairing and pointer past its expiry. Returns how many
+    /// pairings were removed.
+    ///
+    /// Nothing else deletes an abandoned pairing: `poll` answers
+    /// `expired_token` and returns, so a device that gives up leaves its row
+    /// behind forever (R2 measured `len() == 1` after an expiry).
+    ///
+    /// # Errors
+    ///
+    /// Storage failures.
+    async fn sweep(&self, now: DateTime<Utc>) -> anyhow::Result<u64> {
+        let _ = now;
+        Ok(0)
+    }
 }
 
 /// The in-memory reference: right for one replica.
@@ -242,9 +281,31 @@ impl DeviceStore for MemoryDeviceStore {
         let _ = now;
         Ok(m.get(device_code).map(|(p, _)| p.clone()))
     }
-    async fn remove(&self, device_code: &str) -> anyhow::Result<()> {
-        self.pairings.write().await.remove(device_code);
-        Ok(())
+    async fn take(&self, device_code: &str) -> anyhow::Result<Option<PendingDevice>> {
+        let mut m = self.pairings.write().await;
+        // Under ONE write lock: read-then-delete as two steps is exactly the
+        // shape the credential store exists to prevent.
+        Ok(m.remove(device_code).map(|(p, _)| p))
+    }
+    async fn decide_if_pending(
+        &self,
+        device_code: &str,
+        decision: Decision,
+        sub: &str,
+        now: DateTime<Utc>,
+    ) -> anyhow::Result<bool> {
+        let mut m = self.pairings.write().await;
+        let Some((pending, expires_at)) = m.get_mut(device_code) else {
+            return Ok(false);
+        };
+        if pending.decision != Decision::Pending {
+            return Ok(false);
+        }
+        let _ = now;
+        pending.decision = decision;
+        pending.sub = sub.to_owned();
+        let _ = expires_at;
+        Ok(true)
     }
     async fn put_pointer(
         &self,
@@ -260,6 +321,14 @@ impl DeviceStore for MemoryDeviceStore {
             (device_code.to_owned(), expires_at),
         );
         Ok(())
+    }
+    async fn sweep(&self, now: DateTime<Utc>) -> anyhow::Result<u64> {
+        let mut pairings = self.pairings.write().await;
+        let before = pairings.len();
+        pairings.retain(|_, (_, exp)| *exp > now);
+        let removed = (before - pairings.len()) as u64;
+        self.pointers.write().await.retain(|_, (_, exp)| *exp > now);
+        Ok(removed)
     }
     async fn pointer(&self, user_code: &str, now: DateTime<Utc>) -> anyhow::Result<Option<String>> {
         let m = self.pointers.read().await;
@@ -309,6 +378,16 @@ where
         super::validate_scope(scope).map_err(|e| DeviceError::InvalidScope(e.to_string()))?;
     if !client.allows_scope(&scope) {
         return Err(DeviceError::InvalidScope(scope));
+    }
+    // The device grant has no `nonce`: the device is not the browser that
+    // authenticates, so there is nothing to bind an ID token to. RFC 8628
+    // still lets a device ASK for `openid`; a host that wants an ID token
+    // here must carry a nonce through the approval (not modelled yet).
+    // Until then, refuse at REQUEST time: accepting it produced a pairing
+    // whose mint always failed AFTER the human approved and AFTER the pairing
+    // was consumed, so the device could never retry (R2 S1).
+    if super::scope_granted(&scope, "openid") {
+        return Err(DeviceError::OpenIdWithoutNonce);
     }
     let device_code = device_token();
     let user_code = random_user_code();
@@ -396,19 +475,22 @@ where
     if pending.decision != Decision::Pending {
         return Err(DeviceError::AlreadyDecided);
     }
-    // An approved pairing must name who approved: an approval with no
-    // subject would mint a token with an empty `sub`.
+    // An approved pairing must name who approved: an empty `sub` would mint
+    // a token nobody owns.
     if matches!(decision, Decision::Approved { .. }) && sub.trim().is_empty() {
         return Err(DeviceError::UnknownUserCode);
     }
-    let expires_at = pending.expires_at;
-    let mut decided = pending;
-    decided.decision = decision;
-    decided.sub = sub.to_owned();
-    store
-        .put(&device_code, decided, expires_at, now)
+    // Compare-and-set in the store, NOT read-check-write here: two
+    // concurrent decides must not both pass the `Pending` check above. R2
+    // measured a denial being replaced by an approval (with the attacker's
+    // subject) through exactly that window.
+    let wrote = store
+        .decide_if_pending(&device_code, decision, sub, now)
         .await
         .map_err(|e| DeviceError::Store(e.to_string()))?;
+    if !wrote {
+        return Err(DeviceError::AlreadyDecided);
+    }
     Ok(())
 }
 
@@ -439,8 +521,11 @@ where
     if !client.allows_grant(GrantType::DeviceCode) {
         return Err(DeviceError::UnauthorizedClient(client.client_id.clone()));
     }
+    // CLAIM the pairing: one atomic take, so two concurrent polls cannot
+    // both proceed. The loser sees no record and answers `expired_token` —
+    // the same answer a stale code gets.
     let Some(claimed) = pending_store
-        .get(device_code, now)
+        .take(device_code)
         .await
         .map_err(|e| DeviceError::Store(e.to_string()))?
     else {
@@ -449,8 +534,19 @@ where
     if now > claimed.expires_at {
         return Ok(DevicePoll::Expired);
     }
-    // The interval lives here and nowhere else. An early poll is not an
-    // error the device may ignore: it grows the interval and says so.
+    // The pairing belongs to the client that requested it (RFC 8628 §3.4).
+    // Without this, any registered client could redeem another's device
+    // code — and the token would carry the OWNER's `client_id` while the
+    // refresh grant followed the POLLER's allowance (R2 measured it).
+    if claimed.client_id != client.client_id {
+        // Put it back: a mismatch is not the owner's fault, and the owner's
+        // device must still be able to finish.
+        put_pending(pending_store, device_code, &claimed, now).await?;
+        return Err(DeviceError::UnauthorizedClient(client.client_id.clone()));
+    }
+    // The interval, measured against the last on-time poll. A slow_down
+    // rewrites `last_poll` to NOW, so the grown interval starts from the
+    // early poll rather than from the old anchor.
     if let Some(last) = claimed.last_poll {
         if now < last + Duration::seconds(claimed.interval_secs) {
             let mut slowed = claimed;
@@ -464,19 +560,15 @@ where
     }
     match claimed.decision {
         Decision::Pending => {
+            // Still waiting: put the pairing back with the poll recorded.
             let mut touched = claimed;
             touched.last_poll = Some(now);
             put_pending(pending_store, device_code, &touched, now).await?;
             Ok(DevicePoll::Pending)
         }
-        Decision::Denied => {
-            // A denial ends the pairing: nothing may revive it.
-            pending_store
-                .remove(device_code)
-                .await
-                .map_err(|e| DeviceError::Store(e.to_string()))?;
-            Ok(DevicePoll::Denied)
-        }
+        // A denial ends the pairing, and `take` already removed it: nothing
+        // may revive it.
+        Decision::Denied => Ok(DevicePoll::Denied),
         Decision::Approved { auth_time } => {
             let grant = CodeGrant {
                 kind: GrantKind::Code,
@@ -499,13 +591,10 @@ where
             // pairing. A mint failure is reported as a store error, and the
             // device must re-request — the alternative (re-issuing on a 5xx)
             // would hand a fresh token pair to whoever polls next.
-            // Consume the pairing FIRST: a mint failure must not leave an
-            // approved pairing pollable, because the next poll would hand
-            // the token pair to whoever holds the device code.
-            pending_store
-                .remove(device_code)
-                .await
-                .map_err(|e| DeviceError::Store(e.to_string()))?;
+            // The pairing was consumed by `take` before the mint: a mint
+            // failure must not leave an approved pairing pollable, because
+            // the next poll would hand the token pair to whoever holds the
+            // device code.
             match token::mint_tokens(&grant, client, ctx).await {
                 Ok(response) => Ok(DevicePoll::Token(Box::new(response))),
                 Err(e) => Err(DeviceError::Store(e.to_string())),
@@ -571,6 +660,16 @@ mod tests {
         for banned in ['0', 'O', '1', 'I', 'L', 'U'] {
             assert!(!alphabet.contains(banned), "{banned} is confusable");
         }
+        // The SIZE is a security number, not incidental: 19 symbols to the
+        // 8th is ~34 bits, and the module doc says 34. R2 found the doc
+        // claiming 22 symbols when the alphabet had 19.
+        assert_eq!(
+            alphabet.chars().count(),
+            19,
+            "19 symbols: ~34 bits at length 8"
+        );
+        let bits = (USER_CODE_LEN as f64) * 19f64.log2();
+        assert!((33.9..34.0).contains(&bits), "{bits} bits");
         // MUT:lookalike-alphabet — putting 'O' or '1' back reddens this.
     }
 
@@ -622,7 +721,7 @@ MC4CAQAwBQYDK2VwBCIEID3zTmAP9MdPuN/YdS5wbUXgOWWRd4LYu6lNdo/eBgZn
     fn client() -> ClientRecord {
         let mut c = ClientRecord::public("tv-app", vec![]);
         c.allowed_grants = vec![GrantType::DeviceCode, GrantType::RefreshToken];
-        c.allowed_scopes = vec!["openid".into(), "profile".into()];
+        c.allowed_scopes = vec!["profile".into(), "openid".into()];
         c
     }
 
@@ -741,7 +840,7 @@ MC4CAQAwBQYDK2VwBCIEID3zTmAP9MdPuN/YdS5wbUXgOWWRd4LYu6lNdo/eBgZn
         let now = Utc::now();
         let auth = request(
             &client(),
-            "openid",
+            "profile",
             &store,
             "https://auth.example/device",
             now,
@@ -802,7 +901,7 @@ MC4CAQAwBQYDK2VwBCIEID3zTmAP9MdPuN/YdS5wbUXgOWWRd4LYu6lNdo/eBgZn
         let now = Utc::now();
         let auth = request(
             &client(),
-            "openid",
+            "profile",
             &store,
             "https://auth.example/device",
             now,
@@ -830,7 +929,7 @@ MC4CAQAwBQYDK2VwBCIEID3zTmAP9MdPuN/YdS5wbUXgOWWRd4LYu6lNdo/eBgZn
         let now = Utc::now();
         let auth = request(
             &client(),
-            "openid",
+            "profile",
             &store,
             "https://auth.example/device",
             now,
@@ -869,7 +968,7 @@ MC4CAQAwBQYDK2VwBCIEID3zTmAP9MdPuN/YdS5wbUXgOWWRd4LYu6lNdo/eBgZn
         let now = Utc::now();
         let auth = request(
             &client(),
-            "openid",
+            "profile",
             &store,
             "https://auth.example/device",
             now,
@@ -901,7 +1000,7 @@ MC4CAQAwBQYDK2VwBCIEID3zTmAP9MdPuN/YdS5wbUXgOWWRd4LYu6lNdo/eBgZn
         let now = Utc::now();
         let auth = request(
             &client(),
-            "openid",
+            "profile",
             &store,
             "https://auth.example/device",
             now,
@@ -929,7 +1028,7 @@ MC4CAQAwBQYDK2VwBCIEID3zTmAP9MdPuN/YdS5wbUXgOWWRd4LYu6lNdo/eBgZn
         let now = Utc::now();
         let auth = request(
             &client(),
-            "openid",
+            "profile",
             &store,
             "https://auth.example/device",
             now,
@@ -958,6 +1057,225 @@ MC4CAQAwBQYDK2VwBCIEID3zTmAP9MdPuN/YdS5wbUXgOWWRd4LYu6lNdo/eBgZn
         );
     }
 
+    /// R2 S1: two concurrent polls of one approved pairing must mint ONE
+    /// token set. The first version read, then removed, then minted — both
+    /// polls read `Approved` and both minted (measured).
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn two_concurrent_polls_mint_exactly_one_token_set() {
+        let f = fixture();
+        let store = std::sync::Arc::new(MemoryDeviceStore::new());
+        let now = Utc::now();
+        let auth = request(
+            &client(),
+            "profile",
+            store.as_ref(),
+            "https://auth.example/device",
+            now,
+        )
+        .await
+        .unwrap();
+        decide(
+            &auth.user_code,
+            Decision::Approved { auth_time: now },
+            "user-1",
+            store.as_ref(),
+            now,
+        )
+        .await
+        .unwrap();
+        let later = now + Duration::seconds(DEFAULT_INTERVAL_SECS + 1);
+        let barrier = std::sync::Arc::new(tokio::sync::Barrier::new(2));
+        let mut handles = Vec::new();
+        for _ in 0..2 {
+            let store = store.clone();
+            let code = auth.device_code.clone();
+            let barrier = barrier.clone();
+            let c = client();
+            handles.push(tokio::spawn(async move {
+                let f2 = fixture();
+                let ctx = TokenContext {
+                    registry: &f2.registry,
+                    codes: &f2.codes,
+                    refresh: &f2.codes,
+                    id_token_signer: Some(&f2.signer),
+                    issuer: "https://auth.example".into(),
+                    access_signer: &f2.access,
+                    now: later,
+                };
+                barrier.wait().await;
+                matches!(
+                    poll(&code, &c, store.as_ref(), &ctx, later).await,
+                    Ok(DevicePoll::Token(_))
+                )
+            }));
+        }
+        let mut tokens = 0;
+        for h in handles {
+            if h.await.unwrap() {
+                tokens += 1;
+            }
+        }
+        assert_eq!(tokens, 1, "exactly one concurrent poll may mint");
+        let _ = &f;
+    }
+
+    /// R2 S1: two concurrent decides must not both succeed, and a denial
+    /// must not be replaced by an approval carrying the other party's
+    /// subject.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn two_concurrent_decides_cannot_both_win() {
+        let store = std::sync::Arc::new(MemoryDeviceStore::new());
+        let now = Utc::now();
+        let auth = request(
+            &client(),
+            "profile",
+            store.as_ref(),
+            "https://auth.example/device",
+            now,
+        )
+        .await
+        .unwrap();
+        let barrier = std::sync::Arc::new(tokio::sync::Barrier::new(2));
+        let mut handles = Vec::new();
+        for (decision, sub) in [
+            (Decision::Denied, "owner"),
+            (Decision::Approved { auth_time: now }, "attacker"),
+        ] {
+            let store = store.clone();
+            let code = auth.user_code.clone();
+            let barrier = barrier.clone();
+            handles.push(tokio::spawn(async move {
+                barrier.wait().await;
+                decide(&code, decision, sub, store.as_ref(), now)
+                    .await
+                    .is_ok()
+            }));
+        }
+        let mut wins = 0;
+        for h in handles {
+            if h.await.unwrap() {
+                wins += 1;
+            }
+        }
+        assert_eq!(wins, 1, "exactly one decide may win");
+        // And the stored pairing carries exactly the winner's decision.
+        let (device_code, pending) = lookup(&auth.user_code, store.as_ref(), now).await.unwrap();
+        assert_eq!(device_code, auth.device_code);
+        match pending.decision {
+            Decision::Denied => assert!(pending.sub.is_empty() || pending.sub == "owner"),
+            Decision::Approved { .. } => assert_eq!(pending.sub, "attacker"),
+            Decision::Pending => panic!("one of the two decides must have landed"),
+        }
+    }
+
+    /// R2 S1: the pairing belongs to the client that requested it. Without
+    /// the check, another registered client redeems the code and the token
+    /// carries the OWNER's `client_id`.
+    #[tokio::test]
+    async fn another_client_cannot_redeem_the_pairing() {
+        let f = fixture();
+        let store = MemoryDeviceStore::new();
+        let now = Utc::now();
+        let auth = request(
+            &client(),
+            "profile",
+            &store,
+            "https://auth.example/device",
+            now,
+        )
+        .await
+        .unwrap();
+        decide(
+            &auth.user_code,
+            Decision::Approved { auth_time: now },
+            "user-1",
+            &store,
+            now,
+        )
+        .await
+        .unwrap();
+        let mut other = ClientRecord::public("tv-other", vec![]);
+        other.allowed_grants = vec![GrantType::DeviceCode, GrantType::RefreshToken];
+        let later = now + Duration::seconds(DEFAULT_INTERVAL_SECS + 1);
+        assert_eq!(
+            poll(
+                &auth.device_code,
+                &other,
+                &store,
+                &ctx(&f, &store, later),
+                later
+            )
+            .await
+            .unwrap_err(),
+            DeviceError::UnauthorizedClient("tv-other".into())
+        );
+        // And the owner still finishes: the mismatch put the pairing back.
+        let out = poll(
+            &auth.device_code,
+            &client(),
+            &store,
+            &ctx(&f, &store, later),
+            later,
+        )
+        .await
+        .unwrap();
+        assert!(
+            matches!(out, DevicePoll::Token(_)),
+            "the owner can still claim it: {out:?}"
+        );
+    }
+
+    /// R2 S1: `openid` on the device grant has no `nonce`, so no ID token
+    /// can ever be minted. Refused at REQUEST time — accepting it produced a
+    /// pairing whose mint failed only after the human approved and after the
+    /// pairing was consumed, leaving the device unable to retry.
+    #[tokio::test]
+    async fn asking_for_openid_is_refused_up_front() {
+        let store = MemoryDeviceStore::new();
+        let now = Utc::now();
+        assert_eq!(
+            request(
+                &client(),
+                "openid",
+                &store,
+                "https://auth.example/device",
+                now
+            )
+            .await
+            .unwrap_err(),
+            DeviceError::OpenIdWithoutNonce
+        );
+        assert!(store.is_empty().await, "nothing was parked");
+    }
+
+    /// R2 S2: an abandoned pairing is swept. `poll` answers `expired_token`
+    /// and returns, so nothing else would ever delete the row.
+    #[tokio::test]
+    async fn an_abandoned_pairing_is_swept() {
+        let store = MemoryDeviceStore::new();
+        let now = Utc::now();
+        let _ = request(
+            &client(),
+            "profile",
+            &store,
+            "https://auth.example/device",
+            now,
+        )
+        .await
+        .unwrap();
+        assert_eq!(store.len().await, 1);
+        assert_eq!(
+            store.sweep(now).await.unwrap(),
+            0,
+            "before the TTL it stays"
+        );
+        let later = now + Duration::seconds(DEFAULT_DEVICE_TTL_SECS + 1);
+        assert_eq!(store.sweep(later).await.unwrap(), 1);
+        assert_eq!(store.len().await, 0);
+        assert!(store.pointer("BCDFGHJK", later).await.unwrap().is_none());
+        // MUT:no-sweep — a no-op `sweep` leaves the count at 1.
+    }
+
     /// A client without the device grant is refused at both ends.
     #[tokio::test]
     async fn a_client_without_the_device_grant_is_refused() {
@@ -967,7 +1285,7 @@ MC4CAQAwBQYDK2VwBCIEID3zTmAP9MdPuN/YdS5wbUXgOWWRd4LYu6lNdo/eBgZn
         let mut c = ClientRecord::public("no-tv", vec![]);
         c.allowed_grants = vec![GrantType::AuthorizationCode];
         assert_eq!(
-            request(&c, "openid", &store, "https://auth.example/device", now)
+            request(&c, "profile", &store, "https://auth.example/device", now)
                 .await
                 .unwrap_err(),
             DeviceError::UnauthorizedClient("no-tv".into())
@@ -975,7 +1293,7 @@ MC4CAQAwBQYDK2VwBCIEID3zTmAP9MdPuN/YdS5wbUXgOWWRd4LYu6lNdo/eBgZn
         // And the poll end, with a real pairing for the good client.
         let auth = request(
             &client(),
-            "openid",
+            "profile",
             &store,
             "https://auth.example/device",
             now,
@@ -1015,7 +1333,7 @@ MC4CAQAwBQYDK2VwBCIEID3zTmAP9MdPuN/YdS5wbUXgOWWRd4LYu6lNdo/eBgZn
         let now = Utc::now();
         let a = request(
             &client(),
-            "openid",
+            "profile",
             &store,
             "https://auth.example/device",
             now,
@@ -1024,7 +1342,7 @@ MC4CAQAwBQYDK2VwBCIEID3zTmAP9MdPuN/YdS5wbUXgOWWRd4LYu6lNdo/eBgZn
         .unwrap();
         let b = request(
             &client(),
-            "openid",
+            "profile",
             &store,
             "https://auth.example/device",
             now,
