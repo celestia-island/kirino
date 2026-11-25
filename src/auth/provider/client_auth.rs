@@ -199,7 +199,18 @@ where
             // The store refusing a live duplicate IS the replay detection:
             // `ConsumableStore::put` refuses a still-live entry under the
             // same key, which is exactly "this jti was already spent".
-            if e.to_string().contains("already parked") {
+            //
+            // Judged on the ERROR TYPE, not on its message: a message match
+            // is the shape that broke twice before in this family (K2's
+            // device store, K2's attempt store) — it passes while the text
+            // happens to agree and silently reclassifies the day one backend
+            // rewords it. `KirinoError::Validation` is the contract's own
+            // "you violated the store's rules" variant, and both backends
+            // raise exactly that for a live duplicate.
+            let duplicate = e
+                .downcast_ref::<crate::error::KirinoError>()
+                .is_some_and(|k| matches!(k, crate::error::KirinoError::Validation(_)));
+            if duplicate {
                 Err(ClientAuthError::Replayed)
             } else {
                 Err(ClientAuthError::Store(e.to_string()))
@@ -448,6 +459,53 @@ mod tests {
         );
     }
 
+    /// The jti is remembered only as long as the assertion could be
+    /// replayed — to its own `exp`. After that the `exp` check refuses the
+    /// assertion first, so the record is dead weight and the store may drop
+    /// it. This pins the ORDER, which is what makes that safe.
+    #[tokio::test]
+    async fn a_jti_is_remembered_until_its_assertion_expires_no_longer() {
+        let store = JtiStore::new();
+        let now = Utc::now();
+        let mut c = assertion(now, "j-exp");
+        c.exp = now.timestamp() + 60;
+        auth(c.clone(), &store, now).await.unwrap();
+        // Replay inside the lifetime: refused by the jti record.
+        assert_eq!(
+            auth(c.clone(), &store, now).await.unwrap_err(),
+            ClientAuthError::Replayed
+        );
+        // Long after `exp`: the record is gone (the store swept it on
+        // write), and the assertion is refused by EXPIRY, never by a fresh
+        // token. This is why `expires_at = assertion.exp` is safe rather
+        // than a hole: the two checks cover the same interval.
+        let later = now + Duration::seconds(3600);
+        assert_eq!(
+            auth(c, &store, later).await.unwrap_err(),
+            ClientAuthError::Expired
+        );
+    }
+
+    /// A very old `iat` with a near `exp` cannot smuggle a long-lived
+    /// assertion past the ceiling, and cannot lose its jti record early
+    /// either: the ceiling refuses it first.
+    #[tokio::test]
+    async fn an_old_iat_does_not_shorten_the_jti_record() {
+        let store = JtiStore::new();
+        let now = Utc::now();
+        let mut c = assertion(now, "j-old");
+        c.iat = now.timestamp() - 10_000;
+        c.exp = now.timestamp() + 60;
+        assert_eq!(
+            auth(c, &store, now).await.unwrap_err(),
+            ClientAuthError::TooLongLived
+        );
+        // MUT:jti-ttl-decoupled — if `expires_at` were `now + MAX_ASSERTION`
+        // instead of `assertion.exp`, the first case above would still pass
+        // (it never reaches the store twice); this one is the reason the
+        // coupling matters: the ceiling is what stops a long window.
+    }
+
     #[tokio::test]
     async fn a_missing_jti_is_refused() {
         let store = JtiStore::new();
@@ -526,6 +584,39 @@ MCowBQYDK2VwAyEAPH53IpxGc7yhGj/Hb6390oc/ij0hPzepMo9gsUIKRXU=
 
     /// The grant itself must be allowed: a client without
     /// `client_credentials` cannot mint one even with a valid assertion.
+    /// `is_client_token` is exact only if a USER token's `sub` can never
+    /// equal a client id. The provider core keys users and clients
+    /// separately and mints a user's `sub` from the identity store, so a
+    /// collision requires the deployment to have chosen a user id equal to
+    /// one of its own client ids. This pins the assumption where it is made.
+    #[test]
+    fn a_user_token_cannot_claim_to_be_a_client_token() {
+        let user = AccessClaims {
+            iss: "https://auth.example".into(),
+            sub: "user-1".into(),
+            aud: "https://resource.example".into(),
+            client_id: "erp-admin".into(),
+            scope: "profile".into(),
+            token_type: "access".into(),
+            exp: 0,
+            iat: 0,
+        };
+        assert!(
+            !is_client_token(&user),
+            "a user token is not a client token"
+        );
+        let client = AccessClaims {
+            sub: "erp-admin".into(),
+            client_id: "erp-admin".into(),
+            ..user
+        };
+        assert!(is_client_token(&client), "a client token is");
+        // MUT:is-client-token-always — a `true` constant reddens the first
+        // assertion; a comparison on `client_id` alone reddens nothing here
+        // but would pass a user token whose client_id field duplicated
+        // `sub`, which the exact form does not.
+    }
+
     #[tokio::test]
     async fn a_client_without_the_grant_cannot_mint() {
         let signer = AccessTokenSigner::from_ed25519_pem(PEM, "https://resource.example").unwrap();
