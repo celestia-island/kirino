@@ -139,8 +139,22 @@ pub struct RpLogoutVerdict {
 impl RpInitiatedLogout<'_> {
     /// Verify the request and say what to revoke.
     ///
-    /// `verify_hint` is the host's: it verifies the hint's signature against
-    /// this OP's keys and answers its claims. `registered_redirects` is the
+    /// `verify_hint` is the host's, and its obligations are not optional:
+    ///
+    /// - it verifies the hint's signature against this OP's keys, with
+    ///   `alg` pinned to what this OP signs with and `typ` to `JWT`;
+    /// - it does **not** enforce `exp` itself — the grace window here is what
+    ///   lets a user with a tab open for an hour still sign out, and a
+    ///   verifier that rejects on `exp` makes that window unreachable (the
+    ///   crate's own `IdTokenVerifier` sets `validate_exp` by default);
+    /// - it answers `None` for every failure. This method refuses when it
+    ///   does; a verifier that answers claims for an unverifiable token turns
+    ///   any string into a logout request.
+    ///
+    /// The `client_id` is the CALLER's claim about itself. The `aud` check
+    /// proves the hint was minted for that client, which is the spec's
+    /// trust model — an RP that holds a user's ID token is asserting it
+    /// knows that user — not that the caller proved its own identity. `registered_redirects` is the
     /// client's registered post-logout URIs — exact strings, the same way
     /// authorization redirects are registered.
     ///
@@ -636,6 +650,146 @@ mod tests {
             43,
             "256 bits base64url, like every other jti here"
         );
+    }
+
+    /// R2 B1: a verifier that cannot verify answers `None`, and that MUST
+    /// refuse — a fallback that mints claims from the request would turn any
+    /// string into a logout request for any subject.
+    #[test]
+    fn an_unverifiable_hint_is_refused_even_if_it_looks_like_a_jwt() {
+        let now = Utc::now();
+        for junk in ["", "not.a.jwt", "eyJhbGciOiJub25lIn0.."] {
+            assert_eq!(
+                logout(junk, None)
+                    .verify(|_| None, &[], "https://auth.example", now)
+                    .unwrap_err(),
+                LogoutError::InvalidHint,
+                "{junk:?}"
+            );
+        }
+    }
+
+    /// R2 B23: `aud` is an exact match, in BOTH directions. A caller
+    /// claiming to be `erp-admin` with a hint minted for `erp` must be
+    /// refused (a `client_id.starts_with(aud)` check would accept it), and
+    /// the reverse (the original case) is refused by `aud.starts_with`.
+    #[test]
+    fn the_hints_audience_is_matched_exactly_not_by_prefix() {
+        let now = Utc::now();
+        // Caller is the LONGER name; the hint was minted for the shorter.
+        let mut h = hint(now);
+        h.aud = "erp".into();
+        // MUT:aud-prefix-caller — `client_id.starts_with(aud)` accepts this.
+        assert_eq!(
+            RpInitiatedLogout {
+                id_token_hint: "jwt",
+                post_logout_redirect_uri: None,
+                client_id: "erp-admin"
+            }
+            .verify(move |_| Some(h.clone()), &[], "https://auth.example", now)
+            .unwrap_err(),
+            LogoutError::WrongAudience
+        );
+        // And the other direction.
+        let mut h = hint(now);
+        h.aud = "erp-admin".into();
+        // MUT:aud-prefix-claim — `aud.starts_with(client_id)` accepts this.
+        assert_eq!(
+            logout("jwt", None)
+                .verify(move |_| Some(h.clone()), &[], "https://auth.example", now)
+                .unwrap_err(),
+            LogoutError::WrongAudience
+        );
+    }
+
+    /// R2 B17: the post-logout redirect is an exact match too.
+    #[test]
+    fn the_post_logout_redirect_is_matched_exactly_not_by_prefix() {
+        let now = Utc::now();
+        let h = hint(now);
+        // Registered: `https://erp.example/bye`. Requested: a path under it.
+        // MUT:redirect-prefix — a prefix match sends the browser to
+        // `/bye/evil`, an attacker-controlled page on the RP's own origin.
+        assert_eq!(
+            logout("jwt", Some("https://erp.example/bye/evil"))
+                .verify(
+                    move |_| Some(h.clone()),
+                    &["https://erp.example/bye".into()],
+                    "https://auth.example",
+                    now
+                )
+                .unwrap_err(),
+            LogoutError::UnregisteredRedirect
+        );
+    }
+
+    /// R2 B6: the grace window's far edge is inclusive at exactly
+    /// `exp + HINT_GRACE_SECS` and refused one second past it.
+    #[test]
+    fn the_grace_window_ends_exactly_at_its_bound() {
+        let now = Utc::now();
+        let at_edge = {
+            let mut h = hint(now);
+            h.exp = now.timestamp() - HINT_GRACE_SECS;
+            h
+        };
+        logout("jwt", None)
+            .verify(
+                move |_| Some(at_edge.clone()),
+                &[],
+                "https://auth.example",
+                now,
+            )
+            .expect("exactly at the bound is still inside");
+        let past = {
+            let mut h = hint(now);
+            h.exp = now.timestamp() - HINT_GRACE_SECS - 1;
+            h
+        };
+        assert_eq!(
+            logout("jwt", None)
+                .verify(
+                    move |_| Some(past.clone()),
+                    &[],
+                    "https://auth.example",
+                    now
+                )
+                .unwrap_err(),
+            LogoutError::ExpiredHint
+        );
+    }
+
+    /// R2 B5: the back-channel token's `iss` is checked, not only `aud`.
+    #[test]
+    fn a_logout_token_from_another_issuer_is_refused() {
+        let b = BackchannelLogout::new("https://auth.example");
+        let now = Utc::now();
+        let c = b.claims_for("erp", "user-1", "j-1", now);
+        assert_eq!(
+            BackchannelLogout::verify(&c, "https://other.example", "erp", now).unwrap_err(),
+            LogoutError::InvalidLogoutToken
+        );
+    }
+
+    /// R2 B9b: every notified RP is told the RIGHT subject. A cascade that
+    /// copied the audience into the `sub` slot would log the RP's client out
+    /// instead of the user.
+    #[test]
+    fn every_notified_rp_is_told_the_subject_not_the_audience() {
+        let r = Revocation {
+            sub: "user-1".into(),
+            at: Utc::now(),
+            initiated_by: Some("erp".into()),
+            reason: RevocationReason::UserLogout,
+        };
+        let steps = cascade(&r, &["erp".into(), "chest".into()], Utc::now());
+        for step in &steps[2..] {
+            let CascadeStep::NotifyRp { audience, sub, .. } = step else {
+                panic!()
+            };
+            assert_eq!(sub, "user-1", "the token's sub is the user, not {audience}");
+            assert_ne!(audience, sub);
+        }
     }
 
     // ── the cascade ─────────────────────────────────────────────────────

@@ -157,6 +157,29 @@ impl IdTokenSigner {
             .map_err(|e| ProviderError::SigningUnavailable(format!("sign failed: {e}")))
     }
 
+    /// Sign a back-channel **logout token** (OIDC Back-Channel Logout §2.4)
+    /// with the same key and `kid`.
+    ///
+    /// `typ` is `logout+jwt` (the spec RECOMMENDS it; an RP may refuse a
+    /// token without it) — a header this signer would otherwise never set,
+    /// which is why this is a separate method and not `sign` with a flag:
+    /// an ID token and a logout token are different things and must not be
+    /// interchangeable in either direction.
+    ///
+    /// # Errors
+    ///
+    /// [`ProviderError::SigningUnavailable`] when the key cannot sign.
+    pub fn sign_logout_token(
+        &self,
+        claims: &super::logout::LogoutTokenClaims,
+    ) -> Result<String, ProviderError> {
+        let mut header = Header::new(Algorithm::EdDSA);
+        header.kid = Some(self.kid.clone());
+        header.typ = Some("logout+jwt".to_owned());
+        jsonwebtoken::encode(&header, claims, &self.encoding)
+            .map_err(|e| ProviderError::SigningUnavailable(format!("logout sign failed: {e}")))
+    }
+
     /// The `kid` this signer stamps — what the JWKS must advertise.
     #[must_use]
     pub fn kid(&self) -> &str {
