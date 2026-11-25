@@ -6,11 +6,15 @@
 //! contract [`ConsumableStore`] already enforces (K0), so this module is
 //! thin on purpose — issue, hash, consume — and adds only what codes need:
 //!
-//! - codes are stored **hashed through a KDF** (argon2id, then the store's
-//!   fingerprint): a 12-digit code is ~40 bits, and a bare SHA-256 of 40
-//!   bits is inverted offline in hours on one machine (R2 measured ~30 h
-//!   for the whole space, no SHA-NI). With the KDF a leaked table of
-//!   payloads is a table of argon2 outputs, not of codes;
+//! - the STORE KEY under which a code is parked is `argon2id(code, salt)`
+//!   with a salt derived from the issuer's pepper, not a fast hash: a
+//!   12-digit code is ~40 bits, and a bare SHA-256 of 40 bits is inverted
+//!   offline in hours on one machine (R2 measured ~30 h for the whole
+//!   space). With the KDF in the key every guess costs one argon2 (~23 ms
+//!   at the OWASP baseline) — the whole space is hundreds of core-years,
+//!   and a leaked table is a table of KDF outputs. The key is deterministic
+//!   for one issuer (fixed salt) so a claim can look it up; the pepper is
+//!   the host's secret and never enters the store;
 //! - a code is **not** a string comparison against a list: `claim` is the
 //!   check, and losing the claim is "not a valid code";
 //! - `consume_for` is bound to the subject it was issued for: a code
@@ -20,10 +24,9 @@
 //! - the code a user sees is grouped for typing and carries no information
 //!   beyond its entropy.
 
-use argon2::password_hash::{PasswordHash, PasswordHasher, PasswordVerifier, SaltString};
+use argon2::password_hash::{PasswordHasher, SaltString};
 use argon2::Argon2;
 use chrono::{DateTime, Utc};
-use rand::RngExt;
 use thiserror::Error;
 
 use crate::auth::store::{Claim, ConsumableStore};
@@ -58,38 +61,75 @@ pub enum RecoveryError {
     Malformed,
 }
 
-/// Issues and consumes recovery codes for one subject.
+/// Issues and consumes recovery codes, bound to the subject they were
+/// issued for.
 ///
-/// Generic over the payload the host parks; the payload is what lets the
-/// host find the subject a code belongs to — a subject id, or a struct
-/// with the subject and the code's index.
+/// The host picks `P`, the payload parked under a code — a subject id, or
+/// a struct with the subject and the code's index. **`P` must carry the
+/// subject**: `consume_for` compares the claimed payload against the
+/// expected one and refuses a mismatch, so a payload that does not identify
+/// its subject binds the code to nothing.
+///
+/// `pepper` is the host's secret for this issuer. It selects the argon2
+/// salt, which is what makes the stored key slow to enumerate; it is never
+/// stored and never logged. A host that rotates the pepper invalidates
+/// every outstanding code — the right thing for a leaked pepper.
 pub struct RecoveryIssuer<'a, P, S>
 where
     P: Clone + Send + Sync + 'static,
-    S: ConsumableStore<RecoveryParked<P>>,
+    S: ConsumableStore<P>,
 {
     store: &'a S,
     /// How long an unused code stays valid.
     ttl_secs: i64,
-    _subject: std::marker::PhantomData<P>,
+    /// argon2id; the salt is fixed per issuer (see `key_for`).
+    kdf: Argon2<'static>,
+    salt: SaltString,
+    _payload: std::marker::PhantomData<P>,
 }
 
-impl<P, S> RecoveryIssuer<'_, P, S>
+impl<'a, P, S> RecoveryIssuer<'a, P, S>
 where
     P: Clone + Send + Sync + 'static,
-    S: ConsumableStore<RecoveryParked<P>>,
+    S: ConsumableStore<P>,
 {
-    /// A new issuer over `store`, codes valid for `ttl_secs`.
-    #[must_use]
-    pub fn new(store: &S, ttl_secs: i64) -> RecoveryIssuer<'_, P, S> {
-        RecoveryIssuer {
+    /// A new issuer over `store`, codes valid for `ttl_secs`, keys derived
+    /// from `pepper`.
+    ///
+    /// # Errors
+    ///
+    /// [`RecoveryError::Store`] if the pepper is empty or cannot be turned
+    /// into a salt.
+    pub fn new(store: &'a S, ttl_secs: i64, pepper: &[u8]) -> Result<Self, RecoveryError> {
+        if pepper.is_empty() {
+            return Err(RecoveryError::Store("pepper must not be empty".into()));
+        }
+        // The salt is DERIVED, not random: the key must be reproducible at
+        // claim time. SHA-256(pepper) as base64 is a valid salt string and
+        // keeps the pepper itself out of the PHC line.
+        use sha2::Digest;
+        let digest = sha2::Sha256::digest(pepper);
+        let salt = SaltString::encode_b64(&digest)
+            .map_err(|e| RecoveryError::Store(format!("salt encoding failed: {e}")))?;
+        Ok(Self {
             store,
             ttl_secs,
-            _subject: std::marker::PhantomData,
-        }
+            kdf: Argon2::default(),
+            salt,
+            _payload: std::marker::PhantomData,
+        })
     }
 
-    /// Issue one code for `payload` at `now`, parking its hash.
+    /// The deterministic, slow store key for a normalised code. Every call
+    /// runs argon2 once, so a lookup costs what a guess costs.
+    fn key_for(&self, normal: &str) -> Result<String, RecoveryError> {
+        self.kdf
+            .hash_password(normal.as_bytes(), &self.salt)
+            .map(|h| crate::auth::store::fingerprint(&h.to_string()))
+            .map_err(|e| RecoveryError::Store(format!("kdf: {e}")))
+    }
+
+    /// Issue one code for `payload` at `now`, parking it under its key.
     ///
     /// # Errors
     ///
@@ -102,32 +142,16 @@ where
     ) -> Result<RecoveryCode, RecoveryError> {
         let raw = random_code();
         let display = grouped(&raw);
-        let normal = normalise(&display);
-        // Two layers, both needed. The STORE key is a fast hash so a lookup
-        // is O(1) and the store never holds the code; the PAYLOAD is the
-        // same code through argon2id with a fresh salt, so a leaked table
-        // of payloads is a table of KDF outputs, not of codes. (The fast
-        // key alone inverted in hours — R2 S1.)
-        let key = crate::auth::store::fingerprint(&normal);
-        let mut salt_bytes = [0u8; 16];
-        rand::rng().fill(&mut salt_bytes);
-        let salt = SaltString::encode_b64(&salt_bytes)
-            .map_err(|e| RecoveryError::Store(format!("salt encoding failed: {e}")))?;
-        let kdf = Argon2::default()
-            .hash_password(normal.as_bytes(), &salt)
-            .map_err(|e| RecoveryError::Store(format!("kdf: {e}")))?
-            .to_string();
-        let parked = RecoveryParked { kdf, payload };
+        let key = self.key_for(&normalise(&display))?;
         self.store
             .put(
                 &key,
-                parked,
+                payload,
                 now + chrono::Duration::seconds(self.ttl_secs),
                 now,
             )
             .await
             .map_err(|e| RecoveryError::Store(e.to_string()))?;
-
         Ok(RecoveryCode { display })
     }
 
@@ -143,9 +167,10 @@ where
     ///
     /// # Errors
     ///
-    /// - [`RecoveryError::Malformed`] if the shape is wrong (no store call).
-    /// - [`RecoveryError::Invalid`] if the code is unknown, spent, issued
-    ///   for another subject, or does not match the parked KDF output.
+    /// - [`RecoveryError::Malformed`] if the shape is wrong (no store call,
+    ///   no KDF).
+    /// - [`RecoveryError::Invalid`] if the code is unknown, spent, or issued
+    ///   for another subject.
     /// - [`RecoveryError::Store`] if the store failed — see the variant.
     pub async fn consume_for(
         &self,
@@ -156,60 +181,37 @@ where
     where
         P: PartialEq,
     {
-        let parked = self.claim_typed(typed, now).await?;
-        let Ok(parsed) = PasswordHash::new(&parked.kdf) else {
-            return Err(RecoveryError::Invalid);
-        };
-        if Argon2::default()
-            .verify_password(normalise(typed).as_bytes(), &parsed)
-            .is_err()
-        {
-            // The store key matched but the KDF did not: a key collision or
-            // a tampered row. Invalid; the row is already gone.
-            return Err(RecoveryError::Invalid);
-        }
-        if &parked.payload != expected {
+        let payload = self.claim_typed(typed, now).await?;
+        if &payload != expected {
             return Err(RecoveryError::Invalid);
         }
         Ok(())
     }
 
-    /// Consume and return the payload, for hosts whose `P` is the identity
-    /// and that bind by other means. Prefer [`Self::consume_for`].
+    /// Consume and return the payload **without** a subject check.
+    ///
+    /// This returns whatever the code carries. A caller that does not
+    /// compare the result against the subject it is recovering leaks a
+    /// takeover: Alice's live code typed under Bob's recovery prompt returns
+    /// `Ok("alice")` here (R2 S1; R3 measured it). Use [`Self::consume_for`]
+    /// unless the caller binds by other means, and say so where it does.
     pub async fn consume(&self, typed: &str, now: DateTime<Utc>) -> Result<P, RecoveryError> {
-        let parked = self.claim_typed(typed, now).await?;
-        let Ok(parsed) = PasswordHash::new(&parked.kdf) else {
-            return Err(RecoveryError::Invalid);
-        };
-        if Argon2::default()
-            .verify_password(normalise(typed).as_bytes(), &parsed)
-            .is_err()
-        {
-            return Err(RecoveryError::Invalid);
-        }
-        Ok(parked.payload)
+        self.claim_typed(typed, now).await
     }
 
-    async fn claim_typed(
-        &self,
-        typed: &str,
-        now: DateTime<Utc>,
-    ) -> Result<RecoveryParked<P>, RecoveryError> {
+    async fn claim_typed(&self, typed: &str, now: DateTime<Utc>) -> Result<P, RecoveryError> {
         let normal = normalise(typed);
         if normal.len() != CODE_CHARS || !normal.chars().all(|c| c.is_ascii_digit()) {
             return Err(RecoveryError::Malformed);
         }
-        let key = crate::auth::store::fingerprint(&normal);
+        let key = self.key_for(&normal)?;
         match self.store.claim(&key, now).await {
-            Ok(Claim::Won(parked)) => Ok(parked),
+            Ok(Claim::Won(payload)) => Ok(payload),
             Ok(Claim::Lost) => Err(RecoveryError::Invalid),
             Err(e) => Err(RecoveryError::Store(e.to_string())),
         }
     }
 }
-
-/// 12 decimal digits: ~40 bits, enough for a typed code that is single-use
-/// and rate-limited, and far easier to type than a base64url string.
 const CODE_DIGITS: usize = 12;
 const CODE_CHARS: usize = CODE_DIGITS;
 
@@ -236,16 +238,11 @@ mod tests {
     use super::*;
     use crate::auth::store::MemoryConsumableStore;
 
-    type Store = MemoryConsumableStore<RecoveryParked<String>>;
+    type Store = MemoryConsumableStore<String>;
+    const PEPPER: &[u8] = b"test-only pepper, never a real secret";
 
-    fn issuer<'a, S: ConsumableStore<RecoveryParked<String>>>(
-        store: &'a S,
-    ) -> RecoveryIssuer<'a, String, S> {
-        RecoveryIssuer::new(store, 3600)
-    }
-
-    fn key_of(plain: &str) -> String {
-        crate::auth::store::fingerprint(plain)
+    fn issuer<'a, S: ConsumableStore<String>>(store: &'a S) -> RecoveryIssuer<'a, String, S> {
+        RecoveryIssuer::new(store, 3600, PEPPER).unwrap()
     }
 
     #[test]
@@ -314,10 +311,12 @@ mod tests {
         );
     }
 
-    /// R2 S2: what the store holds is a KDF output, not a fast hash of the
-    /// code. The first version asserted `fingerprint(x) == fingerprint(x)`.
+    /// R2/R3 S1: the STORE KEY is a KDF output, not a fast hash of the
+    /// code. R2 inverted a real code from its key in minutes; R3 showed the
+    /// first fix had only moved the KDF into the payload while the key
+    /// stayed fast. Now the key itself is argon2(code, issuer salt).
     #[tokio::test]
-    async fn the_store_holds_a_kdf_output_not_a_hash_of_the_code() {
+    async fn the_store_key_is_a_kdf_output_not_a_fast_hash_of_the_code() {
         let store = Store::new();
         let now = Utc::now();
         let code = issuer(&store)
@@ -329,35 +328,79 @@ mod tests {
             .chars()
             .filter(|c| c.is_ascii_digit())
             .collect();
-        let parked = store.claim(&key_of(&plain), now).await.unwrap();
-        let Claim::Won(parked) = parked else {
-            panic!("parked under its key")
-        };
-        // The parked KDF line is an argon2 PHC string carrying a salt…
-        assert!(parked.kdf.starts_with("$argon2"), "{}", parked.kdf);
-        // …and is NOT derivable from the code without the KDF: it is not the
-        // fast fingerprint, and it is not the code.
-        assert_ne!(parked.kdf, key_of(&plain));
-        assert!(!parked.kdf.contains(&plain));
-        // MUT:no-kdf — parking `key_of(&plain)` (or the code) as the kdf
-        // fails the `$argon2` prefix and the `!= fingerprint` checks.
+        let fast = crate::auth::store::fingerprint(&plain);
+        // The fast hash is NOT a key in the store: a claim under it loses.
+        assert_eq!(store.claim(&fast, now).await.unwrap(), Claim::Lost);
+        // The real key is what the issuer derives — one argon2 away.
+        let i = issuer(&store);
+        let key = i.key_for(&plain).unwrap();
+        assert_ne!(key, fast);
+        assert!(!key.contains(&plain));
+        assert!(matches!(
+            store.claim(&key, now).await.unwrap(),
+            Claim::Won(_)
+        ));
+        // MUT:fast-key — making `key_for` return `fingerprint(code)` turns
+        // the `Claim::Lost` above into `Won` and the `!=` red.
+    }
+
+    /// The key is bound to the issuer's pepper: the same code under another
+    /// pepper is a different key, so a leaked table from one deployment
+    /// does not transfer, and a pepper rotation invalidates outstanding codes.
+    #[tokio::test]
+    async fn the_key_is_bound_to_the_pepper() {
+        let store = Store::new();
+        let now = Utc::now();
+        let code = issuer(&store)
+            .issue("subject-1".to_owned(), now)
+            .await
+            .unwrap();
+        let other = RecoveryIssuer::<String, Store>::new(&store, 3600, b"another pepper").unwrap();
+        // MUT:no-pepper — a pepper-independent key lets this succeed.
+        assert_eq!(
+            other.consume(&code.display, now).await.unwrap_err(),
+            RecoveryError::Invalid
+        );
+        // The right pepper still works.
+        issuer(&store).consume(&code.display, now).await.unwrap();
     }
 
     #[tokio::test]
-    async fn two_codes_for_the_same_subject_get_different_salts() {
+    async fn an_empty_pepper_is_refused() {
+        assert!(matches!(
+            RecoveryIssuer::<String, Store>::new(&Store::new(), 3600, b""),
+            Err(RecoveryError::Store(_))
+        ));
+    }
+
+    /// R3 S2: a code whose key matches but which was parked by a different
+    /// code path (a collision, a tampered row) still has to carry the
+    /// right payload — `consume_for` is the binding.
+    #[tokio::test]
+    async fn a_tampered_row_does_not_satisfy_consume_for() {
         let store = Store::new();
         let now = Utc::now();
-        let a = issuer(&store).issue("s".to_owned(), now).await.unwrap();
-        let b = issuer(&store).issue("s".to_owned(), now).await.unwrap();
-        let pa: String = a.display.chars().filter(|c| c.is_ascii_digit()).collect();
-        let pb: String = b.display.chars().filter(|c| c.is_ascii_digit()).collect();
-        let (Claim::Won(x), Claim::Won(y)) = (
-            store.claim(&key_of(&pa), now).await.unwrap(),
-            store.claim(&key_of(&pb), now).await.unwrap(),
-        ) else {
-            panic!("both parked")
-        };
-        assert_ne!(x.kdf, y.kdf, "a fresh salt per code");
+        // Park Alice's payload under the key of a code the attacker types.
+        let attacker = "1111-2222-3333";
+        let i = issuer(&store);
+        let key = i.key_for(&normalise(attacker)).unwrap();
+        store
+            .put(
+                &key,
+                "alice".to_owned(),
+                now + chrono::Duration::seconds(60),
+                now,
+            )
+            .await
+            .unwrap();
+        // Attacker claims it for themselves: the payload is Alice's, not
+        // the attacker's subject, so `consume_for` refuses.
+        assert_eq!(
+            i.consume_for(attacker, &"mallory".to_owned(), now)
+                .await
+                .unwrap_err(),
+            RecoveryError::Invalid
+        );
     }
 
     #[tokio::test]
@@ -439,11 +482,11 @@ mod tests {
         }
     }
     #[async_trait::async_trait]
-    impl ConsumableStore<RecoveryParked<String>> for Flaky {
+    impl ConsumableStore<String> for Flaky {
         async fn put(
             &self,
             token: &str,
-            payload: RecoveryParked<String>,
+            payload: String,
             expires_at: DateTime<Utc>,
             now: DateTime<Utc>,
         ) -> anyhow::Result<()> {
@@ -452,11 +495,7 @@ mod tests {
             }
             self.inner.put(token, payload, expires_at, now).await
         }
-        async fn claim(
-            &self,
-            token: &str,
-            now: DateTime<Utc>,
-        ) -> anyhow::Result<Claim<RecoveryParked<String>>> {
+        async fn claim(&self, token: &str, now: DateTime<Utc>) -> anyhow::Result<Claim<String>> {
             if self.fail_claim.load(std::sync::atomic::Ordering::SeqCst) {
                 return Err(anyhow::anyhow!("connection reset"));
             }
@@ -529,12 +568,4 @@ mod tests {
         }
         assert_eq!(wins, 1, "exactly one consumer may win a recovery code");
     }
-}
-
-/// What is parked under a code: the KDF output (with its salt) and the
-/// host's payload. Serialisable so the DB store can persist it.
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-pub struct RecoveryParked<P> {
-    kdf: String,
-    payload: P,
 }

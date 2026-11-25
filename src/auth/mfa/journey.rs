@@ -120,6 +120,16 @@ impl Journey {
     }
 
     /// What is still needed, with the recovery credit applied.
+    ///
+    /// Under an ANY policy an accepted recovery code IS the one factor the
+    /// policy asked for — nothing is outstanding. Under an ALL policy it
+    /// covers exactly one outstanding non-password factor. The credit is
+    /// applied HERE, in `outstanding`, and never by inserting a factor into
+    /// `presented`: `presented` is what the subject proved, and `acr` is
+    /// computed from it. (R3: the first fix inserted `Otp` into
+    /// `presented` under ANY policies, which both completed policies that
+    /// did not list Otp — burning the code — and awarded a recovery session
+    /// an otp-class `acr`.)
     fn outstanding(&self) -> Vec<Factor> {
         let mut out: Vec<Factor> = self
             .policy
@@ -128,7 +138,9 @@ impl Journey {
             .cloned()
             .collect();
         if self.recovery_used {
-            if let Some(i) = out.iter().position(|f| *f != Factor::Password) {
+            if self.policy.is_any() {
+                out.clear();
+            } else if let Some(i) = out.iter().position(|f| *f != Factor::Password) {
                 out.remove(i);
             }
         }
@@ -426,6 +438,57 @@ mod tests {
             "accepted recovery satisfies an any-of policy"
         );
         assert!(j.is_complete());
+    }
+
+    /// R3 S1: ANY policy that does NOT list Otp — recovery still completes
+    /// it. The first fix only worked when `Otp` happened to be in the set.
+    #[test]
+    fn a_recovery_code_completes_an_any_policy_without_otp() {
+        for policy in [
+            Policy::any([Factor::Fido]).unwrap(),
+            Policy::any([Factor::Fido, Factor::Other("hwk".into())]).unwrap(),
+            Policy::any([Factor::Other("sms".into()), Factor::Other("email".into())]).unwrap(),
+        ] {
+            let mut j = Journey::start(policy.with_recovery(), at());
+            let out = j.verify(Presented::Recovery, &scale()).unwrap();
+            assert!(
+                matches!(out, FactorOutcome::Done { .. }),
+                "recovery satisfies any-of"
+            );
+            assert!(j.is_complete());
+        }
+    }
+
+    /// R3 S1 (regression): a recovery session is NOT an otp session. Its
+    /// `acr` is computed from what the subject proved, and `recovery` is not
+    /// in any class's method set — so it reaches `1fa`, never `2fa`.
+    #[test]
+    fn a_recovery_session_never_earns_an_otp_class_acr() {
+        // MUT:recovery-as-otp — inserting Otp into `presented` on recovery
+        // makes this `Some("urn:celestia:2fa")`.
+        for policy in [
+            Policy::any([Factor::Otp, Factor::Fido]).unwrap(),
+            Policy::all([Factor::Password, Factor::Otp]).unwrap(),
+        ] {
+            let mut j = Journey::start(policy.with_recovery(), at());
+            if j.verify(Presented::Recovery, &scale()).is_err() {
+                // password-first policies need the password
+                j.verify(Presented::Password, &scale()).unwrap();
+                j.verify(Presented::Recovery, &scale()).unwrap();
+            }
+            let FactorOutcome::Done { acr, amr } = j.outcome(&scale()) else {
+                panic!("done")
+            };
+            assert!(
+                !amr.iter().any(|a| a == "otp"),
+                "recovery is not recorded as otp"
+            );
+            assert_ne!(
+                acr.as_deref(),
+                Some("urn:celestia:2fa"),
+                "a recovery session is not 2fa: {acr:?}"
+            );
+        }
     }
 
     /// And an ANY policy that lists the password still needs it first.
