@@ -208,7 +208,10 @@ pub struct LogoutTokenClaims {
     /// The subject whose sessions the RP must drop. The OP's stable id.
     pub sub: String,
     /// **Never set.** An ID token must not be usable as a logout token, and
-    /// a `nonce` is what would let one be.
+    /// a `nonce` is what would let one be. Absent from the serialized form,
+    /// not `null`: the spec says the member MUST NOT be present, and an RP
+    /// that reads `"nonce": null` as "a nonce" would refuse every token.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub nonce: Option<String>,
 }
 
@@ -371,11 +374,16 @@ pub fn cascade(
         steps.push(CascadeStep::NotifyRp {
             audience: audience.clone(),
             sub: revocation.sub.clone(),
-            jti: crate::utils::base64url::encode(&{
+            // 256 bits, the same as every other jti this crate mints (K5's
+            // client assertions, K6's DPoP proofs). A logout token is
+            // single-use at the RP, and the jti is what makes a replay
+            // detectable; 128 would be enough today and is not the family's
+            // number.
+            jti: {
                 use rand::RngExt;
-                let raw: [u8; 16] = rand::rng().random();
-                raw
-            }),
+                let raw: [u8; 32] = rand::rng().random();
+                crate::utils::base64url::encode(&raw)
+            },
         });
     }
     steps
@@ -544,6 +552,32 @@ mod tests {
         let c = b.claims_for("erp", "user-1", "j-1", Utc::now());
         assert!(c.nonce.is_none());
         assert_eq!(c.events, vec![BACKCHANNEL_LOGOUT_EVENT]);
+        // And the WIRE form has no nonce member at all — not `null`. R2's
+        // question: `"nonce": null` is what serde would emit by default, and
+        // an RP reading it as "a nonce is present" would refuse the token.
+        let json = serde_json::to_string(&c).unwrap();
+        assert!(!json.contains("nonce"), "{json}");
+        // MUT:nonce-serialized — removing `skip_serializing_if` puts
+        // `"nonce":null` on the wire and reddens this.
+        // And the jti is 43 characters: 256 bits.
+        let steps = cascade(
+            &Revocation {
+                sub: "u".into(),
+                at: Utc::now(),
+                initiated_by: None,
+                reason: RevocationReason::UserLogout,
+            },
+            &["erp".into()],
+            Utc::now(),
+        );
+        let CascadeStep::NotifyRp { jti, .. } = &steps[2] else {
+            panic!()
+        };
+        assert_eq!(
+            jti.len(),
+            43,
+            "256 bits base64url, like every other jti here"
+        );
     }
 
     // ── the cascade ─────────────────────────────────────────────────────
