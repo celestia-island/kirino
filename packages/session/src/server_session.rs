@@ -187,9 +187,12 @@ pub trait ServerSessionStore: Send + Sync {
     /// many were removed.
     ///
     /// The default does nothing: a store with its own expiry (TTL rows, a
-    /// cache) needs no sweep. The in-memory reference implements it, because
-    /// without it an abandoned session stays in the map forever (R5: 1000
-    /// expired sessions, `len()` still 1000, and no API to shrink it).
+    /// cache) needs no sweep. The in-memory reference implements it,
+    /// because without it an abandoned session stays in the map forever
+    /// (R5: 1000 expired sessions, `len()` still 1000, and no API to shrink
+    /// it). **Eviction is the host's call**: the store never drops a row on
+    /// its own, so a host with TTLs different from the defaults is the only
+    /// thing that decides what "expired" means.
     ///
     /// # Errors
     ///
@@ -228,7 +231,7 @@ pub trait ServerSessionStore: Send + Sync {
 }
 
 /// In-memory [`ServerSessionStore`]: the reference implementation, right for
-/// a single replica. The map key is the SHA-256 of the id so the key set
+/// a single replica; the host sweeps it. The map key is the SHA-256 of the id so the key set
 /// alone reveals nothing — but the **record still holds the id in the
 /// clear** (the host needs it back to build the cookie), so this is not a
 /// protection against a heap dump of the values, only of the keys.
@@ -264,19 +267,18 @@ fn key(id: &str) -> String {
 #[async_trait::async_trait]
 impl ServerSessionStore for InMemoryServerSessionStore {
     async fn put(&self, session: &ServerSession) -> Result<(), SessionError> {
-        let mut sessions = self.sessions.write().await;
-        // Lazy hygiene on the wall clock: a dead row never displaces a live
-        // one, and a record already past both TTLs is not stored. This is
-        // the STORE's bookkeeping, not the host's verdict — the verdict is
-        // `check` with the host's own clock.
-        let now = Utc::now();
-        sessions.retain(|_, s| !s.is_dead(now, DEFAULT_IDLE_SECS, DEFAULT_ABSOLUTE_SECS));
-        if !session.is_dead(now, DEFAULT_IDLE_SECS, DEFAULT_ABSOLUTE_SECS) {
-            sessions.insert(key(&session.id), session.clone());
-        }
+        // Insert or replace, unconditionally — that is the trait's contract.
+        // R6 caught the first version evicting on the wall clock with the
+        // DEFAULT TTLs: a host with a longer policy had live sessions
+        // dropped, and `ctx.now` more than 30 min behind the wall made
+        // `complete` hand out a cookie for a session that was never stored.
+        // Eviction is the host's call, through `sweep` with its own TTLs.
+        self.sessions
+            .write()
+            .await
+            .insert(key(&session.id), session.clone());
         Ok(())
     }
-
     async fn sweep(
         &self,
         now: DateTime<Utc>,
@@ -343,7 +345,10 @@ pub struct SessionCookie {
 }
 
 /// The session-cookie policy. Construct with [`CookiePolicy::strict`] for
-/// the migration's shape; the builder methods only tighten.
+/// the migration's shape. The fields are public — a host may narrow them,
+/// and `set_cookie_value` emits a value its own `check` accepts for every
+/// narrowing — but nothing stops a host from loosening them, so treat a
+/// hand-built policy as the host's own decision.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CookiePolicy {
     /// Require the `__Host-` prefix (which implies Secure, no Domain, Path=/).
@@ -727,25 +732,31 @@ mod tests {
             100
         );
         assert_eq!(store.len().await, 0);
-        // And a put after the window lazily drops the dead and refuses the
-        // already-expired arrival.
-        // A record whose creation is already past the absolute TTL (a
-        // replayed restore, a clock that went backwards) is not stored.
-        let long_ago = Utc::now() - chrono::Duration::seconds(DEFAULT_ABSOLUTE_SECS + 60);
-        for i in 0..5 {
-            let dead = ServerSession {
-                id: format!("d-{i}"),
-                subject: "sub".into(),
-                created_at: long_ago,
-                last_seen: long_ago,
-                generation: 0,
-                tokens: None,
-            };
-            store.put(&dead).await.unwrap();
-        }
-        assert_eq!(store.len().await, 0, "an expired session is not stored");
-        // MUT:no-evict — making `sweep` a no-op and `put` skip the retain
-        // leaves the counts above at 100 / 5.
+        // The Idle arm on its own: a session seen recently enough on the
+        // absolute clock but past the idle window is dead. (R6: every
+        // eviction case so far hit Absolute first, so an `is_dead` that only
+        // kept the Absolute arm survived.)
+        let store = InMemoryServerSessionStore::new();
+        let t = Utc::now();
+        let idle_dead = ServerSession {
+            id: "idle".into(),
+            subject: "sub".into(),
+            created_at: t,
+            last_seen: t - chrono::Duration::seconds(DEFAULT_IDLE_SECS + 10),
+            generation: 0,
+            tokens: None,
+        };
+        store.put(&idle_dead).await.unwrap();
+        assert_eq!(
+            store
+                .sweep(t, DEFAULT_IDLE_SECS, DEFAULT_ABSOLUTE_SECS)
+                .await
+                .unwrap(),
+            1
+        );
+        assert_eq!(store.len().await, 0);
+        // MUT:idle-arm-dropped — an `is_dead` that only tests Absolute
+        // leaves this row in and the count at 0.
     }
 
     #[test]
