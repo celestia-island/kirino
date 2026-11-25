@@ -1,3 +1,4 @@
+pub mod capability;
 pub mod credential;
 pub mod identity;
 #[cfg(feature = "auth-mfa")]
