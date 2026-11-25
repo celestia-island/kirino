@@ -35,7 +35,34 @@
 
 use serde::{Deserialize, Serialize};
 
-/// One capability and the fact that makes it true.
+/// What a capability's truth rests on.
+///
+/// This exists because the first version conflated two very different
+/// statements. `declared: cfg!(feature = X)` with `probe: cfg!(feature = X)`
+/// is a **circular proof**: the audit compares the claim against itself and
+/// stays green after the implementation is deleted. Naming the evidence makes
+/// the difference visible to the reader and to [`IdpCapabilities::audit`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum Evidence {
+    /// A behaviour test in this crate drives the invariant and would fail if
+    /// it regressed. The strongest grade; `test` names it so a reader can go
+    /// look.
+    BehaviourTest {
+        /// The case that would fail.
+        test: &'static str,
+    },
+    /// The code that implements it is compiled into this build, and that is
+    /// all this document can prove. **The implementation is verified by the
+    /// slice's own review and test suite, not by `audit`** — the distinction
+    /// matters, and pretending otherwise is what the circular version did.
+    CompiledIn,
+    /// A host fact. This crate cannot answer it, so it must never be
+    /// declared here.
+    HostFact,
+}
+
+/// One capability, what it claims, and what its claim rests on.
 ///
 /// The `probe` is a `fn() -> bool` rather than a bool so the document cannot
 /// drift: [`IdpCapabilities::audit`] calls every probe, and a capability
@@ -46,8 +73,12 @@ pub struct Capability {
     pub name: &'static str,
     /// Whether this build declares it.
     pub declared: bool,
-    /// The fact that makes the declaration true. `None` means undeclarable
-    /// (a host fact), and such a capability must be declared `false`.
+    /// What the declaration rests on.
+    pub evidence: Evidence,
+    /// The fact `audit` can check. For [`Evidence::CompiledIn`] this is the
+    /// feature gate; for [`Evidence::BehaviourTest`] it is still only the
+    /// gate — the test is what proves the behaviour, and it runs in the test
+    /// suite, not here.
     pub probe: Option<fn() -> bool>,
 }
 
@@ -56,6 +87,7 @@ impl std::fmt::Debug for Capability {
         f.debug_struct("Capability")
             .field("name", &self.name)
             .field("declared", &self.declared)
+            .field("evidence", &self.evidence)
             .field("has_probe", &self.probe.is_some())
             .finish()
     }
@@ -167,86 +199,123 @@ impl IdpCapabilities {
             Capability {
                 name: "authorization_code_pkce",
                 declared: self.authorization_code_pkce,
+                evidence: Evidence::BehaviourTest {
+                    test: "a_public_client_cannot_redeem_without_pkce_whatever_the_record_says",
+                },
                 probe: Some(probe_authorization_code_pkce),
             },
             Capability {
                 name: "refresh_rotation",
                 declared: self.refresh_rotation,
+                evidence: Evidence::BehaviourTest {
+                    test: "a_code_cannot_be_redeemed_through_the_refresh_grant",
+                },
                 probe: Some(probe_refresh_rotation),
             },
             Capability {
                 name: "atomic_code_redemption",
                 declared: self.atomic_code_redemption,
+                evidence: Evidence::BehaviourTest {
+                    test: "concurrent_exchanges_of_one_code_mint_exactly_one_token_set",
+                },
                 probe: Some(probe_atomic_code_redemption),
             },
             Capability {
                 name: "id_token_eddsa_with_jwks",
                 declared: self.id_token_eddsa_with_jwks,
+                evidence: Evidence::BehaviourTest {
+                    test: "the_access_token_iss_is_the_configured_issuer",
+                },
                 probe: Some(probe_id_token_eddsa_with_jwks),
             },
             Capability {
                 name: "access_token_separate_from_id_token",
                 declared: self.access_token_separate_from_id_token,
+                evidence: Evidence::BehaviourTest {
+                    test: "the_access_token_iss_is_the_configured_issuer",
+                },
                 probe: Some(probe_access_token_separate),
             },
             Capability {
                 name: "redirect_verified_before_refusal",
                 declared: self.redirect_verified_before_refusal,
+                evidence: Evidence::BehaviourTest {
+                    test: "an_unverified_redirect_wins_over_every_other_refusal",
+                },
                 probe: Some(probe_redirect_first),
             },
             Capability {
                 name: "code_and_refresh_lanes_separate",
                 declared: self.code_and_refresh_lanes_separate,
+                evidence: Evidence::BehaviourTest {
+                    test: "a_code_cannot_be_redeemed_through_the_refresh_grant",
+                },
                 probe: Some(probe_lanes_separate),
             },
             Capability {
                 name: "credential_survives_our_failure",
                 declared: self.credential_survives_our_failure,
+                evidence: Evidence::BehaviourTest {
+                    test: "a_mint_failure_after_the_refresh_claim_restores_the_token",
+                },
                 probe: Some(probe_credential_survives),
             },
             Capability {
                 name: "device_authorization",
                 declared: self.device_authorization,
+                evidence: Evidence::CompiledIn,
                 probe: cfg_probe(cfg!(feature = "auth-oidc-provider")),
             },
             Capability {
                 name: "private_key_jwt",
                 declared: self.private_key_jwt,
+                evidence: Evidence::CompiledIn,
                 probe: cfg_probe(cfg!(feature = "auth-oidc-provider")),
             },
             Capability {
                 name: "client_credentials",
                 declared: self.client_credentials,
+                evidence: Evidence::CompiledIn,
                 probe: cfg_probe(cfg!(feature = "auth-oidc-provider")),
             },
             Capability {
                 name: "dpop",
                 declared: self.dpop,
+                evidence: Evidence::CompiledIn,
                 probe: cfg_probe(cfg!(feature = "auth-dpop")),
             },
             Capability {
                 name: "mtls",
                 declared: self.mtls,
+                evidence: Evidence::CompiledIn,
                 probe: cfg_probe(cfg!(feature = "auth-mtls")),
             },
             Capability {
                 name: "mfa",
                 declared: self.mfa,
+                evidence: Evidence::CompiledIn,
                 probe: cfg_probe(cfg!(feature = "auth-mfa")),
             },
             Capability {
                 name: "logout",
                 declared: self.logout,
+                evidence: Evidence::CompiledIn,
                 probe: cfg_probe(cfg!(feature = "auth-oidc-provider")),
             },
             Capability {
                 name: "server_side_sessions",
                 declared: self.server_side_sessions,
+                evidence: Evidence::BehaviourTest {
+                    test: "the_memory_store_evicts_expired_sessions",
+                },
                 probe: Some(probe_server_side_sessions),
             },
             Capability {
                 name: "host_only_cookies",
                 declared: self.host_only_cookies,
+                evidence: Evidence::BehaviourTest {
+                    test: "every_relaxation_is_refused",
+                },
                 probe: Some(probe_host_only_cookies),
             },
             // A host fact: it must never be declared here, and it has no
@@ -254,13 +323,26 @@ impl IdpCapabilities {
             Capability {
                 name: "host_can_deliver_messages",
                 declared: self.host_can_deliver_messages,
+                evidence: Evidence::HostFact,
                 probe: None,
             },
         ]
     }
 
-    /// The consistency gate: every declared capability must have a probe
-    /// that answers `true`, and every undeclarable one must be `false`.
+    /// The consistency gate. It checks three things and **only** three:
+    ///
+    /// 1. a capability declared `true` whose `probe` answers `false` (or has
+    ///    no probe) fails;
+    /// 2. a capability marked [`Evidence::HostFact`] must be declared
+    ///    `false` — declaring it claims someone else's fact;
+    /// 3. nothing else.
+    ///
+    /// **What it does not prove.** For [`Evidence::CompiledIn`] the probe is
+    /// the feature gate, so deleting the implementation while the feature
+    /// stays on leaves `audit` green. Those capabilities rest on their
+    /// slice's tests and review, and [`Self::proven_by_behaviour`] returns
+    /// only the ones a named test drives — a consumer that needs the strong
+    /// statement asks there, not here.
     ///
     /// Returns the names that fail, sorted. An empty result is the only
     /// passing answer.
@@ -268,17 +350,22 @@ impl IdpCapabilities {
     pub fn audit(&self) -> Vec<&'static str> {
         let mut failing = Vec::new();
         for cap in self.entries() {
+            // A host fact is never ours to declare.
+            if cap.evidence == Evidence::HostFact {
+                if cap.declared {
+                    failing.push(cap.name);
+                }
+                continue;
+            }
             match cap.probe {
                 Some(probe) => {
                     if cap.declared && !probe() {
-                        // Declared, but the code says otherwise.
                         failing.push(cap.name);
                     }
                 }
+                // No probe and not a host fact: the claim has nothing
+                // behind it at all.
                 None => {
-                    // No probe: this is a host fact and must not be
-                    // declared here. Declaring it is a lie about whose fact
-                    // it is.
                     if cap.declared {
                         failing.push(cap.name);
                     }
@@ -287,6 +374,22 @@ impl IdpCapabilities {
         }
         failing.sort_unstable();
         failing
+    }
+
+    /// The capabilities a NAMED BEHAVIOUR TEST drives — the strong grade.
+    ///
+    /// A consumer that must distinguish "this crate says it does X" from
+    /// "this crate has a test that fails if X regresses" asks here.
+    #[must_use]
+    pub fn proven_by_behaviour(&self) -> Vec<(&'static str, &'static str)> {
+        self.entries()
+            .into_iter()
+            .filter(|c| c.declared)
+            .filter_map(|c| match c.evidence {
+                Evidence::BehaviourTest { test } => Some((c.name, test)),
+                _ => None,
+            })
+            .collect()
     }
 }
 
@@ -463,6 +566,70 @@ mod tests {
             assert!(names.contains(expected), "{expected} has no entry");
         }
         assert_eq!(names.len(), 18, "a field was added without an entry");
+    }
+
+    /// R2's question, answered in the type: `audit()` must not be mistaken
+    /// for "the implementation is proved". The grade says which it is, and a
+    /// `CompiledIn` capability keeps its claim even if the implementation is
+    /// deleted — which is exactly why the two grades are separated and why
+    /// `proven_by_behaviour` exists.
+    #[test]
+    fn the_evidence_grade_separates_proof_from_compilation() {
+        let caps = IdpCapabilities::current();
+        let strong = caps.proven_by_behaviour();
+        // The strong grade covers the two session-layer invariants always,
+        // and the eight provider invariants when that lane is compiled —
+        // which is itself the point: a capability that is not in the build
+        // must not be reported as proven.
+        let expected_floor = if cfg!(feature = "auth-oidc-provider") {
+            10
+        } else {
+            2
+        };
+        assert!(
+            strong.len() >= expected_floor,
+            "only {} strong capabilities (floor {expected_floor}): {strong:?}",
+            strong.len()
+        );
+        for (name, test) in &strong {
+            assert!(!test.is_empty(), "{name} names no test");
+        }
+        // And every strong name is a declared capability.
+        let declared: std::collections::BTreeSet<&str> = caps
+            .entries()
+            .into_iter()
+            .filter(|c| c.declared)
+            .map(|c| c.name)
+            .collect();
+        for (name, _) in &strong {
+            assert!(declared.contains(name), "{name} is strong but not declared");
+        }
+        // The host fact is neither.
+        assert!(!strong
+            .iter()
+            .any(|(n, _)| *n == "host_can_deliver_messages"));
+    }
+
+    /// MUT:evidence-ignored — a capability whose evidence says `CompiledIn`
+    /// is NOT in `proven_by_behaviour`, so a consumer cannot accidentally
+    /// read the weak grade as the strong one.
+    #[test]
+    fn a_compiled_in_capability_is_not_reported_as_proven() {
+        let caps = IdpCapabilities::current();
+        let strong: std::collections::BTreeSet<&str> = caps
+            .proven_by_behaviour()
+            .into_iter()
+            .map(|(n, _)| n)
+            .collect();
+        for cap in caps.entries() {
+            if cap.evidence == Evidence::CompiledIn && cap.declared {
+                assert!(
+                    !strong.contains(cap.name),
+                    "{} is only compiled in",
+                    cap.name
+                );
+            }
+        }
     }
 
     /// The document serialises to a stable shape a consumer can read.
