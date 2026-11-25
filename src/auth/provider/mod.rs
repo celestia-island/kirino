@@ -52,7 +52,11 @@ pub mod client_auth;
 pub mod code;
 pub mod device;
 pub mod discovery;
+#[cfg(feature = "auth-dpop")]
+pub mod dpop;
 pub mod id_token;
+#[cfg(feature = "auth-mtls")]
+pub mod mtls;
 pub mod token;
 pub mod userinfo;
 
@@ -68,7 +72,17 @@ pub use device::{
     Decision, DeviceAuthorization, DeviceError, DevicePoll, PendingDevice, DEVICE_CODE_GRANT,
 };
 pub use discovery::{DiscoveryDocument, JwksDocument};
+#[cfg(feature = "auth-dpop")]
+pub use dpop::{
+    access_token_hash, check_binding as check_dpop_binding, strip_query_and_fragment, verify_proof,
+    Confirmation, DpopError, ProofClaims, SpentProof, VerifiedProof, DPOP_PROOF_TYPE,
+    MAX_PROOF_AGE_SECS, MAX_PROOF_SKEW_SECS,
+};
 pub use id_token::{IdTokenClaims, IdTokenSigner};
+#[cfg(feature = "auth-mtls")]
+pub use mtls::{
+    CertificateBinding, CertificateConfirmation, MtlsError, PresentedCertificate, X5T_S256,
+};
 pub use token::{
     authorization_code_grant, refresh_token_grant, verify_access_token, AccessClaims,
     AccessTokenSigner, TokenContext, TokenRequest, TokenResponse,

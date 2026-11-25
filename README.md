@@ -66,6 +66,7 @@ The name `kirino` comes from the character [Kirino](https://bluearchive.wiki/wik
 - ⚡ **Async/Tokio**: Built on async Rust with Tokio runtime
 - 🔌 **JWT Integration**: Built-in JWT issuance and verification
 - 🏛️ **OAuth/OIDC Provider**: the issuing side — client registry with exact-match redirects, the authorize decision, atomic codes, EdDSA ID tokens, scope-trimmed userinfo, discovery + JWKS — pure logic over host stores
+- 🔑 **Proof of Possession**: DPoP (RFC 9449) and mTLS (RFC 8705) — a token bound to a key or a certificate, so a stolen copy is not a stolen session; every binding claim (`htm`/`htu`/`iat`/`jti`/`ath`/`cnf.jkt`, `x5t#S256`) is checked, none left to the caller
 - 🤝 **Service-to-Service Auth**: `private_key_jwt` (nothing shared travels, and a leaked token store authenticates nothing) and `client_credentials` (a token with no user behind it — the host can tell, exactly)
 - 📺 **Device Flow**: RFC 8628 — a `user_code` from a look-alike-free alphabet, `slow_down` that really grows the interval, and a pairing that is decided exactly once and never survives its own approval
 - 🔐 **MFA Orchestration**: factor policies (`all` / `any`), a journey across steps, step-up as `amr`/`acr` judged against a declared scale, and single-use recovery codes through the consumable store — pure logic over the host's verifiers
@@ -377,6 +378,8 @@ The protocol side lives in `kirino::auth::passport::oauth` behind the `auth-oaut
 
 The issuing side lives in `kirino::auth::provider` behind the `auth-oidc-provider` feature: the client registry (redirects are **exact match**; a public client has no secret, so PKCE is mandatory by construction), the authorize decision (the redirect is verified **first**; a refusal is reflectable only when that check passed), the code grant (a `GrantKind` separates the code and refresh lanes so one cannot be redeemed as the other), EdDSA ID tokens with a `kid`, userinfo trimmed to scope, and the discovery/JWKS documents with a `validate` that refuses off-origin endpoints and private key material. Protocol-only — a host wires it to its own router and `ConsumableStore`, and never re-derives the rules.
 
+Proof-of-possession lives beside it. DPoP (`auth-dpop`) verifies a signed proof per request: `typ` must be `dpop+jwt`, the algorithm asymmetric, and the method, the target (without query or fragment), the age and the single-use `jti` are all checked — plus `ath` at the resource, so a captured proof cannot be paired with a different token, and `cnf.jkt` against the key so a plain bearer token is refused outright. mTLS (`auth-mtls`) binds to `x5t#S256` (base64url SHA-256 of the **DER** certificate, never the PEM text), refuses an unvalidated chain at bind time, and refuses a token whose `cnf` names a different certificate or none at all.
+
 Service-to-service auth lives in `kirino::auth::provider::client_auth`. `private_key_jwt` verifies a client-signed assertion: `iss` **and** `sub` must both be the client id, `aud` must be the token endpoint **exactly**, the assertion lives at most five minutes, and its `jti` is spent through the single-use store — a signature check alone would accept the same assertion a thousand times inside its lifetime. `client_credentials` mints an access token whose `sub` is the client id, with no refresh token, no ID token and no `amr`: nothing was authenticated in the user sense, and `is_client_token` says so exactly (`sub == client_id`).
 
 The device grant lives in `kirino::auth::provider::device`. A device asks for a pairing and gets a secret `device_code` and a typed `user_code`; a human opens the verification URI, types the code and decides; the device polls and gets `authorization_pending`, `slow_down` (with a grown interval), `expired_token`, `access_denied`, or tokens — exactly once. The pairing is **mutable state**, not a credential, so it has its own small `DeviceStore` SPI rather than bending `ConsumableStore`'s "a live duplicate is refused" contract; the `user_code` alphabet has no `0`/`O`, `1`/`I`/`L` or `U`, because a mistyped code is a chance to land on someone else's request.
@@ -443,7 +446,9 @@ auth-jwt = ["dep:jsonwebtoken"]    # JWT token issuance/verification
 auth-webauthn = ["dep:coset", "dep:p256"]  # WebAuthn assertion/attestation verification
 auth-oauth = ["dep:base64", "dep:subtle", "auth-jwt"]  # OAuth relying-party core (PKCE, state, token exchange)
 auth-oidc-provider = ["auth-oauth"]  # OAuth/OIDC provider core: clients, authorize, codes, ID tokens, userinfo, discovery
-auth-mfa = ["auth-password"]          # MFA orchestration: factor policies, the journey, step-up (acr/amr), recovery codes
+auth-mfa = ["auth-password"]
+auth-dpop = ["auth-jwt", "dep:base64"]   # RFC 9449: proof-of-possession bound tokens
+auth-mtls = ["dep:base64"]              # RFC 8705: certificate-bound tokens          # MFA orchestration: factor policies, the journey, step-up (acr/amr), recovery codes
 store-db = ["dep:lacrymira", "dep:lacrymira-pg"]  # DB-backed single-use credential store (multi-replica)
 ts = ["dep:ts-rs"]                 # Generate TypeScript bindings for the wire-contract types
 ```
