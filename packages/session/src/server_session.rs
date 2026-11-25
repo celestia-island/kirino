@@ -759,6 +759,65 @@ mod tests {
         // leaves this row in and the count at 0.
     }
 
+    /// The host's TTLs decide, not the defaults: a session dead by the
+    /// defaults but live under a longer policy is kept by `put`, judged
+    /// `Live` by `check`, and kept by a `sweep` called with the host's TTLs.
+    #[tokio::test]
+    async fn the_hosts_ttls_decide_not_the_defaults() {
+        let t = Utc::now();
+        let host_idle = DEFAULT_IDLE_SECS + 3600;
+        let mut stale_by_default = session();
+        stale_by_default.id = "long".into();
+        stale_by_default.created_at = t - chrono::Duration::seconds(DEFAULT_IDLE_SECS + 60);
+        stale_by_default.last_seen = t - chrono::Duration::seconds(DEFAULT_IDLE_SECS + 60);
+        assert_eq!(
+            stale_by_default.check(t, DEFAULT_IDLE_SECS, DEFAULT_ABSOLUTE_SECS, 0),
+            SessionCheck::Refused(SessionRefusal::Idle)
+        );
+        assert!(matches!(
+            stale_by_default.check(t, host_idle, DEFAULT_ABSOLUTE_SECS, 0),
+            SessionCheck::Live(_)
+        ));
+        assert_eq!(
+            stale_by_default.check(t, host_idle, DEFAULT_IDLE_SECS, 0),
+            SessionCheck::Refused(SessionRefusal::Absolute)
+        );
+        let store = InMemoryServerSessionStore::new();
+        store.put(&stale_by_default).await.unwrap();
+        store.put(&session()).await.unwrap();
+        assert_eq!(store.len().await, 2, "a put must not evict another row");
+        let mut touched = stale_by_default.clone();
+        touched.last_seen = t;
+        store.put(&touched).await.unwrap();
+        assert_eq!(
+            store.len().await,
+            2,
+            "a replaced session is not a second row"
+        );
+        assert_eq!(
+            store.get("long").await.unwrap().expect("stored").last_seen,
+            t,
+            "the stored record is the newer one"
+        );
+        let later = t + chrono::Duration::seconds(DEFAULT_IDLE_SECS + 60);
+        assert_eq!(
+            store
+                .sweep(later, host_idle, DEFAULT_ABSOLUTE_SECS)
+                .await
+                .unwrap(),
+            0,
+            "the host's sweep keeps what its policy calls live"
+        );
+        assert_eq!(
+            store
+                .sweep(later, DEFAULT_IDLE_SECS, DEFAULT_ABSOLUTE_SECS)
+                .await
+                .unwrap(),
+            2
+        );
+        assert_eq!(store.len().await, 0);
+    }
+
     #[test]
     fn set_and_clear_cookies_carry_the_same_name_and_attributes() {
         let p = CookiePolicy::strict();
