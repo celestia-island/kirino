@@ -200,10 +200,17 @@ where
     }
     // Single use. The store refuses a live duplicate — judged by error type,
     // not by a message.
+    //
+    // The key is `jkt|jti`, not `jti`: RFC 9449 only requires a `jti` to be
+    // unique within ITS key's proofs, and two clients that both pick `1` must
+    // not invalidate each other (K5's client assertion key does the same with
+    // the client id). A shared key space here is a cross-client DoS: whichever
+    // polls second is told "replayed".
     let expires_at = now + Duration::seconds(MAX_PROOF_AGE_SECS);
+    let jti_key = format!("{}|{}", verified.jkt, claims.jti);
     match store
         .put(
-            &claims.jti,
+            &jti_key,
             SpentProof {
                 jkt: verified.jkt.clone(),
             },
@@ -452,6 +459,74 @@ mod tests {
                 .unwrap_err(),
             DpopError::MissingJti
         );
+    }
+
+    /// Two clients that pick the same `jti` must not invalidate each other:
+    /// the jti is unique per KEY, not per provider (R2's question, answered
+    /// the way RFC 9449 §11.1 scopes it).
+    #[tokio::test]
+    async fn two_keys_do_not_invalidate_each_other_on_a_shared_jti() {
+        let store = ProofStore::new();
+        let now = Utc::now();
+        let _ = claims(now);
+        // Two different keys, the same jti value.
+        let first = verify_proof(
+            "p1",
+            "POST",
+            "https://auth.example/token",
+            move |_| {
+                Some((
+                    claims(now),
+                    VerifiedProof {
+                        jkt: "key-a".into(),
+                    },
+                ))
+            },
+            &store,
+            now,
+        )
+        .await;
+        first.expect("key-a's proof is fresh");
+        let second = verify_proof(
+            "p2",
+            "POST",
+            "https://auth.example/token",
+            move |_| {
+                Some((
+                    claims(now),
+                    VerifiedProof {
+                        jkt: "key-b".into(),
+                    },
+                ))
+            },
+            &store,
+            now,
+        )
+        .await;
+        // MUT:jti-unscoped — keying the store on `jti` alone makes this
+        // `Replayed` and one client blocks another.
+        assert!(
+            second.is_ok(),
+            "a different key's identical jti is a different proof: {second:?}"
+        );
+        // And the SAME key replaying it is still refused.
+        let third = verify_proof(
+            "p3",
+            "POST",
+            "https://auth.example/token",
+            move |_| {
+                Some((
+                    claims(now),
+                    VerifiedProof {
+                        jkt: "key-a".into(),
+                    },
+                ))
+            },
+            &store,
+            now,
+        )
+        .await;
+        assert_eq!(third.unwrap_err(), DpopError::Replayed);
     }
 
     #[tokio::test]
