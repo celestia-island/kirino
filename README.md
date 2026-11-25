@@ -66,6 +66,7 @@ The name `kirino` comes from the character [Kirino](https://bluearchive.wiki/wik
 - ⚡ **Async/Tokio**: Built on async Rust with Tokio runtime
 - 🔌 **JWT Integration**: Built-in JWT issuance and verification
 - 🏛️ **OAuth/OIDC Provider**: the issuing side — client registry with exact-match redirects, the authorize decision, atomic codes, EdDSA ID tokens, scope-trimmed userinfo, discovery + JWKS — pure logic over host stores
+- 🔐 **MFA Orchestration**: factor policies (`all` / `any`), a journey across steps, step-up as `amr`/`acr` judged against a declared scale, and single-use recovery codes through the consumable store — pure logic over the host's verifiers
 - 🎟️ **Single-Use Credentials**: One atomic claim contract for authorization codes, device codes, `state` and recovery codes — in-memory or multi-replica (`store-db`)
 
 ## Quick Start
@@ -374,6 +375,8 @@ The protocol side lives in `kirino::auth::passport::oauth` behind the `auth-oaut
 
 The issuing side lives in `kirino::auth::provider` behind the `auth-oidc-provider` feature: the client registry (redirects are **exact match**; a public client has no secret, so PKCE is mandatory by construction), the authorize decision (the redirect is verified **first**; a refusal is reflectable only when that check passed), the code grant (a `GrantKind` separates the code and refresh lanes so one cannot be redeemed as the other), EdDSA ID tokens with a `kid`, userinfo trimmed to scope, and the discovery/JWKS documents with a `validate` that refuses off-origin endpoints and private key material. Protocol-only — a host wires it to its own router and `ConsumableStore`, and never re-derives the rules.
 
+Multi-factor lives in `kirino::auth::mfa` behind the `auth-mfa` feature. The primitives were already there (`TotpVerifier`, the WebAuthn assertion verifier, `TotpReplayGuard`, the single-use store); what this adds is the **policy** around them. A `Policy` says which factors are required and whether all or any suffice; a `Journey` folds one verified factor at a time and answers `Done { amr, acr }` or `NeedMore`. Step-up is `StepUp::judge(amr, acr, scale)`: the `acr` floor is ranked on an `AcrScale` the deployment declares, and the floor's **method set must be present in `amr`** whatever the session's `acr` claims — a stale `acr` from an earlier login never stands in for methods this session did not prove. A recovery code stands in for **one** non-password factor, never the password and never the whole remainder. Its STORE KEY is `argon2id(code, salt)` with the salt derived from the issuer's high-entropy pepper — a leaked table cannot be enumerated while the pepper stays secret, and every claim costs one argon2 (~30 ms; **rate-limit the endpoint**) — and it is consumed through `ConsumableStore::claim` **bound to the subject it was issued for**: a code typed under another account's recovery prompt is refused, and a replay is indistinguishable from an unknown code.
+
 ### Dynamic Authorization
 
 On top of static RBAC, kirino provides a runtime risk-scoring layer inspired by NIST SP 800-207/162 and DO-178C:
@@ -434,6 +437,7 @@ auth-jwt = ["dep:jsonwebtoken"]    # JWT token issuance/verification
 auth-webauthn = ["dep:coset", "dep:p256"]  # WebAuthn assertion/attestation verification
 auth-oauth = ["dep:base64", "dep:subtle", "auth-jwt"]  # OAuth relying-party core (PKCE, state, token exchange)
 auth-oidc-provider = ["auth-oauth"]  # OAuth/OIDC provider core: clients, authorize, codes, ID tokens, userinfo, discovery
+auth-mfa = ["auth-password"]          # MFA orchestration: factor policies, the journey, step-up (acr/amr), recovery codes
 store-db = ["dep:lacrymira", "dep:lacrymira-pg"]  # DB-backed single-use credential store (multi-replica)
 ts = ["dep:ts-rs"]                 # Generate TypeScript bindings for the wire-contract types
 ```

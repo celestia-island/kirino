@@ -1,5 +1,7 @@
 pub mod credential;
 pub mod identity;
+#[cfg(feature = "auth-mfa")]
+pub mod mfa;
 pub mod mode;
 pub mod passport;
 #[cfg(feature = "auth-oidc-provider")]

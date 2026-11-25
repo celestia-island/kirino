@@ -54,6 +54,7 @@ auth-oauth = ["dep:base64", "dep:subtle", "auth-jwt"]
 # the discovery/JWKS documents. Pure logic — no HTTP, no storage. Off by
 # default; a host wires it to its own router and ConsumableStore.
 auth-oidc-provider = ["auth-oauth"]
+auth-mfa = ["auth-password"]
 
 [dependencies]
 anyhow = "^1"
