@@ -164,18 +164,45 @@ impl SessionTtlEnv {
     /// parse rules (including the no-fallthrough-on-unparsable-new-name
     /// rule) are testable and usable over custom channels (a config file,
     /// a service shim) without touching the process environment.
+    /// [`Self::from_lookup`] with an EXPLICIT warn-once state: the tests use
+    /// it so the "exactly one line for two reads" assertion is independent
+    /// of what any other test read first (R2's S1: the shared process set
+    /// made that test pass only in isolation).
+    #[cfg(test)]
+    fn from_lookup_with(lookup: impl Fn(&str) -> Option<String>, warner: &LegacyWarner) -> Self {
+        Self {
+            access_secs: resolve_secs(
+                Self::ACCESS_NEW,
+                Self::ACCESS_LEGACY,
+                Self::DEFAULT_ACCESS_SECS,
+                &lookup,
+                warner,
+            ),
+            refresh_secs: resolve_secs(
+                Self::REFRESH_NEW,
+                Self::REFRESH_LEGACY,
+                Self::DEFAULT_REFRESH_SECS,
+                &lookup,
+                warner,
+            ),
+        }
+    }
+
     pub fn from_lookup(lookup: impl Fn(&str) -> Option<String>) -> Self {
+        let warner = global_warner();
         let access_secs = resolve_secs(
             Self::ACCESS_NEW,
             Self::ACCESS_LEGACY,
             Self::DEFAULT_ACCESS_SECS,
             &lookup,
+            warner,
         );
         let refresh_secs = resolve_secs(
             Self::REFRESH_NEW,
             Self::REFRESH_LEGACY,
             Self::DEFAULT_REFRESH_SECS,
             &lookup,
+            warner,
         );
         Self {
             access_secs,
@@ -194,6 +221,7 @@ fn resolve_secs(
     legacy_name: &str,
     default: u64,
     lookup: &impl Fn(&str) -> Option<String>,
+    warner: &LegacyWarner,
 ) -> u64 {
     if let Some(raw) = lookup(new_name) {
         // MUT:ttl-no-fallthrough — an unparsable NEW name must NOT fall
@@ -203,27 +231,61 @@ fn resolve_secs(
         return raw.parse().unwrap_or(default);
     }
     if let Some(raw) = lookup(legacy_name) {
-        warn_legacy_once(legacy_name);
+        warner.warn_once(legacy_name);
         return raw.parse().unwrap_or(default);
     }
     default
 }
 
-/// Warn once per variable name per process — a startup-time read may be
-/// re-run per worker or per reload, and the journal does not need the same
-/// deprecation line a dozen times.
-fn warn_legacy_once(name: &str) {
-    static SEEN: std::sync::OnceLock<std::sync::Mutex<std::collections::HashSet<String>>> =
-        std::sync::OnceLock::new();
-    let seen = SEEN.get_or_init(|| std::sync::Mutex::new(std::collections::HashSet::new()));
-    let mut seen = seen.lock().unwrap_or_else(|e| e.into_inner());
-    if seen.insert(name.to_string()) {
-        tracing::warn!(
-            target: "kirino_session::config",
-            variable = name,
-            "legacy unprefixed session-lifetime variable served; rename to the CELESTIA_ spelling (support ends next release)"
-        );
+/// The "warn once per variable" state, as an OBJECT rather than a process
+/// singleton.
+///
+/// The production path uses [`GLOBAL_WARNER`] (one line per variable per
+/// process: a startup read may re-run per worker or per reload, and the
+/// journal does not need the same deprecation a dozen times). Keeping the
+/// set in a value is what makes the rule TESTABLE: a test constructs its
+/// own warner and asserts "exactly one line for two reads" without
+/// depending on which other test in the binary read a legacy name first —
+/// the order-dependence R2 caught in the previous cut, where the global set
+/// was shared by four tests and the warn-count test passed only when run
+/// alone.
+pub(crate) struct LegacyWarner {
+    seen: std::sync::Mutex<std::collections::HashSet<String>>,
+}
+
+impl LegacyWarner {
+    fn new() -> Self {
+        Self {
+            seen: std::sync::Mutex::new(std::collections::HashSet::new()),
+        }
     }
+
+    /// The names warned about so far (test/inspection only): the dedupe
+    /// rule is observable state, not just log output.
+    #[cfg(test)]
+    fn warned_names(&self) -> Vec<String> {
+        let seen = self.seen.lock().unwrap_or_else(|e| e.into_inner());
+        let mut names: Vec<String> = seen.iter().cloned().collect();
+        names.sort();
+        names
+    }
+
+    fn warn_once(&self, name: &str) {
+        let mut seen = self.seen.lock().unwrap_or_else(|e| e.into_inner());
+        if seen.insert(name.to_string()) {
+            tracing::warn!(
+                target: "kirino_session::config",
+                variable = name,
+                "legacy unprefixed session-lifetime variable served; rename to the CELESTIA_ spelling (support ends next release)"
+            );
+        }
+    }
+}
+
+/// The process-wide warner the environment path uses.
+fn global_warner() -> &'static LegacyWarner {
+    static GLOBAL: std::sync::OnceLock<LegacyWarner> = std::sync::OnceLock::new();
+    GLOBAL.get_or_init(LegacyWarner::new)
 }
 
 impl SessionConfig {
@@ -506,13 +568,38 @@ mod tests {
     fn ttl_legacy_warn_fires_exactly_once_per_variable() {
         let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
         let _sub = tracing::subscriber::set_default(WarnCapture { seen: seen.clone() });
-        // Repeated legacy reads: the first warns, the rest must be silent.
-        let first = SessionTtlEnv::from_lookup(lookup_from(&[("JWT_EXPIRATION_SECONDS", "60")]));
-        let second = SessionTtlEnv::from_lookup(lookup_from(&[("JWT_EXPIRATION_SECONDS", "60")]));
+        // tracing caches each callsite's interest: a callsite first evaluated
+        // with no subscriber can stay disabled for the rest of the process,
+        // which is why this captured ZERO events until the cache was rebuilt.
+        tracing::callsite::rebuild_interest_cache();
+        // Repeated legacy reads through a FRESH warner: the first warns, the
+        // rest must be silent. A private warner is what makes this assertion
+        // order-independent — with the process-wide set, another test that
+        // read a legacy name first made the count 0 or 2 depending on which
+        // test ran first (R2's S1).
+        let warner = super::LegacyWarner::new();
+        let first = SessionTtlEnv::from_lookup_with(
+            lookup_from(&[("JWT_EXPIRATION_SECONDS", "60")]),
+            &warner,
+        );
+        let second = SessionTtlEnv::from_lookup_with(
+            lookup_from(&[("JWT_EXPIRATION_SECONDS", "60")]),
+            &warner,
+        );
         assert_eq!(first.access_secs, 60);
         assert_eq!(second.access_secs, 60);
+        // The dedupe rule is asserted on the warner's own state (deterministic,
+        // independent of log plumbing), then the emitted line is asserted too.
+        assert_eq!(
+            warner.warned_names(),
+            vec!["JWT_EXPIRATION_SECONDS".to_string()],
+            "two legacy reads of one variable record exactly one warning"
+        );
         let hits = seen.lock().unwrap().len();
-        assert_eq!(hits, 1, "exactly one deprecation warn for this variable");
+        assert_eq!(
+            hits, 1,
+            "exactly one deprecation warn line for this variable"
+        );
         // MUT:ttl-warn-leaks-the-value — the warning names the VARIABLE,
         // never the value it held: journald is a wider audience than the
         // operator's shell, and a lifetime value could yet become a secret.
