@@ -25,6 +25,12 @@ pub const MIN_SECRET_BYTES: usize = 32;
 /// leaves the manager unusable (a
 /// [`SessionError::Keys`](crate::SessionError::Keys) on every sign and
 /// verify) rather than guessing which trust path was meant.
+///
+/// The two lifetimes may be read from the environment via
+/// [`SessionTtlEnv::from_env`] (the `CELESTIA_` spellings, with one
+/// release of legacy fallback); the host can still override whatever that
+/// read produced by assigning the fields directly or calling
+/// [`SessionConfig::with_ttl`].
 #[derive(Clone, Default)]
 pub(crate) struct Ed25519Keys {
     /// Private key PEM (issuer side). `None` on verify-only services such
@@ -85,6 +91,139 @@ pub struct SessionConfig {
     /// the Ed25519 and ML-DSA-65 profiles. The legacy HS256 profile does
     /// not stamp `kid` — its byte format stays frozen.
     pub(crate) kid: Option<String>,
+}
+
+/// The two session lifetimes a deployment may pin, read under the family's
+/// `CELESTIA_` spellings with a one-release fallback to the historical
+/// unprefixed names (`JWT_EXPIRATION_SECONDS` /
+/// `JWT_REFRESH_EXPIRATION_SECONDS`).
+///
+/// This is the ONE resolution entry point for the session TTLs — hosts
+/// (erp, chest) previously each re-implemented the same unprefixed read;
+/// the name and the parse now live here only. The resolved values are
+/// suggestions, not overrides: a host that knows better may still pin
+/// [`SessionConfig::access_ttl_secs`] / [`SessionConfig::refresh_ttl_secs`]
+/// (or [`SessionConfig::with_ttl`]) after reading.
+///
+/// Parse rules, byte-for-byte the behavior the hosts shipped:
+///
+/// | access source | refresh source | result |
+/// |---|---|---|
+/// | new name, parses | new name, parses | both new values |
+/// | new name, unparsable | (any) | default — NOT the legacy value |
+/// | absent | legacy name, parses | legacy value |
+/// | absent | absent | [`Self::DEFAULT_ACCESS_SECS`] / [`Self::DEFAULT_REFRESH_SECS`] |
+///
+/// The one deliberate deviation from a naive "try every name in order"
+/// chain: when the new name is set but unparsable, the legacy name is NOT
+/// consulted. An explicit misconfiguration must stay visible — falling
+/// back would let a typo'd `CELESTIA_SESSION_TTL_SECONDS` silently serve
+/// the old variable's value, pinning a lifetime the operator believes they
+/// overrode. Missing (absent) and broken (unparsable) are different states;
+/// only the first falls through. Both names set parses to the new value
+/// silently — that is the intended migration shape, not an error.
+pub struct SessionTtlEnv {
+    /// Access-token lifetime in seconds
+    /// ([`SessionConfig::access_ttl_secs`]).
+    pub access_secs: u64,
+    /// Refresh-token lifetime in seconds
+    /// ([`SessionConfig::refresh_ttl_secs`]).
+    pub refresh_secs: u64,
+}
+
+impl SessionTtlEnv {
+    /// 15 minutes — the lifetime [`SessionConfig`] ships when nothing says
+    /// otherwise.
+    pub const DEFAULT_ACCESS_SECS: u64 = 900;
+    /// 7 days — the refresh lifetime [`SessionConfig`] ships when nothing
+    /// says otherwise.
+    pub const DEFAULT_REFRESH_SECS: u64 = 604_800;
+
+    /// New spellings first; the unprefixed historical names survive one
+    /// release (the rename wave's compatibility window) and warn once per
+    /// variable per process when they serve.
+    pub const ACCESS_NEW: &str = "CELESTIA_SESSION_TTL_SECONDS";
+    /// Legacy unprefixed access-lifetime name, warned on use — see
+    /// [`Self::ACCESS_NEW`].
+    pub const ACCESS_LEGACY: &str = "JWT_EXPIRATION_SECONDS";
+    /// New spelling of the refresh lifetime — see [`Self::ACCESS_NEW`].
+    pub const REFRESH_NEW: &str = "CELESTIA_SESSION_REFRESH_TTL_SECONDS";
+    /// Legacy unprefixed refresh-lifetime name, warned on use — see
+    /// [`Self::ACCESS_NEW`].
+    pub const REFRESH_LEGACY: &str = "JWT_REFRESH_EXPIRATION_SECONDS";
+
+    /// Read both lifetimes from the process environment. Never panics and
+    /// never blocks: a missing or unparsable value degrades to the default,
+    /// exactly the behavior the hosts shipped before this entry point
+    /// existed.
+    pub fn from_env() -> Self {
+        Self::from_lookup(|name| std::env::var(name).ok())
+    }
+
+    /// The pure core of [`Self::from_env`] — the lookup is injected, so the
+    /// parse rules (including the no-fallthrough-on-unparsable-new-name
+    /// rule) are testable and usable over custom channels (a config file,
+    /// a service shim) without touching the process environment.
+    pub fn from_lookup(lookup: impl Fn(&str) -> Option<String>) -> Self {
+        let access_secs = resolve_secs(
+            Self::ACCESS_NEW,
+            Self::ACCESS_LEGACY,
+            Self::DEFAULT_ACCESS_SECS,
+            &lookup,
+        );
+        let refresh_secs = resolve_secs(
+            Self::REFRESH_NEW,
+            Self::REFRESH_LEGACY,
+            Self::DEFAULT_REFRESH_SECS,
+            &lookup,
+        );
+        Self {
+            access_secs,
+            refresh_secs,
+        }
+    }
+}
+
+/// One variable's resolution under the two-name compatibility window: the
+/// new name wins outright (parses or not), the legacy name serves with
+/// exactly one deprecation warning per variable per process (the name,
+/// never the value — a legacy value can be an operator secret and the
+/// journal is a wider audience than the shell that set it).
+fn resolve_secs(
+    new_name: &str,
+    legacy_name: &str,
+    default: u64,
+    lookup: &impl Fn(&str) -> Option<String>,
+) -> u64 {
+    if let Some(raw) = lookup(new_name) {
+        // MUT:ttl-no-fallthrough — an unparsable NEW name must NOT fall
+        // through to the legacy variable: explicit misconfiguration has to
+        // stay visible, and a fallback would pin the old variable's value
+        // under a typo'd new name. See `SessionTtlEnv`'s table.
+        return raw.parse().unwrap_or(default);
+    }
+    if let Some(raw) = lookup(legacy_name) {
+        warn_legacy_once(legacy_name);
+        return raw.parse().unwrap_or(default);
+    }
+    default
+}
+
+/// Warn once per variable name per process — a startup-time read may be
+/// re-run per worker or per reload, and the journal does not need the same
+/// deprecation line a dozen times.
+fn warn_legacy_once(name: &str) {
+    static SEEN: std::sync::OnceLock<std::sync::Mutex<std::collections::HashSet<String>>> =
+        std::sync::OnceLock::new();
+    let seen = SEEN.get_or_init(|| std::sync::Mutex::new(std::collections::HashSet::new()));
+    let mut seen = seen.lock().unwrap_or_else(|e| e.into_inner());
+    if seen.insert(name.to_string()) {
+        tracing::warn!(
+            target: "kirino_session::config",
+            variable = name,
+            "legacy unprefixed session-lifetime variable served; rename to the CELESTIA_ spelling (support ends next release)"
+        );
+    }
 }
 
 impl SessionConfig {
@@ -253,5 +392,138 @@ mod tests {
         // The historical constructor must keep working (scepter/arona
         // construct through it) — weakness is logged, not refused.
         let _ = SessionConfig::new("test-secret");
+    }
+
+    // All TTL-resolution tests go through `from_lookup` — the pure core —
+    // so no test touches the process environment and none needs a mutex
+    // against `set_var` races.
+
+    fn lookup_from<'a>(pairs: &'a [(&'a str, &'a str)]) -> impl Fn(&str) -> Option<String> + 'a {
+        move |name| {
+            pairs
+                .iter()
+                .find(|(n, _)| *n == name)
+                .map(|(_, v)| v.to_string())
+        }
+    }
+
+    #[test]
+    fn ttl_new_name_wins_when_present() {
+        let env = SessionTtlEnv::from_lookup(lookup_from(&[
+            ("CELESTIA_SESSION_TTL_SECONDS", "1800"),
+            ("JWT_EXPIRATION_SECONDS", "999"),
+            ("CELESTIA_SESSION_REFRESH_TTL_SECONDS", "10"),
+            ("JWT_REFRESH_EXPIRATION_SECONDS", "999"),
+        ]));
+        assert_eq!(env.access_secs, 1800);
+        assert_eq!(env.refresh_secs, 10);
+    }
+
+    #[test]
+    fn ttl_legacy_name_serves_the_same_value() {
+        let env = SessionTtlEnv::from_lookup(lookup_from(&[
+            ("JWT_EXPIRATION_SECONDS", "3600"),
+            ("JWT_REFRESH_EXPIRATION_SECONDS", "42"),
+        ]));
+        assert_eq!(env.access_secs, 3600);
+        assert_eq!(env.refresh_secs, 42);
+    }
+
+    #[test]
+    fn ttl_missing_names_take_the_defaults() {
+        let env = SessionTtlEnv::from_lookup(lookup_from(&[]));
+        assert_eq!(env.access_secs, SessionTtlEnv::DEFAULT_ACCESS_SECS);
+        assert_eq!(env.refresh_secs, SessionTtlEnv::DEFAULT_REFRESH_SECS);
+    }
+
+    #[test]
+    fn ttl_unparsable_new_name_takes_default_not_legacy() {
+        // MUT:ttl-test-no-fallthrough — pins the visible-misconfiguration
+        // rule: the broken new name must yield the DEFAULT, never the
+        // legacy variable's value; a fallback here would silently serve a
+        // lifetime the operator believes they overrode.
+        let env = SessionTtlEnv::from_lookup(lookup_from(&[
+            ("CELESTIA_SESSION_TTL_SECONDS", "not-a-number"),
+            ("JWT_EXPIRATION_SECONDS", "3600"),
+            ("CELESTIA_SESSION_REFRESH_TTL_SECONDS", ""),
+            ("JWT_REFRESH_EXPIRATION_SECONDS", "42"),
+        ]));
+        assert_eq!(env.access_secs, SessionTtlEnv::DEFAULT_ACCESS_SECS);
+        assert_eq!(env.refresh_secs, SessionTtlEnv::DEFAULT_REFRESH_SECS);
+    }
+
+    #[test]
+    fn ttl_unparsable_legacy_name_also_takes_default() {
+        // Same strictness applies on the legacy path — the hosts shipped
+        // `parse().ok().unwrap_or(default)`, so a broken value degrades to
+        // the default, not to a panic.
+        let env = SessionTtlEnv::from_lookup(lookup_from(&[
+            ("JWT_EXPIRATION_SECONDS", "tomorrow"),
+            ("JWT_REFRESH_EXPIRATION_SECONDS", "NaN"),
+        ]));
+        assert_eq!(env.access_secs, SessionTtlEnv::DEFAULT_ACCESS_SECS);
+        assert_eq!(env.refresh_secs, SessionTtlEnv::DEFAULT_REFRESH_SECS);
+    }
+
+    /// A tiny subscriber that records warn messages, so the test can pin
+    /// "exactly one deprecation warning" without a log-capture dependency.
+    struct WarnCapture {
+        seen: std::sync::Arc<std::sync::Mutex<Vec<String>>>,
+    }
+
+    impl tracing::Subscriber for WarnCapture {
+        fn enabled(&self, meta: &tracing::Metadata<'_>) -> bool {
+            meta.level() == &tracing::Level::WARN
+        }
+        fn new_span(&self, _span: &tracing::span::Attributes<'_>) -> tracing::span::Id {
+            tracing::span::Id::from_u64(1)
+        }
+        fn record(&self, _span: &tracing::span::Id, _values: &tracing::span::Record<'_>) {}
+        fn record_follows_from(&self, _span: &tracing::span::Id, _follows: &tracing::span::Id) {}
+        fn event(&self, event: &tracing::Event<'_>) {
+            if event.metadata().level() == &tracing::Level::WARN {
+                let mut msg = String::new();
+                struct Msg<'a>(&'a mut String);
+                impl<'a> tracing::field::Visit for Msg<'a> {
+                    fn record_debug(
+                        &mut self,
+                        field: &tracing::field::Field,
+                        value: &dyn std::fmt::Debug,
+                    ) {
+                        use std::fmt::Write;
+                        let _ = write!(self.0, "{}={:?};", field.name(), value);
+                    }
+                }
+                event.record(&mut Msg(&mut msg));
+                self.seen.lock().unwrap().push(msg);
+            }
+        }
+        fn enter(&self, _span: &tracing::span::Id) {}
+        fn exit(&self, _span: &tracing::span::Id) {}
+    }
+
+    #[test]
+    fn ttl_legacy_warn_fires_exactly_once_per_variable() {
+        let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+        let _sub = tracing::subscriber::set_default(WarnCapture { seen: seen.clone() });
+        // Repeated legacy reads: the first warns, the rest must be silent.
+        let first = SessionTtlEnv::from_lookup(lookup_from(&[("JWT_EXPIRATION_SECONDS", "60")]));
+        let second = SessionTtlEnv::from_lookup(lookup_from(&[("JWT_EXPIRATION_SECONDS", "60")]));
+        assert_eq!(first.access_secs, 60);
+        assert_eq!(second.access_secs, 60);
+        let hits = seen.lock().unwrap().len();
+        assert_eq!(hits, 1, "exactly one deprecation warn for this variable");
+        // MUT:ttl-warn-leaks-the-value — the warning names the VARIABLE,
+        // never the value it held: journald is a wider audience than the
+        // operator's shell, and a lifetime value could yet become a secret.
+        let captured = seen.lock().unwrap().join(" ");
+        assert!(
+            captured.contains("JWT_EXPIRATION_SECONDS"),
+            "the warning must name the legacy variable: {captured}"
+        );
+        assert!(
+            !captured.contains("\"60\""),
+            "the warning must never echo the value it served: {captured}"
+        );
     }
 }

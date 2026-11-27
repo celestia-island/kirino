@@ -9,6 +9,9 @@
 //! - Session persistence via PostgreSQL (optional `postgres` feature)
 //! - Token refresh mechanism (plain, or one-time-use rotation with replay
 //!   detection via [`TokenManager::refresh_rotating`])
+//! - A single environment entry point for the two session lifetimes
+//!   ([`SessionTtlEnv::from_env`] — the `CELESTIA_SESSION_*` spellings,
+//!   one release of legacy fallback), which hosts may further override
 //! - Refresh-token rotation revocation: an in-memory store bounded by the
 //!   refresh TTL plus the verify-leeway grace ([`RefreshRevocationStore`])
 //!   that rejects reuse of an already rotated refresh token — no persistent
@@ -52,7 +55,7 @@ pub mod server_session;
 pub mod store;
 mod token;
 
-pub use config::SessionConfig;
+pub use config::{SessionConfig, SessionTtlEnv};
 pub use error::{SessionError, SessionResult};
 pub use manager::TokenManager;
 pub use one_shot::OneShotStore;
