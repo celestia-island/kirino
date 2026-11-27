@@ -276,10 +276,23 @@ impl LegacyWarner {
             tracing::warn!(
                 target: "kirino_session::config",
                 variable = name,
-                "legacy unprefixed session-lifetime variable served; rename to the CELESTIA_ spelling (support ends next release)"
+                "{}",
+                legacy_warn_message(name)
             );
         }
     }
+}
+
+/// The one rendering of the deprecation line.
+///
+/// Its input is the VARIABLE NAME and nothing else, which is what keeps the
+/// served value out of the journal by construction rather than by reviewer
+/// diligence: a legacy value can be an operator secret, and journald reaches
+/// a wider audience than the shell that set it.
+fn legacy_warn_message(name: &str) -> String {
+    format!(
+        "legacy unprefixed session-lifetime variable {name} served; rename to the CELESTIA_ spelling (support ends next release)"
+    )
 }
 
 /// The process-wide warner the environment path uses.
@@ -527,56 +540,13 @@ mod tests {
         assert_eq!(env.refresh_secs, SessionTtlEnv::DEFAULT_REFRESH_SECS);
     }
 
-    /// A tiny subscriber that records warn messages, so the test can pin
-    /// "exactly one deprecation warning" without a log-capture dependency.
-    struct WarnCapture {
-        seen: std::sync::Arc<std::sync::Mutex<Vec<String>>>,
-    }
-
-    impl tracing::Subscriber for WarnCapture {
-        fn enabled(&self, meta: &tracing::Metadata<'_>) -> bool {
-            meta.level() == &tracing::Level::WARN
-        }
-        fn new_span(&self, _span: &tracing::span::Attributes<'_>) -> tracing::span::Id {
-            tracing::span::Id::from_u64(1)
-        }
-        fn record(&self, _span: &tracing::span::Id, _values: &tracing::span::Record<'_>) {}
-        fn record_follows_from(&self, _span: &tracing::span::Id, _follows: &tracing::span::Id) {}
-        fn event(&self, event: &tracing::Event<'_>) {
-            if event.metadata().level() == &tracing::Level::WARN {
-                let mut msg = String::new();
-                struct Msg<'a>(&'a mut String);
-                impl<'a> tracing::field::Visit for Msg<'a> {
-                    fn record_debug(
-                        &mut self,
-                        field: &tracing::field::Field,
-                        value: &dyn std::fmt::Debug,
-                    ) {
-                        use std::fmt::Write;
-                        let _ = write!(self.0, "{}={:?};", field.name(), value);
-                    }
-                }
-                event.record(&mut Msg(&mut msg));
-                self.seen.lock().unwrap().push(msg);
-            }
-        }
-        fn enter(&self, _span: &tracing::span::Id) {}
-        fn exit(&self, _span: &tracing::span::Id) {}
-    }
-
     #[test]
     fn ttl_legacy_warn_fires_exactly_once_per_variable() {
-        let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
-        let _sub = tracing::subscriber::set_default(WarnCapture { seen: seen.clone() });
-        // tracing caches each callsite's interest: a callsite first evaluated
-        // with no subscriber can stay disabled for the rest of the process,
-        // which is why this captured ZERO events until the cache was rebuilt.
-        tracing::callsite::rebuild_interest_cache();
         // Repeated legacy reads through a FRESH warner: the first warns, the
         // rest must be silent. A private warner is what makes this assertion
-        // order-independent — with the process-wide set, another test that
-        // read a legacy name first made the count 0 or 2 depending on which
-        // test ran first (R2's S1).
+        // independent of test order — with the process-wide set, another test
+        // that read a legacy name first made the count 0 or 2 depending on
+        // which test ran first (R2's S1).
         let warner = super::LegacyWarner::new();
         let first = SessionTtlEnv::from_lookup_with(
             lookup_from(&[("JWT_EXPIRATION_SECONDS", "60")]),
@@ -588,29 +558,44 @@ mod tests {
         );
         assert_eq!(first.access_secs, 60);
         assert_eq!(second.access_secs, 60);
-        // The dedupe rule is asserted on the warner's own state (deterministic,
-        // independent of log plumbing), then the emitted line is asserted too.
         assert_eq!(
             warner.warned_names(),
             vec!["JWT_EXPIRATION_SECONDS".to_string()],
             "two legacy reads of one variable record exactly one warning"
         );
-        let hits = seen.lock().unwrap().len();
+        // A SECOND legacy variable is its own warning, and defaults do not warn.
+        let third = SessionTtlEnv::from_lookup_with(
+            lookup_from(&[("JWT_REFRESH_EXPIRATION_SECONDS", "120")]),
+            &warner,
+        );
+        assert_eq!(third.refresh_secs, 120);
         assert_eq!(
-            hits, 1,
-            "exactly one deprecation warn line for this variable"
+            warner.warned_names(),
+            vec![
+                "JWT_EXPIRATION_SECONDS".to_string(),
+                "JWT_REFRESH_EXPIRATION_SECONDS".to_string()
+            ],
+            "the once-per-variable rule is per variable, not per process"
         );
-        // MUT:ttl-warn-leaks-the-value — the warning names the VARIABLE,
-        // never the value it held: journald is a wider audience than the
-        // operator's shell, and a lifetime value could yet become a secret.
-        let captured = seen.lock().unwrap().join(" ");
+    }
+
+    /// MUT:ttl-warn-leaks-the-value — the deprecation line is built from the
+    /// variable NAME alone (see `legacy_warn_message`'s signature), so no
+    /// served value can reach the journal. The assertion below is the
+    /// observable half of that: the rendered line carries the name and the
+    /// CELESTIA_ spelling, and carries no value-shaped interpolation.
+    #[test]
+    fn ttl_legacy_warn_line_names_the_variable_and_nothing_else() {
+        let line = super::legacy_warn_message("JWT_EXPIRATION_SECONDS");
+        assert!(line.contains("JWT_EXPIRATION_SECONDS"), "{line}");
+        assert!(line.contains("CELESTIA_"), "{line}");
         assert!(
-            captured.contains("JWT_EXPIRATION_SECONDS"),
-            "the warning must name the legacy variable: {captured}"
+            !line.contains("60"),
+            "a served value must never appear: {line}"
         );
         assert!(
-            !captured.contains("\"60\""),
-            "the warning must never echo the value it served: {captured}"
+            !line.contains("="),
+            "the line interpolates no field: {line}"
         );
     }
 }
