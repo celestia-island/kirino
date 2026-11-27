@@ -157,7 +157,23 @@ impl SessionTtlEnv {
     /// exactly the behavior the hosts shipped before this entry point
     /// existed.
     pub fn from_env() -> Self {
-        Self::from_lookup(|name| std::env::var(name).ok())
+        Self::from_env_or(Self::DEFAULT_ACCESS_SECS, Self::DEFAULT_REFRESH_SECS)
+    }
+
+    /// [`Self::from_env`] with the CALLER's defaults.
+    ///
+    /// The name and the parse rules belong here (one home); the DEFAULT does
+    /// not: `celestia-erp` and `shittim-chest` both pin 3600 seconds when
+    /// neither variable is set, while `SessionConfig`'s own default is 900.
+    /// Adopting this reader with kirino's 900 would shorten live sessions
+    /// silently — so a host that has a default passes it in, and the parse
+    /// rule stays shared.
+    pub fn from_env_or(access_default: u64, refresh_default: u64) -> Self {
+        Self::from_lookup_or(
+            |name| std::env::var(name).ok(),
+            access_default,
+            refresh_default,
+        )
     }
 
     /// The pure core of [`Self::from_env`] — the lookup is injected, so the
@@ -169,19 +185,24 @@ impl SessionTtlEnv {
     /// of what any other test read first (R2's S1: the shared process set
     /// made that test pass only in isolation).
     #[cfg(test)]
-    fn from_lookup_with(lookup: impl Fn(&str) -> Option<String>, warner: &LegacyWarner) -> Self {
+    fn from_lookup_with(
+        lookup: impl Fn(&str) -> Option<String>,
+        warner: &LegacyWarner,
+        access_default: u64,
+        refresh_default: u64,
+    ) -> Self {
         Self {
             access_secs: resolve_secs(
                 Self::ACCESS_NEW,
                 Self::ACCESS_LEGACY,
-                Self::DEFAULT_ACCESS_SECS,
+                access_default,
                 &lookup,
                 warner,
             ),
             refresh_secs: resolve_secs(
                 Self::REFRESH_NEW,
                 Self::REFRESH_LEGACY,
-                Self::DEFAULT_REFRESH_SECS,
+                refresh_default,
                 &lookup,
                 warner,
             ),
@@ -189,18 +210,32 @@ impl SessionTtlEnv {
     }
 
     pub fn from_lookup(lookup: impl Fn(&str) -> Option<String>) -> Self {
+        Self::from_lookup_or(
+            lookup,
+            Self::DEFAULT_ACCESS_SECS,
+            Self::DEFAULT_REFRESH_SECS,
+        )
+    }
+
+    /// [`Self::from_lookup`] with the caller's defaults (see
+    /// [`Self::from_env_or`] for why the default is a parameter).
+    pub fn from_lookup_or(
+        lookup: impl Fn(&str) -> Option<String>,
+        access_default: u64,
+        refresh_default: u64,
+    ) -> Self {
         let warner = global_warner();
         let access_secs = resolve_secs(
             Self::ACCESS_NEW,
             Self::ACCESS_LEGACY,
-            Self::DEFAULT_ACCESS_SECS,
+            access_default,
             &lookup,
             warner,
         );
         let refresh_secs = resolve_secs(
             Self::REFRESH_NEW,
             Self::REFRESH_LEGACY,
-            Self::DEFAULT_REFRESH_SECS,
+            refresh_default,
             &lookup,
             warner,
         );
@@ -513,6 +548,21 @@ mod tests {
         assert_eq!(env.refresh_secs, 42);
     }
 
+    /// MUT:ttl-host-default-not-parameterised — the up-level's own default is
+    /// 900, but erp/chest pin 3600 today: adopting the reader with kirino's
+    /// default would shorten live sessions silently. `from_lookup_or` exists
+    /// so the host's default is an argument, not an assumption; this test
+    /// reddens if the parameter is ignored.
+    #[test]
+    fn ttl_caller_defaults_are_honoured() {
+        let env = SessionTtlEnv::from_lookup_or(lookup_from(&[]), 3600, 604_800);
+        assert_eq!(env.access_secs, 3600, "the caller's access default wins");
+        assert_eq!(env.refresh_secs, 604_800);
+        // …and the fixed-default entry points keep kirino-session's own pair.
+        let own = SessionTtlEnv::from_lookup(lookup_from(&[]));
+        assert_eq!(own.access_secs, 900);
+    }
+
     #[test]
     fn ttl_missing_names_take_the_defaults() {
         let env = SessionTtlEnv::from_lookup(lookup_from(&[]));
@@ -560,10 +610,14 @@ mod tests {
         let first = SessionTtlEnv::from_lookup_with(
             lookup_from(&[("JWT_EXPIRATION_SECONDS", "60")]),
             &warner,
+            SessionTtlEnv::DEFAULT_ACCESS_SECS,
+            SessionTtlEnv::DEFAULT_REFRESH_SECS,
         );
         let second = SessionTtlEnv::from_lookup_with(
             lookup_from(&[("JWT_EXPIRATION_SECONDS", "60")]),
             &warner,
+            SessionTtlEnv::DEFAULT_ACCESS_SECS,
+            SessionTtlEnv::DEFAULT_REFRESH_SECS,
         );
         assert_eq!(first.access_secs, 60);
         assert_eq!(second.access_secs, 60);
@@ -576,6 +630,8 @@ mod tests {
         let third = SessionTtlEnv::from_lookup_with(
             lookup_from(&[("JWT_REFRESH_EXPIRATION_SECONDS", "120")]),
             &warner,
+            SessionTtlEnv::DEFAULT_ACCESS_SECS,
+            SessionTtlEnv::DEFAULT_REFRESH_SECS,
         );
         assert_eq!(third.refresh_secs, 120);
         assert_eq!(
