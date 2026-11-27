@@ -231,7 +231,7 @@ fn resolve_secs(
         return raw.parse().unwrap_or(default);
     }
     if let Some(raw) = lookup(legacy_name) {
-        warner.warn_once(legacy_name);
+        let _ = warner.warn_once(legacy_name);
         return raw.parse().unwrap_or(default);
     }
     default
@@ -270,7 +270,14 @@ impl LegacyWarner {
         names
     }
 
-    fn warn_once(&self, name: &str) {
+    /// Emit the deprecation line for `name` unless it was already emitted.
+    ///
+    /// Returns whether THIS call emitted it. The return value is what makes
+    /// the once-per-variable rule assertable without a log subscriber: the
+    /// recorded-name set alone is idempotent under a broken guard (an
+    /// unconditional `insert` + warn leaves the set identical, so content
+    /// assertions stay green — the gap R3 caught by mutation).
+    fn warn_once(&self, name: &str) -> bool {
         let mut seen = self.seen.lock().unwrap_or_else(|e| e.into_inner());
         if seen.insert(name.to_string()) {
             tracing::warn!(
@@ -279,7 +286,9 @@ impl LegacyWarner {
                 "{}",
                 legacy_warn_message(name)
             );
+            return true;
         }
+        false
     }
 }
 
@@ -576,6 +585,17 @@ mod tests {
                 "JWT_REFRESH_EXPIRATION_SECONDS".to_string()
             ],
             "the once-per-variable rule is per variable, not per process"
+        );
+        // MUT:ttl-warn-not-suppressed — an unconditional warn (guard removed)
+        // still leaves `warned_names` identical, so the SET cannot prove
+        // suppression. These two calls can: exactly one of them emits.
+        assert!(
+            warner.warn_once("JWT_A_FRESH_LEGACY_NAME"),
+            "a variable seen for the first time emits its line"
+        );
+        assert!(
+            !warner.warn_once("JWT_A_FRESH_LEGACY_NAME"),
+            "a repeat must be SUPPRESSED, not merely re-recorded in the set"
         );
     }
 
