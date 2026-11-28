@@ -992,56 +992,52 @@ mod tests {
         assert_eq!(full.token_url, token);
     }
 
-    /// One setter on its own: exactly the field it names may differ.
+    /// One setter on its own: exactly the field it names may differ, and it
+    /// then holds exactly what was asked for.
     ///
     /// The baselines are struct literals — never the setters under test — so
     /// a setter that also writes another field cannot slip the same write
-    /// into both sides of the comparison. There are two, because a write
-    /// conditioned on the state it finds (an empty scope list, a missing
-    /// endpoint) shows up on one baseline and not the other; and every
-    /// argument differs from what its baseline holds, so a setter that
-    /// "writes" the value already there is still seen to touch nothing else
-    /// but its own field.
+    /// into both sides of the comparison. Every set/unset combination of the
+    /// five optional fields is a baseline (2^5 = 32), so a write conditioned
+    /// on any state the setter finds is exercised on a baseline that meets
+    /// the condition. The arguments differ from what a baseline can hold, so
+    /// a setter that "writes" the value already there is still seen to touch
+    /// nothing else; and the named field's new value is checked, so a setter
+    /// that merges with the old value (appends, keeps it on an empty
+    /// request) cannot pass as "moved only its own field".
     #[test]
     fn each_setter_moves_only_the_field_it_names() {
         let authorize = Url::parse("https://idp.example/a").expect("url");
         let token = Url::parse("https://idp.example/t").expect("url");
         let user_after = Url::parse("https://idp.example/u-after").expect("url");
-        let baselines: [(&str, ProviderMetadata); 2] = [
-            (
-                "bare",
-                ProviderMetadata {
-                    provider: "idp".to_owned(),
-                    issuer: None,
-                    authorize_url: authorize.clone(),
-                    token_url: token.clone(),
-                    userinfo_url: None,
-                    token_body: TokenBody::Form,
-                    scopes: Vec::new(),
-                    token_response_envelope: None,
+        for mask in 0..32u8 {
+            let set = |bit: u8| mask & (1 << bit) != 0;
+            let base_name = format!("mask{mask:05b}");
+            let base = ProviderMetadata {
+                provider: "idp".to_owned(),
+                issuer: set(0).then(|| "https://issuer.before".to_owned()),
+                authorize_url: authorize.clone(),
+                token_url: token.clone(),
+                userinfo_url: set(1)
+                    .then(|| Url::parse("https://idp.example/u-before").expect("url")),
+                token_body: if set(2) {
+                    TokenBody::Json
+                } else {
+                    TokenBody::Form
                 },
-            ),
-            (
-                "populated",
-                ProviderMetadata {
-                    provider: "idp".to_owned(),
-                    issuer: Some("https://issuer.before".to_owned()),
-                    authorize_url: authorize.clone(),
-                    token_url: token.clone(),
-                    userinfo_url: Some(Url::parse("https://idp.example/u-before").expect("url")),
-                    token_body: TokenBody::Json,
-                    scopes: vec!["before".to_owned()],
-                    token_response_envelope: Some("before"),
+                scopes: if set(3) {
+                    vec!["before".to_owned()]
+                } else {
+                    Vec::new()
                 },
-            ),
-        ];
-        for (base_name, base) in baselines {
+                token_response_envelope: set(4).then_some("before"),
+            };
             // The argument always differs from what the baseline holds.
             let body_after = match base.token_body {
                 TokenBody::Form => TokenBody::Json,
                 TokenBody::Json => TokenBody::Form,
             };
-            let cases: [(&str, ProviderMetadata); 5] = [
+            let cases: [(&str, ProviderMetadata); 6] = [
                 (
                     "with_issuer",
                     base.clone().with_issuer("https://issuer.after"),
@@ -1052,6 +1048,10 @@ mod tests {
                 ),
                 ("with_token_body", base.clone().with_token_body(body_after)),
                 ("with_scopes", base.clone().with_scopes(["after", "two"])),
+                (
+                    "with_scopes(empty)",
+                    base.clone().with_scopes(Vec::<String>::new()),
+                ),
                 (
                     "with_token_response_envelope",
                     base.clone().with_token_response_envelope("after"),
@@ -1075,11 +1075,34 @@ mod tests {
                 .filter(|(_, same)| !same)
                 .map(|(field, _)| field)
                 .collect();
+                // An empty request clears; on a baseline with no scopes it
+                // leaves nothing different.
+                let expected = match name {
+                    "with_scopes(empty)" if set(3) => vec!["scopes"],
+                    "with_scopes(empty)" => Vec::new(),
+                    other => vec![field_named_by(other)],
+                };
                 assert_eq!(
-                    differing,
-                    vec![field_named_by(name)],
+                    differing, expected,
                     "{base_name}/{name}: exactly the field it names may move"
                 );
+                // ...and it then holds exactly what was asked for.
+                match name {
+                    "with_issuer" => {
+                        assert_eq!(after.issuer.as_deref(), Some("https://issuer.after"))
+                    }
+                    "with_userinfo_url" => assert_eq!(
+                        after.userinfo_url.as_ref().map(Url::as_str),
+                        Some("https://idp.example/u-after")
+                    ),
+                    "with_token_body" => assert_eq!(after.token_body, body_after),
+                    "with_scopes" => assert_eq!(after.scopes, ["after", "two"]),
+                    "with_scopes(empty)" => assert!(after.scopes.is_empty()),
+                    "with_token_response_envelope" => {
+                        assert_eq!(after.token_response_envelope, Some("after"));
+                    }
+                    other => panic!("unknown setter {other}"),
+                }
             }
         }
     }
