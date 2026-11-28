@@ -427,19 +427,21 @@ impl RelayConfig {
     #[cfg(feature = "auth-oauth")]
     #[must_use]
     pub fn provider_metadata(&self) -> Option<crate::auth::passport::oauth::ProviderMetadata> {
-        use crate::auth::passport::oauth::{ProviderMetadata, TokenBody};
-        Some(ProviderMetadata {
-            provider: self.provider_id(),
-            issuer: Some(self.issuer.to_string().trim_end_matches('/').to_owned()),
-            authorize_url: self.authorize_url.clone()?,
-            token_url: self.token_url.clone()?,
-            userinfo_url: self.userinfo_url.clone(),
-            token_body: TokenBody::Form,
-            scopes: self.scopes.clone(),
-            // The relay source is an OIDC provider and answers at the top
-            // level; a provider that wraps its answer in an envelope is
-            // described by its own metadata.
-            token_response_envelope: None,
+        use crate::auth::passport::oauth::ProviderMetadata;
+        let metadata = ProviderMetadata::new(
+            self.provider_id(),
+            self.authorize_url.clone()?,
+            self.token_url.clone()?,
+        )
+        .with_issuer(self.issuer.to_string().trim_end_matches('/').to_owned())
+        .with_scopes(self.scopes.iter().cloned());
+        // The relay source is an OIDC provider: form-encoded token body,
+        // UserInfo when it has one, and a top-level token answer. A provider
+        // that wraps its answer in an envelope is described by its own
+        // metadata, never by the relay.
+        Some(match self.userinfo_url.clone() {
+            Some(userinfo_url) => metadata.with_userinfo_url(userinfo_url),
+            None => metadata,
         })
     }
 

@@ -362,16 +362,14 @@ mod tests {
     }
 
     fn provider() -> ProviderMetadata {
-        ProviderMetadata {
-            provider: "auth.example".into(),
-            issuer: Some("https://auth.example".into()),
-            authorize_url: url::Url::parse("https://auth.example/oauth/authorize").unwrap(),
-            token_url: url::Url::parse("https://auth.example/api/oauth/token").unwrap(),
-            userinfo_url: Some(url::Url::parse("https://auth.example/api/oauth/userinfo").unwrap()),
-            token_response_envelope: None,
-            token_body: TokenBody::Form,
-            scopes: vec!["openid".into(), "profile".into(), "email".into()],
-        }
+        ProviderMetadata::new(
+            "auth.example",
+            url::Url::parse("https://auth.example/oauth/authorize").unwrap(),
+            url::Url::parse("https://auth.example/api/oauth/token").unwrap(),
+        )
+        .with_issuer("https://auth.example")
+        .with_userinfo_url(url::Url::parse("https://auth.example/api/oauth/userinfo").unwrap())
+        .with_scopes(["openid", "profile", "email"])
     }
 
     struct Fixture {

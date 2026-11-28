@@ -299,6 +299,70 @@ pub struct ProviderMetadata {
     pub token_response_envelope: Option<&'static str>,
 }
 
+impl ProviderMetadata {
+    /// A provider with the two endpoints every OAuth flow needs and RFC 6749's
+    /// defaults everywhere else (form-encoded token body, identity from the
+    /// UserInfo endpoint).
+    ///
+    /// This constructor — plus the `with_*` setters below — is the supported
+    /// way to build a `ProviderMetadata` from outside this crate. A struct
+    /// literal compiles only until the struct gains a field: `token_response_envelope`
+    /// arrived in 0.9.9 and broke every external literal at once, because a
+    /// new public field is a breaking change under the semver rules however
+    /// minor the release. A constructor keeps its signature across additions
+    /// (the new field gets its default here), so code that builds through it
+    /// keeps compiling.
+    #[must_use]
+    pub fn new(provider: impl Into<String>, authorize_url: Url, token_url: Url) -> Self {
+        Self {
+            provider: provider.into(),
+            issuer: None,
+            authorize_url,
+            token_url,
+            userinfo_url: None,
+            token_body: TokenBody::default(),
+            scopes: Vec::new(),
+            token_response_envelope: None,
+        }
+    }
+
+    /// Records the provider's issuer (the ID token's expected `iss`).
+    #[must_use]
+    pub fn with_issuer(mut self, issuer: impl Into<String>) -> Self {
+        self.issuer = Some(issuer.into());
+        self
+    }
+
+    /// Sets the UserInfo endpoint the identity is read from.
+    #[must_use]
+    pub fn with_userinfo_url(mut self, userinfo_url: Url) -> Self {
+        self.userinfo_url = Some(userinfo_url);
+        self
+    }
+
+    /// Overrides the token-endpoint body encoding.
+    #[must_use]
+    pub fn with_token_body(mut self, token_body: TokenBody) -> Self {
+        self.token_body = token_body;
+        self
+    }
+
+    /// Sets the scopes requested, in the order they are joined.
+    #[must_use]
+    pub fn with_scopes(mut self, scopes: impl IntoIterator<Item = impl Into<String>>) -> Self {
+        self.scopes = scopes.into_iter().map(Into::into).collect();
+        self
+    }
+
+    /// Names the key a provider wraps its token answer in (Feishu's `data`,
+    /// for one); `None` reads the token fields at the top level.
+    #[must_use]
+    pub fn with_token_response_envelope(mut self, key: &'static str) -> Self {
+        self.token_response_envelope = Some(key);
+        self
+    }
+}
+
 /// How the client authenticates at the token endpoint.
 #[derive(Debug, Clone)]
 pub enum ClientAuth {
@@ -873,16 +937,53 @@ mod tests {
     use super::*;
 
     fn meta() -> ProviderMetadata {
-        ProviderMetadata {
-            provider: "example-idp".to_owned(),
-            issuer: Some("https://idp.example".to_owned()),
-            authorize_url: Url::parse("https://idp.example/oauth/authorize").expect("url"),
-            token_url: Url::parse("https://idp.example/oauth/token").expect("url"),
-            userinfo_url: Some(Url::parse("https://idp.example/oauth/userinfo").expect("url")),
-            token_body: TokenBody::Form,
-            scopes: vec!["openid".to_owned(), "profile".to_owned()],
-            token_response_envelope: None,
-        }
+        ProviderMetadata::new(
+            "example-idp",
+            Url::parse("https://idp.example/oauth/authorize").expect("url"),
+            Url::parse("https://idp.example/oauth/token").expect("url"),
+        )
+        .with_issuer("https://idp.example")
+        .with_userinfo_url(Url::parse("https://idp.example/oauth/userinfo").expect("url"))
+        .with_scopes(["openid", "profile"])
+    }
+
+    /// The constructor seeds every optional field with its RFC 6749 default,
+    /// and each setter changes exactly the field it names. This is the pin a
+    /// future field addition has to extend: a new field that `new` leaves
+    /// unset fails here first, before any consumer sees it.
+    #[test]
+    fn the_constructor_defaults_every_field_and_each_setter_moves_one() {
+        let authorize = Url::parse("https://idp.example/a").expect("url");
+        let token = Url::parse("https://idp.example/t").expect("url");
+        let bare = ProviderMetadata::new("idp", authorize.clone(), token.clone());
+        assert_eq!(bare.provider, "idp");
+        assert_eq!(bare.issuer, None);
+        assert_eq!(bare.authorize_url, authorize);
+        assert_eq!(bare.token_url, token);
+        assert_eq!(bare.userinfo_url, None);
+        assert_eq!(bare.token_body, TokenBody::Form);
+        assert!(bare.scopes.is_empty());
+        assert_eq!(bare.token_response_envelope, None);
+
+        let full = ProviderMetadata::new("idp", authorize.clone(), token.clone())
+            .with_issuer("https://idp.example")
+            .with_userinfo_url(Url::parse("https://idp.example/u").expect("url"))
+            .with_token_body(TokenBody::Json)
+            .with_scopes(["openid", "email"])
+            .with_token_response_envelope("data");
+        assert_eq!(full.issuer.as_deref(), Some("https://idp.example"));
+        assert_eq!(
+            full.userinfo_url.as_ref().map(Url::as_str),
+            Some("https://idp.example/u")
+        );
+        assert_eq!(full.token_body, TokenBody::Json);
+        assert_eq!(full.scopes, vec!["openid".to_owned(), "email".to_owned()]);
+        assert_eq!(full.token_response_envelope, Some("data"));
+        // The setters are builders: the required fields and the provider id
+        // pass through untouched.
+        assert_eq!(full.provider, "idp");
+        assert_eq!(full.authorize_url, authorize);
+        assert_eq!(full.token_url, token);
     }
 
     fn redirect() -> Url {
