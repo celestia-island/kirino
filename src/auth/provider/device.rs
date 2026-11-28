@@ -39,11 +39,14 @@
 
 use chrono::{DateTime, Duration, Utc};
 use serde::{Deserialize, Serialize};
+
 use thiserror::Error;
 
-use super::client::{ClientRecord, GrantType};
-use super::code::{CodeGrant, GrantKind};
-use super::token::{self, TokenContext, TokenResponse};
+use super::{
+    client::{ClientRecord, GrantType},
+    code::{CodeGrant, GrantKind},
+    token::{self, TokenContext, TokenResponse},
+};
 use crate::auth::store::ConsumableStore;
 
 /// The RFC 8628 grant type.
