@@ -299,6 +299,77 @@ pub struct ProviderMetadata {
     pub token_response_envelope: Option<&'static str>,
 }
 
+impl ProviderMetadata {
+    /// A provider with the two endpoints every OAuth flow needs, and RFC
+    /// 6749's defaults everywhere else: form-encoded token body, no issuer,
+    /// no scopes, no UserInfo endpoint, no token-answer envelope.
+    ///
+    /// A bare `new` is not yet a usable provider: the exchange refuses with
+    /// `no identity source` until a `with_userinfo_url` supplies the
+    /// endpoint the identity is read from. Taking the identity from the ID
+    /// token instead needs more than a `with_issuer` — the provider must
+    /// actually issue one (`openid` among the scopes) and the caller must
+    /// hand verification keys to the callback.
+    ///
+    /// This constructor — plus the `with_*` setters below — is the supported
+    /// way to build a `ProviderMetadata` from outside this crate. A struct
+    /// literal compiles only until the struct gains a field: `token_response_envelope`
+    /// arrived in 0.9.7 and broke every external literal at once, because a
+    /// new public field is a breaking change under the semver rules however
+    /// minor the release. A constructor keeps its signature across additions
+    /// (the new field gets its default here), so code that builds through it
+    /// keeps compiling.
+    #[must_use]
+    pub fn new(provider: impl Into<String>, authorize_url: Url, token_url: Url) -> Self {
+        Self {
+            provider: provider.into(),
+            issuer: None,
+            authorize_url,
+            token_url,
+            userinfo_url: None,
+            token_body: TokenBody::default(),
+            scopes: Vec::new(),
+            token_response_envelope: None,
+        }
+    }
+
+    /// Records the provider's issuer (the ID token's expected `iss`).
+    #[must_use]
+    pub fn with_issuer(mut self, issuer: impl Into<String>) -> Self {
+        self.issuer = Some(issuer.into());
+        self
+    }
+
+    /// Sets the UserInfo endpoint the identity is read from.
+    #[must_use]
+    pub fn with_userinfo_url(mut self, userinfo_url: Url) -> Self {
+        self.userinfo_url = Some(userinfo_url);
+        self
+    }
+
+    /// Overrides the token-endpoint body encoding.
+    #[must_use]
+    pub fn with_token_body(mut self, token_body: TokenBody) -> Self {
+        self.token_body = token_body;
+        self
+    }
+
+    /// Sets the scopes requested, in the order they are joined.
+    #[must_use]
+    pub fn with_scopes(mut self, scopes: impl IntoIterator<Item = impl Into<String>>) -> Self {
+        self.scopes = scopes.into_iter().map(Into::into).collect();
+        self
+    }
+
+    /// Names the key a provider wraps its token answer in (Feishu's `data`,
+    /// for one); `None` reads the token fields at the top level.
+    #[must_use]
+    pub fn with_token_response_envelope(mut self, key: &'static str) -> Self {
+        self.token_response_envelope = Some(key);
+        self
+    }
+}
+
 /// How the client authenticates at the token endpoint.
 #[derive(Debug, Clone)]
 pub enum ClientAuth {
@@ -873,15 +944,177 @@ mod tests {
     use super::*;
 
     fn meta() -> ProviderMetadata {
-        ProviderMetadata {
-            provider: "example-idp".to_owned(),
-            issuer: Some("https://idp.example".to_owned()),
-            authorize_url: Url::parse("https://idp.example/oauth/authorize").expect("url"),
-            token_url: Url::parse("https://idp.example/oauth/token").expect("url"),
-            userinfo_url: Some(Url::parse("https://idp.example/oauth/userinfo").expect("url")),
-            token_body: TokenBody::Form,
-            scopes: vec!["openid".to_owned(), "profile".to_owned()],
-            token_response_envelope: None,
+        ProviderMetadata::new(
+            "example-idp",
+            Url::parse("https://idp.example/oauth/authorize").expect("url"),
+            Url::parse("https://idp.example/oauth/token").expect("url"),
+        )
+        .with_issuer("https://idp.example")
+        .with_userinfo_url(Url::parse("https://idp.example/oauth/userinfo").expect("url"))
+        .with_scopes(["openid", "profile"])
+    }
+
+    /// The constructor seeds every optional field with its RFC 6749 default.
+    /// The chain at the end shows the setters compose; which field each one
+    /// moves is the next test's job (a chain's end state cannot tell).
+    #[test]
+    fn the_constructor_defaults_every_field_and_each_setter_moves_one() {
+        let authorize = Url::parse("https://idp.example/a").expect("url");
+        let token = Url::parse("https://idp.example/t").expect("url");
+        let bare = ProviderMetadata::new("idp", authorize.clone(), token.clone());
+        assert_eq!(bare.provider, "idp");
+        assert_eq!(bare.issuer, None);
+        assert_eq!(bare.authorize_url, authorize);
+        assert_eq!(bare.token_url, token);
+        assert_eq!(bare.userinfo_url, None);
+        assert_eq!(bare.token_body, TokenBody::Form);
+        assert!(bare.scopes.is_empty());
+        assert_eq!(bare.token_response_envelope, None);
+
+        let full = ProviderMetadata::new("idp", authorize.clone(), token.clone())
+            .with_issuer("https://idp.example")
+            .with_userinfo_url(Url::parse("https://idp.example/u").expect("url"))
+            .with_token_body(TokenBody::Json)
+            .with_scopes(["openid", "email"])
+            .with_token_response_envelope("data");
+        assert_eq!(full.issuer.as_deref(), Some("https://idp.example"));
+        assert_eq!(
+            full.userinfo_url.as_ref().map(Url::as_str),
+            Some("https://idp.example/u")
+        );
+        assert_eq!(full.token_body, TokenBody::Json);
+        assert_eq!(full.scopes, vec!["openid".to_owned(), "email".to_owned()]);
+        assert_eq!(full.token_response_envelope, Some("data"));
+        // The setters are builders: the required fields and the provider id
+        // pass through untouched.
+        assert_eq!(full.provider, "idp");
+        assert_eq!(full.authorize_url, authorize);
+        assert_eq!(full.token_url, token);
+    }
+
+    /// One setter on its own: exactly the field it names may differ, and it
+    /// then holds exactly what was asked for.
+    ///
+    /// The baselines are struct literals — never the setters under test — so
+    /// a setter that also writes another field cannot slip the same write
+    /// into both sides of the comparison. Every set/unset combination of the
+    /// five optional fields is a baseline (2^5 = 32), so a write conditioned
+    /// on any state the setter finds is exercised on a baseline that meets
+    /// the condition. The arguments differ from what a baseline can hold, so
+    /// a setter that "writes" the value already there is still seen to touch
+    /// nothing else; and the named field's new value is checked, so a setter
+    /// that merges with the old value (appends, keeps it on an empty
+    /// request) cannot pass as "moved only its own field".
+    #[test]
+    fn each_setter_moves_only_the_field_it_names() {
+        let authorize = Url::parse("https://idp.example/a").expect("url");
+        let token = Url::parse("https://idp.example/t").expect("url");
+        let user_after = Url::parse("https://idp.example/u-after").expect("url");
+        for mask in 0..32u8 {
+            let set = |bit: u8| mask & (1 << bit) != 0;
+            let base_name = format!("mask{mask:05b}");
+            let base = ProviderMetadata {
+                provider: "idp".to_owned(),
+                issuer: set(0).then(|| "https://issuer.before".to_owned()),
+                authorize_url: authorize.clone(),
+                token_url: token.clone(),
+                userinfo_url: set(1)
+                    .then(|| Url::parse("https://idp.example/u-before").expect("url")),
+                token_body: if set(2) {
+                    TokenBody::Json
+                } else {
+                    TokenBody::Form
+                },
+                scopes: if set(3) {
+                    vec!["before".to_owned()]
+                } else {
+                    Vec::new()
+                },
+                token_response_envelope: set(4).then_some("before"),
+            };
+            // The argument always differs from what the baseline holds.
+            let body_after = match base.token_body {
+                TokenBody::Form => TokenBody::Json,
+                TokenBody::Json => TokenBody::Form,
+            };
+            let cases: [(&str, ProviderMetadata); 6] = [
+                (
+                    "with_issuer",
+                    base.clone().with_issuer("https://issuer.after"),
+                ),
+                (
+                    "with_userinfo_url",
+                    base.clone().with_userinfo_url(user_after.clone()),
+                ),
+                ("with_token_body", base.clone().with_token_body(body_after)),
+                ("with_scopes", base.clone().with_scopes(["after", "two"])),
+                (
+                    "with_scopes(empty)",
+                    base.clone().with_scopes(Vec::<String>::new()),
+                ),
+                (
+                    "with_token_response_envelope",
+                    base.clone().with_token_response_envelope("after"),
+                ),
+            ];
+            for (name, after) in cases {
+                let differing: Vec<&str> = [
+                    ("provider", base.provider == after.provider),
+                    ("issuer", base.issuer == after.issuer),
+                    ("authorize_url", base.authorize_url == after.authorize_url),
+                    ("token_url", base.token_url == after.token_url),
+                    ("userinfo_url", base.userinfo_url == after.userinfo_url),
+                    ("token_body", base.token_body == after.token_body),
+                    ("scopes", base.scopes == after.scopes),
+                    (
+                        "token_response_envelope",
+                        base.token_response_envelope == after.token_response_envelope,
+                    ),
+                ]
+                .into_iter()
+                .filter(|(_, same)| !same)
+                .map(|(field, _)| field)
+                .collect();
+                // An empty request clears; on a baseline with no scopes it
+                // leaves nothing different.
+                let expected = match name {
+                    "with_scopes(empty)" if set(3) => vec!["scopes"],
+                    "with_scopes(empty)" => Vec::new(),
+                    other => vec![field_named_by(other)],
+                };
+                assert_eq!(
+                    differing, expected,
+                    "{base_name}/{name}: exactly the field it names may move"
+                );
+                // ...and it then holds exactly what was asked for.
+                match name {
+                    "with_issuer" => {
+                        assert_eq!(after.issuer.as_deref(), Some("https://issuer.after"))
+                    }
+                    "with_userinfo_url" => assert_eq!(
+                        after.userinfo_url.as_ref().map(Url::as_str),
+                        Some("https://idp.example/u-after")
+                    ),
+                    "with_token_body" => assert_eq!(after.token_body, body_after),
+                    "with_scopes" => assert_eq!(after.scopes, ["after", "two"]),
+                    "with_scopes(empty)" => assert!(after.scopes.is_empty()),
+                    "with_token_response_envelope" => {
+                        assert_eq!(after.token_response_envelope, Some("after"));
+                    }
+                    other => panic!("unknown setter {other}"),
+                }
+            }
+        }
+    }
+
+    fn field_named_by(setter: &str) -> &'static str {
+        match setter {
+            "with_issuer" => "issuer",
+            "with_userinfo_url" => "userinfo_url",
+            "with_token_body" => "token_body",
+            "with_scopes" => "scopes",
+            "with_token_response_envelope" => "token_response_envelope",
+            other => panic!("unknown setter {other}"),
         }
     }
 

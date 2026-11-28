@@ -427,19 +427,21 @@ impl RelayConfig {
     #[cfg(feature = "auth-oauth")]
     #[must_use]
     pub fn provider_metadata(&self) -> Option<crate::auth::passport::oauth::ProviderMetadata> {
-        use crate::auth::passport::oauth::{ProviderMetadata, TokenBody};
-        Some(ProviderMetadata {
-            provider: self.provider_id(),
-            issuer: Some(self.issuer.to_string().trim_end_matches('/').to_owned()),
-            authorize_url: self.authorize_url.clone()?,
-            token_url: self.token_url.clone()?,
-            userinfo_url: self.userinfo_url.clone(),
-            token_body: TokenBody::Form,
-            scopes: self.scopes.clone(),
-            // The relay source is an OIDC provider and answers at the top
-            // level; a provider that wraps its answer in an envelope is
-            // described by its own metadata.
-            token_response_envelope: None,
+        use crate::auth::passport::oauth::ProviderMetadata;
+        let metadata = ProviderMetadata::new(
+            self.provider_id(),
+            self.authorize_url.clone()?,
+            self.token_url.clone()?,
+        )
+        .with_issuer(self.issuer.to_string().trim_end_matches('/').to_owned())
+        .with_scopes(self.scopes.iter().cloned());
+        // The relay source is an OIDC provider: form-encoded token body,
+        // UserInfo when it has one, and a top-level token answer. A provider
+        // that wraps its answer in an envelope is described by its own
+        // metadata, never by the relay.
+        Some(match self.userinfo_url.clone() {
+            Some(userinfo_url) => metadata.with_userinfo_url(userinfo_url),
+            None => metadata,
         })
     }
 
@@ -788,5 +790,69 @@ mod tests {
             mode_from_env_with(read(&env)).unwrap_err(),
             RelayConfigError::UnknownMode(_)
         ));
+    }
+
+    /// The metadata the exchange runs on, built through the constructor: the
+    /// issuer without its trailing slash, the issuer host as the provider id,
+    /// the configured scopes and UserInfo endpoint, and the OIDC defaults
+    /// for everything else.
+    ///
+    /// MUT:provider-metadata — nothing else in the suite calls this function.
+    #[cfg(feature = "auth-oauth")]
+    #[test]
+    fn provider_metadata_carries_the_relay_configuration() {
+        use crate::auth::passport::oauth::TokenBody;
+        let mut env = complete();
+        env.insert(
+            RELAY_ISSUER_ENV,
+            "https://Auth.Example:8443/oidc/".to_owned(),
+        );
+        env.insert(
+            RELAY_AUTHORIZE_URL_ENV,
+            "https://auth.example:8443/oidc/authorize".to_owned(),
+        );
+        env.insert(
+            RELAY_TOKEN_URL_ENV,
+            "https://auth.example:8443/oidc/token".to_owned(),
+        );
+        env.insert(
+            RELAY_USERINFO_URL_ENV,
+            "https://auth.example:8443/oidc/userinfo".to_owned(),
+        );
+        env.insert(RELAY_SCOPES_ENV, "openid email".to_owned());
+        let cfg = RelayConfig::from_env_with(read(&env))
+            .expect("ok")
+            .expect("configured");
+        let meta = cfg.provider_metadata().expect("both endpoints are set");
+        assert_eq!(meta.provider, cfg.provider_id());
+        assert_eq!(
+            meta.issuer.as_deref(),
+            Some("https://auth.example:8443/oidc")
+        );
+        assert_eq!(meta.authorize_url, cfg.authorize_url.clone().unwrap());
+        assert_eq!(meta.token_url, cfg.token_url.clone().unwrap());
+        assert_eq!(meta.userinfo_url, cfg.userinfo_url);
+        assert_eq!(meta.scopes, ["openid", "email"]);
+        assert_eq!(meta.token_body, TokenBody::Form);
+        assert_eq!(meta.token_response_envelope, None);
+        // No UserInfo endpoint: none is invented (the identity then comes
+        // from a verified ID token); everything else is carried the same.
+        env.remove(RELAY_USERINFO_URL_ENV);
+        let cfg = RelayConfig::from_env_with(read(&env))
+            .expect("ok")
+            .expect("configured");
+        let meta = cfg.provider_metadata().expect("both endpoints are set");
+        assert_eq!(meta.userinfo_url, None);
+        assert_eq!(
+            meta.issuer.as_deref(),
+            Some("https://auth.example:8443/oidc")
+        );
+        assert_eq!(meta.scopes, ["openid", "email"]);
+        // Until both endpoints are known there is no metadata at all.
+        env.remove(RELAY_TOKEN_URL_ENV);
+        let cfg = RelayConfig::from_env_with(read(&env))
+            .expect("ok")
+            .expect("configured");
+        assert!(cfg.provider_metadata().is_none());
     }
 }
