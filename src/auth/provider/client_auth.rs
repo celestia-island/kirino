@@ -45,10 +45,13 @@
 
 use chrono::{DateTime, Duration, Utc};
 use serde::{Deserialize, Serialize};
+
 use thiserror::Error;
 
-use super::client::{ClientAuthMethod, ClientRecord};
-use super::token::{AccessClaims, AccessTokenSigner};
+use super::{
+    client::{ClientAuthMethod, ClientRecord},
+    token::{AccessClaims, AccessTokenSigner},
+};
 use crate::auth::store::ConsumableStore;
 
 /// How long a client assertion may live from `iat` to `exp`.
