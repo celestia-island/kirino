@@ -306,8 +306,10 @@ impl ProviderMetadata {
     ///
     /// A bare `new` is not yet a usable provider: the exchange refuses with
     /// `no identity source` until a `with_userinfo_url` supplies the
-    /// endpoint the identity is read from, or a `with_issuer` lets it come
-    /// from the ID token.
+    /// endpoint the identity is read from. Taking the identity from the ID
+    /// token instead needs more than a `with_issuer` — the provider must
+    /// actually issue one (`openid` among the scopes) and the caller must
+    /// hand verification keys to the callback.
     ///
     /// This constructor — plus the `with_*` setters below — is the supported
     /// way to build a `ProviderMetadata` from outside this crate. A struct
@@ -952,12 +954,9 @@ mod tests {
         .with_scopes(["openid", "profile"])
     }
 
-    /// The constructor seeds every optional field with its RFC 6749 default,
-    /// and each setter changes exactly the field it names and nothing else.
-    ///
-    /// Every setter is checked on its own against the snapshot taken before
-    /// it: a setter that also writes a *later* field would hide behind the
-    /// chain's end state, so the chain alone cannot see it.
+    /// The constructor seeds every optional field with its RFC 6749 default.
+    /// The chain at the end shows the setters compose; which field each one
+    /// moves is the next test's job (a chain's end state cannot tell).
     #[test]
     fn the_constructor_defaults_every_field_and_each_setter_moves_one() {
         let authorize = Url::parse("https://idp.example/a").expect("url");
@@ -993,95 +992,95 @@ mod tests {
         assert_eq!(full.token_url, token);
     }
 
-    /// One setter on its own, against the snapshot taken just before it:
-    /// the field it names is the only one that may differ. Starting from a
-    /// fully populated value, so a setter that resets some *other* field to
-    /// its default is caught as well as one that writes into it.
+    /// One setter on its own: exactly the field it names may differ.
+    ///
+    /// The baselines are struct literals — never the setters under test — so
+    /// a setter that also writes another field cannot slip the same write
+    /// into both sides of the comparison. There are two, because a write
+    /// conditioned on the state it finds (an empty scope list, a missing
+    /// endpoint) shows up on one baseline and not the other; and every
+    /// argument differs from what its baseline holds, so a setter that
+    /// "writes" the value already there is still seen to touch nothing else
+    /// but its own field.
     #[test]
     fn each_setter_moves_only_the_field_it_names() {
-        let populated = || {
-            ProviderMetadata::new(
-                "idp",
-                Url::parse("https://idp.example/a").expect("url"),
-                Url::parse("https://idp.example/t").expect("url"),
-            )
-            .with_issuer("https://issuer.before")
-            .with_userinfo_url(Url::parse("https://idp.example/u-before").expect("url"))
-            .with_token_body(TokenBody::Json)
-            .with_scopes(["before"])
-            .with_token_response_envelope("before")
-        };
-
-        let cases: Vec<(&str, ProviderMetadata)> = vec![
+        let authorize = Url::parse("https://idp.example/a").expect("url");
+        let token = Url::parse("https://idp.example/t").expect("url");
+        let user_after = Url::parse("https://idp.example/u-after").expect("url");
+        let baselines: [(&str, ProviderMetadata); 2] = [
             (
-                "with_issuer",
-                populated().with_issuer("https://issuer.after"),
+                "bare",
+                ProviderMetadata {
+                    provider: "idp".to_owned(),
+                    issuer: None,
+                    authorize_url: authorize.clone(),
+                    token_url: token.clone(),
+                    userinfo_url: None,
+                    token_body: TokenBody::Form,
+                    scopes: Vec::new(),
+                    token_response_envelope: None,
+                },
             ),
             (
-                "with_userinfo_url",
-                populated()
-                    .with_userinfo_url(Url::parse("https://idp.example/u-after").expect("url")),
-            ),
-            (
-                "with_token_body",
-                populated().with_token_body(TokenBody::Form),
-            ),
-            ("with_scopes", populated().with_scopes(["after", "two"])),
-            (
-                "with_token_response_envelope",
-                populated().with_token_response_envelope("after"),
+                "populated",
+                ProviderMetadata {
+                    provider: "idp".to_owned(),
+                    issuer: Some("https://issuer.before".to_owned()),
+                    authorize_url: authorize.clone(),
+                    token_url: token.clone(),
+                    userinfo_url: Some(Url::parse("https://idp.example/u-before").expect("url")),
+                    token_body: TokenBody::Json,
+                    scopes: vec!["before".to_owned()],
+                    token_response_envelope: Some("before"),
+                },
             ),
         ];
-
-        for (name, after) in cases {
-            let before = populated();
-            // Every field compared field by field; exactly one differs.
-            let same = |a: &ProviderMetadata, b: &ProviderMetadata| -> Vec<&'static str> {
-                let mut same = Vec::new();
-                if a.provider == b.provider {
-                    same.push("provider");
-                }
-                if a.issuer == b.issuer {
-                    same.push("issuer");
-                }
-                if a.authorize_url == b.authorize_url {
-                    same.push("authorize_url");
-                }
-                if a.token_url == b.token_url {
-                    same.push("token_url");
-                }
-                if a.userinfo_url == b.userinfo_url {
-                    same.push("userinfo_url");
-                }
-                if a.token_body == b.token_body {
-                    same.push("token_body");
-                }
-                if a.scopes == b.scopes {
-                    same.push("scopes");
-                }
-                if a.token_response_envelope == b.token_response_envelope {
-                    same.push("token_response_envelope");
-                }
-                same
+        for (base_name, base) in baselines {
+            // The argument always differs from what the baseline holds.
+            let body_after = match base.token_body {
+                TokenBody::Form => TokenBody::Json,
+                TokenBody::Json => TokenBody::Form,
             };
-            let moved: Vec<&str> = [
-                "provider",
-                "issuer",
-                "authorize_url",
-                "token_url",
-                "userinfo_url",
-                "token_body",
-                "scopes",
-                "token_response_envelope",
-            ]
-            .into_iter()
-            .filter(|field| !same(&before, &after).contains(field))
-            .collect();
-            assert_eq!(
-                moved,
-                vec![field_named_by(name)],
-                "{name}: exactly the field it names may move"
-            );
+            let cases: [(&str, ProviderMetadata); 5] = [
+                (
+                    "with_issuer",
+                    base.clone().with_issuer("https://issuer.after"),
+                ),
+                (
+                    "with_userinfo_url",
+                    base.clone().with_userinfo_url(user_after.clone()),
+                ),
+                ("with_token_body", base.clone().with_token_body(body_after)),
+                ("with_scopes", base.clone().with_scopes(["after", "two"])),
+                (
+                    "with_token_response_envelope",
+                    base.clone().with_token_response_envelope("after"),
+                ),
+            ];
+            for (name, after) in cases {
+                let differing: Vec<&str> = [
+                    ("provider", base.provider == after.provider),
+                    ("issuer", base.issuer == after.issuer),
+                    ("authorize_url", base.authorize_url == after.authorize_url),
+                    ("token_url", base.token_url == after.token_url),
+                    ("userinfo_url", base.userinfo_url == after.userinfo_url),
+                    ("token_body", base.token_body == after.token_body),
+                    ("scopes", base.scopes == after.scopes),
+                    (
+                        "token_response_envelope",
+                        base.token_response_envelope == after.token_response_envelope,
+                    ),
+                ]
+                .into_iter()
+                .filter(|(_, same)| !same)
+                .map(|(field, _)| field)
+                .collect();
+                assert_eq!(
+                    differing,
+                    vec![field_named_by(name)],
+                    "{base_name}/{name}: exactly the field it names may move"
+                );
+            }
         }
     }
 
