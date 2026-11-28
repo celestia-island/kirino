@@ -30,7 +30,9 @@ jobs:
         run: cargo fmt --all --check
 
       - name: Clippy lints
-        run: cargo clippy --workspace --all-targets -- -D warnings
+        # --all-features for the same reason as the every-feature test step:
+        # dead-code and unused-import lints only fire where gated modules compile.
+        run: cargo clippy --workspace --all-targets --all-features -- -D warnings
 
   deny:
     name: cargo-deny

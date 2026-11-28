@@ -53,6 +53,15 @@ jobs:
       - name: Run tests
         run: cargo test -p kirino-session -p kirino -p kirino-macro
 
+      - name: Run tests, every feature
+        # The default-feature run above never compiles the modules that sit
+        # behind an off-by-default feature: the OAuth relying-party core
+        # (`auth-oauth`) and kirino-session's relay session (`relay`) are
+        # invisible to it — an unused import in either shipped green
+        # (kirino #219, review round 1). This step is the justfile's own
+        # `test` shape, so CI and the local recipe compile the same code.
+        run: cargo test --workspace --all-features
+
   lint:
     name: fmt + clippy (hosted)
     runs-on: ubuntu-latest
@@ -89,4 +98,6 @@ jobs:
         run: cargo fmt --all --check
 
       - name: Clippy lints
-        run: cargo clippy --workspace --all-targets -- -D warnings
+        # --all-features for the same reason as the every-feature test step:
+        # dead-code and unused-import lints only fire where gated modules compile.
+        run: cargo clippy --workspace --all-targets --all-features -- -D warnings

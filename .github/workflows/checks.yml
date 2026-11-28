@@ -33,6 +33,15 @@ jobs:
       - name: Run tests
         run: cargo test -p kirino-session -p kirino -p kirino-macro
 
+      - name: Run tests, every feature
+        # The default-feature run above never compiles the modules that sit
+        # behind an off-by-default feature: the OAuth relying-party core
+        # (`auth-oauth`) and kirino-session's relay session (`relay`) are
+        # invisible to it — an unused import in either shipped green
+        # (kirino #219, review round 1). This step is the justfile's own
+        # `test` shape, so CI and the local recipe compile the same code.
+        run: cargo test --workspace --all-features
+
       - name: Generated TypeScript bindings are up to date
         # The `ts` feature turns every `#[ts(export)]` into an export test that
         # rewrites `packages/web_ts/src/generated/*.ts` from the Rust
