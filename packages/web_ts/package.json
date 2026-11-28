@@ -1,6 +1,6 @@
 {
   "name": "@celestia-island/kirino",
-  "version": "0.9.6",
+  "version": "0.9.10",
   "description": "Client-side auth utilities for kirino — JWT validation, session storage fallback, auth-lost handling, and the generated login-policy contract types",
   "type": "module",
   "main": "./dist/index.js",
