@@ -304,7 +304,7 @@ mod tests {
     use crate::InMemoryServerSessionStore;
     #[allow(unused_imports)]
     use anyhow as _;
-    use kirino::auth::passport::oauth::{InMemoryLoginAttemptStore, TokenBody};
+    use kirino::auth::passport::oauth::InMemoryLoginAttemptStore;
     use std::sync::Arc;
 
     /// A fetcher that answers the token and userinfo exchanges for a fixed

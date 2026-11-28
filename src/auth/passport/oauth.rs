@@ -300,14 +300,19 @@ pub struct ProviderMetadata {
 }
 
 impl ProviderMetadata {
-    /// A provider with the two endpoints every OAuth flow needs and RFC 6749's
-    /// defaults everywhere else (form-encoded token body, identity from the
-    /// UserInfo endpoint).
+    /// A provider with the two endpoints every OAuth flow needs, and RFC
+    /// 6749's defaults everywhere else: form-encoded token body, no issuer,
+    /// no scopes, no UserInfo endpoint, no token-answer envelope.
+    ///
+    /// A bare `new` is not yet a usable provider: the exchange refuses with
+    /// `no identity source` until a `with_userinfo_url` supplies the
+    /// endpoint the identity is read from, or a `with_issuer` lets it come
+    /// from the ID token.
     ///
     /// This constructor — plus the `with_*` setters below — is the supported
     /// way to build a `ProviderMetadata` from outside this crate. A struct
     /// literal compiles only until the struct gains a field: `token_response_envelope`
-    /// arrived in 0.9.9 and broke every external literal at once, because a
+    /// arrived in 0.9.7 and broke every external literal at once, because a
     /// new public field is a breaking change under the semver rules however
     /// minor the release. A constructor keeps its signature across additions
     /// (the new field gets its default here), so code that builds through it
@@ -948,9 +953,11 @@ mod tests {
     }
 
     /// The constructor seeds every optional field with its RFC 6749 default,
-    /// and each setter changes exactly the field it names. This is the pin a
-    /// future field addition has to extend: a new field that `new` leaves
-    /// unset fails here first, before any consumer sees it.
+    /// and each setter changes exactly the field it names and nothing else.
+    ///
+    /// Every setter is checked on its own against the snapshot taken before
+    /// it: a setter that also writes a *later* field would hide behind the
+    /// chain's end state, so the chain alone cannot see it.
     #[test]
     fn the_constructor_defaults_every_field_and_each_setter_moves_one() {
         let authorize = Url::parse("https://idp.example/a").expect("url");
@@ -984,6 +991,109 @@ mod tests {
         assert_eq!(full.provider, "idp");
         assert_eq!(full.authorize_url, authorize);
         assert_eq!(full.token_url, token);
+    }
+
+    /// One setter on its own, against the snapshot taken just before it:
+    /// the field it names is the only one that may differ. Starting from a
+    /// fully populated value, so a setter that resets some *other* field to
+    /// its default is caught as well as one that writes into it.
+    #[test]
+    fn each_setter_moves_only_the_field_it_names() {
+        let populated = || {
+            ProviderMetadata::new(
+                "idp",
+                Url::parse("https://idp.example/a").expect("url"),
+                Url::parse("https://idp.example/t").expect("url"),
+            )
+            .with_issuer("https://issuer.before")
+            .with_userinfo_url(Url::parse("https://idp.example/u-before").expect("url"))
+            .with_token_body(TokenBody::Json)
+            .with_scopes(["before"])
+            .with_token_response_envelope("before")
+        };
+
+        let cases: Vec<(&str, ProviderMetadata)> = vec![
+            (
+                "with_issuer",
+                populated().with_issuer("https://issuer.after"),
+            ),
+            (
+                "with_userinfo_url",
+                populated()
+                    .with_userinfo_url(Url::parse("https://idp.example/u-after").expect("url")),
+            ),
+            (
+                "with_token_body",
+                populated().with_token_body(TokenBody::Form),
+            ),
+            ("with_scopes", populated().with_scopes(["after", "two"])),
+            (
+                "with_token_response_envelope",
+                populated().with_token_response_envelope("after"),
+            ),
+        ];
+
+        for (name, after) in cases {
+            let before = populated();
+            // Every field compared field by field; exactly one differs.
+            let same = |a: &ProviderMetadata, b: &ProviderMetadata| -> Vec<&'static str> {
+                let mut same = Vec::new();
+                if a.provider == b.provider {
+                    same.push("provider");
+                }
+                if a.issuer == b.issuer {
+                    same.push("issuer");
+                }
+                if a.authorize_url == b.authorize_url {
+                    same.push("authorize_url");
+                }
+                if a.token_url == b.token_url {
+                    same.push("token_url");
+                }
+                if a.userinfo_url == b.userinfo_url {
+                    same.push("userinfo_url");
+                }
+                if a.token_body == b.token_body {
+                    same.push("token_body");
+                }
+                if a.scopes == b.scopes {
+                    same.push("scopes");
+                }
+                if a.token_response_envelope == b.token_response_envelope {
+                    same.push("token_response_envelope");
+                }
+                same
+            };
+            let moved: Vec<&str> = [
+                "provider",
+                "issuer",
+                "authorize_url",
+                "token_url",
+                "userinfo_url",
+                "token_body",
+                "scopes",
+                "token_response_envelope",
+            ]
+            .into_iter()
+            .filter(|field| !same(&before, &after).contains(field))
+            .collect();
+            assert_eq!(
+                moved,
+                vec![field_named_by(name)],
+                "{name}: exactly the field it names may move"
+            );
+        }
+    }
+
+    fn field_named_by(setter: &str) -> &'static str {
+        match setter {
+            "with_issuer" => "issuer",
+            "with_userinfo_url" => "userinfo_url",
+            "with_token_body" => "token_body",
+            "with_scopes" => "scopes",
+            "with_token_response_envelope" => "token_response_envelope",
+            other => panic!("unknown setter {other}"),
+        }
     }
 
     fn redirect() -> Url {
