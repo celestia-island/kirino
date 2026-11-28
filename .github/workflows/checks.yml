@@ -38,8 +38,10 @@ jobs:
         # behind an off-by-default feature: the OAuth relying-party core
         # (`auth-oauth`) and kirino-session's relay session (`relay`) are
         # invisible to it — an unused import in either shipped green
-        # (kirino #219, review round 1). This step is the justfile's own
-        # `test` shape, so CI and the local recipe compile the same code.
+        # (kirino #219, review round 1). `--workspace` is the load-bearing
+        # word: the justfile's `test` recipe is `cargo test --lib
+        # --all-features`, root package only, and never builds kirino-session
+        # — `relay` is exactly what it misses.
         run: cargo test --workspace --all-features
 
       - name: Generated TypeScript bindings are up to date
