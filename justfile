@@ -86,12 +86,12 @@ enforce-groups-check:
 # Run the whole test suite.
 #
 # `--all-features` so the modules behind an off-by-default feature
-# (`auth-oauth`, `auth-oidc-provider`, `relay`, …) are compiled and tested
-# here too: with the default feature set a PR that touches them is green
-# without ever reaching them. `--workspace` (not `--lib`) so the macro
-# crate, the `tests/` directories and the doc tests run as well — the
-# same scope the CI workflow tests, so `just ci` and CI cannot disagree
-# about what "tested" means.
+# (`auth-oauth`, `auth-oidc-provider`, and kirino-session's `relay`) are
+# compiled and tested here too: with the default feature set a PR that
+# touches them is green without ever reaching them. `--workspace` (not
+# `--lib`) so the macro crate, the session crate, the `tests/` directories
+# and the doc tests run as well — the same scope the CI workflow tests, so
+# `just ci` and CI cannot disagree about what "tested" means.
 test:
     @echo "Running tests..."
     cargo test --workspace --all-features
