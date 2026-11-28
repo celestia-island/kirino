@@ -29,8 +29,8 @@
 # the manifest and this pin now carry the release number from the start.
 
 [track]
-cargo = "0.9.6"
-npm = "0.9.6"
+cargo = "0.9.10"
+npm = "0.9.10"
 
 [exempt.cargo]
 "packages/session" = "independent 0.8.x line by design since the 2026-11-03 PQ release (previously the 0.7.0 park; rationale in packages/session/Cargo.toml) — hardcoded version intentionally not tied to the root track"

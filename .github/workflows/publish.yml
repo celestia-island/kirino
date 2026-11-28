@@ -14,7 +14,7 @@ jobs:
   # accident class). Pinned devtools ref per H14.
   semver-checks:
     name: Semver API diff (published crates)
-    uses: celestia-island/celestia-devtools/.github/workflows/semver-checks.yml@0928033c2462
+    uses: celestia-island/celestia-devtools/.github/workflows/semver-checks.yml@0928033c24627c5f75b8fdb18e6657e681637046
     with:
       runs-on-json: '["ubuntu-latest"]'
       # semver-checks builds the crates.io BASELINE with ALL features enabled
